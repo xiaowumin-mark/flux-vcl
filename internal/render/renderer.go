@@ -15,6 +15,15 @@ type Rect struct {
 	X, Y, W, H int
 }
 
+// Ref 是控件引用接收者（逃逸口，design.md §11.2）。
+//
+// 绑定层在控件创建后把原生控件对象经 SetNative 注入；用户侧（flux.Ref）
+// 实现本接口，在事件回调/外部代码中读取该对象（类型断言到具体后端类型，
+// 如 *lcl.TButton）。D6 隔离：本接口是 flux 与绑定层之间唯一的知识点。
+type Ref interface {
+	SetNative(obj any)
+}
+
 // Renderer 是 FluxVCL 对原生控件后端的最小依赖面（D6 窄接口）。
 //
 // 所有方法在主 UI 线程调用（D4）；diff 引擎生成的 op 经调度器落到这里。
@@ -34,9 +43,20 @@ type Renderer interface {
 	SetText(h Handle, text string)
 	// SetEnabled 设置可用状态。
 	SetEnabled(h Handle, enabled bool)
-	// TextWidth 测量给定文本在当前控件字体下的宽度（DIP）。
-	// 用于布局引擎的 intrinsic-size 测量（design.md §6.2）。
-	TextWidth(h Handle, text string) int
+	// TextWidth 测量给定文本在当前默认字体下的宽度（DIP）。
+	// intrinsic-size 测量（design.md §6.2）：不因测量而实现控件，
+	// 因此不依赖控件句柄，Phase 3 起增加字体参数与缓存。
+	TextWidth(text string) int
+	// SetEvent 绑定事件回调（如 "OnClick"）。fn 为绑定层可识别的事件回调
+	// （Phase 1 约定 func() / func(string)）。函数值无法比较相等性，
+	// diff 引擎每次 render 均重新绑定（D2 逃逸口行为，React 同款）。
+	SetEvent(h Handle, event string, fn any)
+	// AttachRef 把控件句柄关联到引用（逃逸口，design.md §11.2）。
+	// 绑定层把原生控件对象经 ref.SetNative(obj) 注入。
+	AttachRef(h Handle, ref Ref)
+	// ApplyNative 在控件创建后调用逃逸函数（逃逸口，design.md §11.1）。
+	// fn 接收绑定层原生控件对象（flux.Native 已断言到具体类型）。
+	ApplyNative(h Handle, fn func(obj any))
 	// HandleAllocated 报告句柄是否已分配真实原生控件。
 	HandleAllocated(h Handle) bool
 }
@@ -59,6 +79,9 @@ const (
 	OpSetProperty
 	// OpSetText 设置文本（Value 为 string）。独立于通用属性，便于高频批量。
 	OpSetText
+	// OpSetEvent 绑定事件回调（Key 为事件名，Value 为 fn）。函数值无法
+	// 比较相等性，每次 diff 重新绑定（D2 逃逸口行为）。
+	OpSetEvent
 )
 
 // Op 是一条针对某个控件的 mutation。diff 引擎批量生成，

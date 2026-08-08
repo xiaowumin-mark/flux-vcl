@@ -45,9 +45,27 @@ func (m *Mock) SetEnabled(h Handle, enabled bool) {
 
 // TextWidth 模拟 intrinsic 测量：mock 无字体，返回按字符数的伪宽度。
 // 布局引擎的真实测量在 LCL 适配层实现（design.md §6.2）。
-func (m *Mock) TextWidth(h Handle, text string) int {
-	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "MeasureText", Value: text})
-	return len(text) * 8
+// 查询不产生 mutation op（布局 pass 每次 render 都调用，计入会污染 diff 断言）。
+func (m *Mock) TextWidth(text string) int { return len(text) * 8 }
+
+func (m *Mock) SetEvent(h Handle, event string, fn any) {
+	m.ops = append(m.ops, Op{Type: OpSetEvent, Handle: h, Key: event, Value: fn})
+}
+
+// AttachRef 在 mock 下无真实原生对象：注入 nil 作为占位。
+func (m *Mock) AttachRef(h Handle, ref Ref) {
+	if ref != nil {
+		ref.SetNative(nil)
+	}
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "Ref", Value: ref})
+}
+
+// ApplyNative 在 mock 下无真实原生对象：传 nil 给逃逸函数。
+func (m *Mock) ApplyNative(h Handle, fn func(obj any)) {
+	if fn != nil {
+		fn(nil)
+	}
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "Native", Value: "fn"})
 }
 
 func (m *Mock) HandleAllocated(h Handle) bool { return h != 0 }
