@@ -1,0 +1,17 @@
+# === 实验产物与本地配置 ===
+# 注意：规则后不要加内联注释（git 对含 / 或中文的行尾注释解析不可靠，会导致规则失效）
+/ref/
+.claude/
+Agent.md
+
+# === Go ===
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum

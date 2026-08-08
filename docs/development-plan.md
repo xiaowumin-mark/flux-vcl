@@ -50,14 +50,19 @@
 
 ## Phase 0 — 地基与选型验证（Spike）· 目标：决策落地、可冒烟
 
-| # | 子任务 | 要点 / 参考 |
-|---|---|---|
-| 0.1 | **绑定选型实验** | 在现行 Go 工具链（1.22–1.27）上验证首选 **energye/lcl + libenergy DLL**（构建 + libenergy 获取/版本匹配，见 [govcl-vs-lcl.md](./govcl-vs-lcl.md) §7 E1/E2）；B 计划 govcl v1.2.10（`last-vcl-support`）+ libvcl DLL 仅在需要真实 VCL 时做对照。写最小"窗体+按钮+点击"用例，记录能否构建/运行/DLL 加载。决议已预倾向 LCL，实验用于定案。 |
-| 0.2 | **DLL 交付与许可方案** | 确认首选 libenergy（energye/lcl）获取路径与版本 pin（SourceForge `liblcl` 项目、命名/版本对照，见 govcl-vs-lcl.md §3.5 / §7 E2）；B 计划 libvcl.dll/libvclx64.dll 路径与"预览/测试"许可；决策分发方式（exe 旁 vs 构建脚本）。 |
-| 0.3 | **构建脚手架** | `GOOS=windows` `CGO_ENABLED=0` `-buildmode=exe` `-ldflags "-H=windowsgui"`；空导入 `winappres`（manifest/图标）；`.syso` 命名 `_windows_<arch>`；Go 版本策略 + CI 每轮验证冻结绑定可构建。 |
-| 0.4 | **仓库与模块** | 模块路径 `github.com/fluxvcl/flux-vcl`（已核实未被占用）；目录骨架；`go.mod`；README/许可。 |
-| 0.5 | **CI 骨架** | GitHub Actions：windows-latest 上 `go test ./...` + 冒烟（启动真 app、断言日志、`kbinani/screenshot` 截图 artifact）。 |
-| 0.6 | **无头测试驱动雏形** | 参照 Fyne `test` 驱动：mock renderer，state/diff 纯逻辑可无显示测试。 |
+> **进展（2026-08-09）**：E1（energye/lcl v1.0.3 + libenergy DLL 构建冒烟）与 E2（DLL 获取路径/版本映射）
+> **已完成并验证通过**，详见 [phase0-e2-libenergy-mapping.md](./phase0-e2-libenergy-mapping.md) 与 `ref/e1-smoke/`。
+> 关键结论：Go 包版本必须与 DLL 严格一致（designer 锁 v1.0.3）；标准初始化序列
+> `Init → Application.Initialize → NewForms → Run`；控件须在 `NewForms` 之后创建。
+
+| # | 子任务 | 要点 / 参考 | 状态 |
+|---|---|---|---|
+| 0.1 | **绑定选型实验** | 在现行 Go 工具链（1.22–1.27）上验证首选 **energye/lcl + libenergy DLL**（构建 + libenergy 获取/版本匹配，见 [govcl-vs-lcl.md](./govcl-vs-lcl.md) §7 E1/E2）；B 计划 govcl v1.2.10（`last-vcl-support`）+ libvcl DLL 仅在需要真实 VCL 时做对照。写最小"窗体+按钮+点击"用例，记录能否构建/运行/DLL 加载。决议已预倾向 LCL，实验用于定案。 | ✅ 完成 |
+| 0.2 | **DLL 交付与许可方案** | 确认首选 libenergy（energye/lcl）获取路径与版本 pin（**结论见 [phase0-e2-libenergy-mapping.md](./phase0-e2-libenergy-mapping.md)**：权威来源是 energye/designer 内嵌 zip，非 SourceForge/GitHub Releases；版本锁定 lcl v1.0.3）；B 计划 libvcl.dll/libvclx64.dll 路径与"预览/测试"许可；决策分发方式（exe 旁 vs 构建脚本）。 | ✅ 完成 |
+| 0.3 | **构建脚手架** | `GOOS=windows` `CGO_ENABLED=0` `-buildmode=exe` `-ldflags "-H=windowsgui"`；空导入 `winappres`（manifest/图标）；`.syso` 命名 `_windows_<arch>`；Go 版本策略 + CI 每轮验证冻结绑定可构建。 | |
+| 0.4 | **仓库与模块** | 模块路径 `github.com/fluxvcl/flux-vcl`（已核实未被占用）；目录骨架；`go.mod`；README/许可。 | |
+| 0.5 | **CI 骨架** | GitHub Actions：windows-latest 上 `go test ./...` + 冒烟（启动真 app、断言日志、`kbinani/screenshot` 截图 artifact）。 | |
+| 0.6 | **无头测试驱动雏形** | 参照 Fyne `test` 驱动：mock renderer，state/diff 纯逻辑可无显示测试。 | |
 
 **交付物**：选型决议文档、可运行的 Hello World、CI 绿。
 **验收**：`go build` 单命令产出 exe，双击出窗口、点按钮有反应；CI 冒烟通过。
