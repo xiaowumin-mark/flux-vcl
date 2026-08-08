@@ -14,7 +14,8 @@
 #>
 param(
     [string]$Target = "basic",   # 目标应用：examples/<Target>
-    [string]$Output = "bin"      # 与 build.ps1 的 Output 一致
+    [string]$Output = "bin",     # 与 build.ps1 的 Output 一致
+    [string]$Screenshot = ""     # 非空则点击验证后截主屏保存到此路径（CI artifact）
 )
 
 $ErrorActionPreference = "Stop"
@@ -94,6 +95,23 @@ $b1 = New-Object System.Text.StringBuilder 256
 Write-Host "[smoke] button after click: '$($b1.ToString())'"
 if ($b1.ToString() -match "Clicked \d") { Write-Host "[smoke] PASS: click handled" }
 else { Write-Host "[smoke] FAIL: click not handled"; exit 1 }
+
+# 可选截图（CI artifact；无头会话可能黑屏，失败仅告警不中断）
+if ($Screenshot) {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+        $bmp.Save($Screenshot, [System.Drawing.Imaging.ImageFormat]::Png)
+        $g.Dispose(); $bmp.Dispose()
+        Write-Host "[smoke] screenshot saved: $Screenshot"
+    } catch {
+        Write-Host "[smoke] WARN screenshot failed (headless?): $_"
+    }
+}
 
 [W]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null   # WM_CLOSE
 if ($p.WaitForExit(8000)) { Write-Host "[smoke] PASS: process exited cleanly (code $($p.ExitCode))" }

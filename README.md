@@ -39,8 +39,8 @@ Window(
 | 0.2 DLL 交付与许可方案 | ✅ |
 | 0.3 构建脚手架（manifest/icon/`.syso`/构建脚本） | ✅ `scripts/build.ps1` |
 | 0.4 仓库与模块 | ✅ |
-| 0.5 CI 骨架 | 待办 |
-| 0.6 无头测试驱动雏形 | 待办 |
+| 0.5 CI 骨架 | ✅ `.github/workflows/ci.yml` + `scripts/fetch-libenergy.ps1` |
+| 0.6 无头测试驱动雏形 | ✅ `internal/render`（接口 + Mock + 无显示测试） |
 
 声明式核心（Widget / diff / State / 布局）从 Phase 1 开始实现。
 

@@ -63,6 +63,10 @@
 > **冒烟中发现的重要工程约束**：LCL 的 `TLabel` **无独立 HWND**（自绘在父窗体表面），
 > 因此 Win32 冒烟无法读 label 文本，示例改为点击时同步更新按钮 Caption 作可观测信号；
 > 这会影响 Phase 3 布局（label 尺寸/重绘）与 Phase 7 inspector 的设计。
+>
+> **同日追加：0.5/0.6 完成。** CI 工作流 + `scripts/fetch-libenergy.ps1`（designer commit
+> `5c4ec54` 锁定 lcl v1.0.3 对应 DLL，`-Force` 实测下载 13MB 成功）；`internal/render`
+> 无头测试驱动（Renderer 接口 + Mock + 无显示测试，`go test ./...` 全绿）。
 
 | # | 子任务 | 要点 / 参考 | 状态 |
 |---|---|---|---|
@@ -70,8 +74,8 @@
 | 0.2 | **DLL 交付与许可方案** | 确认首选 libenergy（energye/lcl）获取路径与版本 pin（**结论见 [phase0-e2-libenergy-mapping.md](./phase0-e2-libenergy-mapping.md)**：权威来源是 energye/designer 内嵌 zip，非 SourceForge/GitHub Releases；版本锁定 lcl v1.0.3）；B 计划 libvcl.dll/libvclx64.dll 路径与"预览/测试"许可；决策分发方式（exe 旁 vs 构建脚本）。 | ✅ 完成 |
 | 0.3 | **构建脚手架** | `GOOS=windows` `CGO_ENABLED=0` `-buildmode=exe` `-ldflags "-H=windowsgui"`；`examples/basic` 用 go-winres 生成 `rsrc_windows_amd64.syso`（PerMonitorV2 manifest + 图标 + 版本信息，命名 `rsrc_windows_<arch>`）；封装 `scripts/build.ps1`（资源生成→构建→DLL 复制）与 `scripts/smoke.ps1`（无头冒烟）；Go 版本策略 `go 1.22`（覆盖 1.22–1.27 工具链）；CI 复用两个脚本（0.5）。 | ✅ 完成 |
 | 0.4 | **仓库与模块** | 模块路径 `github.com/xiaowumin-mark/flux-vcl`（git 远程地址）；目录骨架（根包 `flux`、`internal/{widget,diff,render}`、`examples/basic`、`scripts`、`assets`）；`go.mod` 锁 `lcl v1.0.3`；README/许可（MIT）。 | ✅ 完成 |
-| 0.5 | **CI 骨架** | GitHub Actions：windows-latest 上 `go test ./...` + 冒烟（启动真 app、断言日志、`kbinani/screenshot` 截图 artifact）。 | |
-| 0.6 | **无头测试驱动雏形** | 参照 Fyne `test` 驱动：mock renderer，state/diff 纯逻辑可无显示测试。 | |
+| 0.5 | **CI 骨架** | GitHub Actions（`.github/workflows/ci.yml`）：windows-latest 上 `go test ./...` + `go vet`；`scripts/fetch-libenergy.ps1` 从 designer 内嵌 zip 取 DLL（锁定 commit `5c4ec54`）；复用 `build.ps1` + `smoke.ps1` 冒烟；截图 artifact（用 PowerShell `CopyFromScreen`，避免引入 `kbinani/screenshot` 依赖污染根 go.mod；无头会话可能黑屏，失败不中断）。 | ✅ 完成 |
+| 0.6 | **无头测试驱动雏形** | 参照 Fyne `test` 驱动：`internal/render` 定义 Renderer 窄接口（D6）+ Dioxus 风格 Op 集 + `Mock` renderer；测试不接触 energye/lcl/DLL，任意平台 `go test` 可跑。Phase 1.4 diff 引擎直接在此框架加测试。 | ✅ 完成 |
 
 **交付物**：选型决议文档、可运行的 Hello World、CI 绿。
 **验收**：`go build` 单命令产出 exe，双击出窗口、点按钮有反应；CI 冒烟通过。

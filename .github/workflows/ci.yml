@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: go.sum
+      - name: Go test
+        run: go test ./...
+      - name: Go vet
+        run: go vet ./...
+
+  build-and-smoke:
+    name: Build & Smoke (Windows GUI)
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: go.sum
+      # CI 无本地 ref/ 副本（被 gitignore），从 designer 内嵌 zip 获取 DLL
+      - name: Fetch libenergy DLL
+        shell: pwsh
+        run: .\scripts\fetch-libenergy.ps1
+      - name: Build
+        shell: pwsh
+        run: .\scripts\build.ps1
+      - name: Smoke test
+        shell: pwsh
+        run: .\scripts\smoke.ps1 -Screenshot "$env:GITHUB_WORKSPACE\bin\basic-smoke.png"
+      - name: Upload smoke screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: basic-smoke-screenshot
+          path: bin/basic-smoke.png
+          if-no-files-found: warn
