@@ -85,18 +85,39 @@
 
 ## Phase 1 — 声明式核心（Widget/Node/Element/diff/Renderer 抽象）· 目标：能写普通桌面程序
 
-| # | 子任务 | 要点 / 参考 |
-|---|---|---|
-| 1.1 | Widget/Node 数据结构 | `Widget` 接口（design.md §4.2）；Node `{Type, Props, Children}`。 |
-| 1.2 | Element 树与 identity | `canUpdate`（D1）；Element 节点持有原生指针 + prevConfig。 |
-| 1.3 | Renderer 接口 + Mutation op 集 | `Mount/Update/Remove`（design.md §5.1）+ Dioxus 风格 op：`AppendChild/InsertChildBefore/RemoveChild/SetProperty/SetText/Create/Destroy`（可 mock 测试）。 |
-| 1.4 | **diff/reconciliation 引擎** | 全项目最高优先级代码。build 新树 → 按 D1 匹配 → 属性级 patch（D2）→ 批量提交。性能：diff 循环复用 buffer。 |
-| 1.5 | 基础控件集 | `Window/Column/Row/Text/Button/Input`；对应原生控件 `TForm/TEdit/TButton`（默认 LCL；占位布局，Phase 3 精修）。 |
-| 1.6 | 原生逃逸口 | `Native(func(btn *lcl.TButton))`（默认 LCL 后端）、`Ref`（design.md §11）。约束：逃逸口改动 Align 须在布局前还原（D5）。 |
-| 1.7 | **三不变量测试** | D7 三条测试护栏上线（a/b/c）。 |
+> **进展（2026-08-09）：全部完成。** 声明式核心落地：`internal/widget`（Widget/Node/
+> Props 有序属性集，D2 属性级 diff 判定）、`internal/diff`（Element 树 + Reconciler：
+> D1 canUpdate / D3 稳定 key / 透明容器）、flux 根包（控件构造器 + 占位布局 + App 入口）、
+> `internal/native`（energye/lcl Renderer 适配 + 逃逸口）。D7 三不变量测试全绿。
+> examples/basic 声明式改造后 build + smoke 端到端通过。
+>
+> **工程发现/偏差（实现记录）**：
+> - **事件回调每次 render 重新绑定**：函数值无法比较相等性，D2 按"属性恒变"处理
+>   （React 同款）。D7c"相同树零 mutation"的测试树**不含事件回调**；另设专门用例
+>   断言事件重绑但不重建控件。
+> - **Column/Row 为透明容器**：不创建原生控件，Element 句柄继承父容器，子控件直接
+>   挂到祖父 —— diff 引擎用 `transparentType()` 过滤 Create/SetParent/Destroy。
+> - **TextWidth 为占位实现**（`len(text)*8`，Mock 与 LCL 一致）：布局发生在 diff 之前、
+>   控件尚未创建，因此测量不依赖控件句柄；Phase 3 精修为 GDI/主题测量 + 缓存。
+> - **布局为占位堆叠**（Column 垂直/Row 水平，gap 4；Window 默认 400x300）：
+>   每次 render 重算 Bounds 写入 Props，Phase 3 替换为 Measure/Layout 两遍算法。
+> - **`flux.Window` 用 `...any` 变参**混合子节点与窗体 Opt（Title/Width/Height）。
+> - LCL 适配层验证了 energye/lcl 的接口签名：`TControl.SetBounds/SetCaption/SetVisible/
+>   SetEnabled/SetOnClick`（OnClick 在基类 TControl，非 TButton）、`ICustomEdit.SetText/
+>   SetOnChange`、`NewButton/NewLabel/NewEdit(owner IComponent)`。
+
+| # | 子任务 | 要点 / 参考 | 状态 |
+|---|---|---|---|
+| 1.1 | Widget/Node 数据结构 | `Widget` 接口（design.md §4.2）；Node `{Type, Props, Children}`。 | ✅ 完成 |
+| 1.2 | Element 树与 identity | `canUpdate`（D1）；Element 节点持有原生指针 + prevConfig。 | ✅ 完成 |
+| 1.3 | Renderer 接口 + Mutation op 集 | Dioxus 风格 op：`AppendChild/SetProperty/SetText/Create/Destroy/SetEvent`（可 mock 测试）；适配层 `internal/native` 实现 energye/lcl 映射。 | ✅ 完成 |
+| 1.4 | **diff/reconciliation 引擎** | 全项目最高优先级代码。build 新树 → 按 D1 匹配 → 属性级 patch（D2）→ 批量提交。性能：diff 循环复用 buffer。 | ✅ 完成 |
+| 1.5 | 基础控件集 | `Window/Column/Row/Text/Button/Input`；对应原生控件 `TEngForm/TLabel/TButton/TEdit`（默认 LCL；占位布局，Phase 3 精修）。 | ✅ 完成 |
+| 1.6 | 原生逃逸口 | `Native(func(btn *lcl.TButton))`（默认 LCL 后端）、`Ref`（design.md §11）。约束：逃逸口改动 Align 须在布局前还原（D5）。 | ✅ 完成 |
+| 1.7 | **三不变量测试** | D7 三条测试护栏上线（a/b/c）；flux 层端到端（Mock 断言零重建）。 | ✅ 完成 |
 
 **交付物**：`examples/basic`（窗口+文本+按钮+输入框+点击）。
-**验收**：按钮点击改文本/输入框内容，全程零控件重建（渲染器断言 mutation 数）。
+**验收**：按钮点击改文本/输入框内容，全程零控件重建（渲染器断言 mutation 数）—— 已达成（smoke 点击后 "Clicked 1"，diff 零重建由 flux 端到端测试断言）。
 **风险**：diff 正确性 —— 用不变量测试锁死。
 
 ---
