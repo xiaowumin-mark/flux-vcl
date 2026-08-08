@@ -166,15 +166,42 @@
 
 ## Phase 3 — 布局引擎 · 目标：现代布局
 
-| # | 子任务 | 要点 / 参考 |
-|---|---|---|
-| 3.1 | 协议 | `BoxConstraints`/`Size`；`Measure`/`Layout` 两遍（design.md §6.2）。 |
-| 3.2 | **intrinsic-size 函数** | `Size Measure(font, text, dpi, constraints)`；GDI 文本测量（`TCanvas.TextWidth/TextHeight/TextExtent`）；主题 API（`BCM_GETIDEALSIZE`/`GetThemePartSize`）一次实现测量+缓存；缓存失效（文本/字体/DPI 变化）。 |
-| 3.3 | Flex 算法 | RenderFlex 精确实现：非 flex 主轴 unbounded、freeSpace/flex 分配、Expanded=tight/Flexible=loose、主轴对齐分布、只增不缩+溢出诊断。 |
-| 3.4 | 定位应用 | `SetBounds` 写 frame；框架控件 `Align=alNone`（D5）；逃逸口 Align 还原。 |
-| 3.5 | **DPI** | PerMonitorV2 manifest；DIP→像素 `MulDiv`；`WM_DPICHANGED` 全量 re-layout；`TForm.Scaled=false`。 |
-| 3.6 | 滚动容器 | 滚动轴 unbounded 约束；TScrollBox 原生滚动 + `WM_SETREDRAW` 防闪烁。 |
-| 3.7 | 布局调试 | inspector 预留：节点 constraints/size/frame/flex 因子、溢出提示。 |
+> **进展（2026-08-09）：布局核心完成（3.1–3.4）；3.5 DPI / 3.6 滚动 / 3.7 inspector 拆至下一轮。**
+> 落地：`box.go`（BoxConstraints/Size/Point/对齐枚举，全 DIP）、`layout.go` 单遍 RenderFlex
+> 重写（Expanded=Tight/Flexible=Loose、freeSpace 分配、主轴 spaceBetween/Around/Evenly、
+> 交叉轴 Start/Center/End/Stretch、只增不缩 + 溢出诊断）、`TextExtent` GDI 测量替换占位
+> （共享 bitmap canvas + `TextExtentWithStr` + 缓存）、Window resize 即时更新
+> （`OnResize→invalidate→re-render`，零控件重建）。`examples/layout` demo：resize 时
+> 左右面板 1:2 即时重分割；冒烟断言按钮 0→1 + 干净退出。
+>
+> **工程发现/偏差（实现记录）**：
+> - **单遍 RenderFlex，非 Measure/Layout 两遍**（design.md §6.2 的两遍在交互/动画场景
+>   才有区分价值，本轮统一为单遍：约束下传同时量出尺寸写 Bounds）。
+> - **Window 是布局根，子控件收到"有界主轴约束"**（`layoutRoot`）：非 flex 子惯用
+>   unbounded 主轴测量，但布局根必须给内容一个有界盒子（Flutter Scaffold 语义）——
+>   否则根 Column 在 unbounded 主轴下 `freeSpace=0`，内部 Expanded 全部被压成 0。
+>   这是嵌套 flex + Expanded 能工作的前提。
+> - **`TextWidth`→`TextExtent(text)(w,h)`** 替换占位：布局在 diff 前执行、控件未创建，
+>   测量用共享 1x1 bitmap canvas + 窗体默认字体（`SetFontToFont(form.Font())`），按文本
+>   缓存；`w<=0` 兜底 `len*8`、`h<=0` 兜底 20。3.5 DPI/字体变化时需失效缓存。
+> - **Window 尺寸取自渲染器客户区**（`ClientSize`，native 默认 640x480、mock 400x300），
+>   不再固定 400x300；`NewRenderer` 设默认窗体尺寸。
+> - **diff Bounds 修复（resize 后必暴露的 bug）**：透明容器/Window 的 Bounds 只用于定位
+>   与诊断，`applyProp` "Bounds" case 对 `transparentType(e.Type) || e.Type=="Window"`
+>   跳过 —— 否则透明节点（Handle 继承父）的 Bounds 会 `SetBounds` 到父容器句柄把父控件
+>   搬走 / 把窗体边框收缩。
+> - **溢出诊断钩子**：`layoutDiags` 收集 `App.LastLayoutDiags()`（Type/Key/OverflowW/H），
+>   本轮供测试断言，3.7 inspector 在其上做溢出提示 UI。
+
+| # | 子任务 | 要点 / 参考 | 状态 |
+|---|---|---|---|
+| 3.1 | 协议 | `BoxConstraints`/`Size`；`Measure`/`Layout` 两遍（design.md §6.2）。 | ✅ 完成（单遍） |
+| 3.2 | **intrinsic-size 函数** | `Size Measure(font, text, dpi, constraints)`；GDI 文本测量（`TCanvas.TextWidth/TextHeight/TextExtent`）；主题 API（`BCM_GETIDEALSIZE`/`GetThemePartSize`）一次实现测量+缓存；缓存失效（文本/字体/DPI 变化）。 | ✅ 完成（GDI 测量+缓存；主题 API 待 3.5） |
+| 3.3 | Flex 算法 | RenderFlex 精确实现：非 flex 主轴 unbounded、freeSpace/flex 分配、Expanded=tight/Flexible=loose、主轴对齐分布、只增不缩+溢出诊断。 | ✅ 完成 |
+| 3.4 | 定位应用 | `SetBounds` 写 frame；框架控件 `Align=alNone`（D5）；逃逸口 Align 还原。 | ✅ 完成（Bounds 写 Props，diff 应用；逃逸口 Align 还原待 3.5 校量） |
+| 3.5 | **DPI** | PerMonitorV2 manifest；DIP→像素 `MulDiv`；`WM_DPICHANGED` 全量 re-layout；`TForm.Scaled=false`。 | ⏳ 下一轮 |
+| 3.6 | 滚动容器 | 滚动轴 unbounded 约束；TScrollBox 原生滚动 + `WM_SETREDRAW` 防闪烁。 | ⏳ 下一轮 |
+| 3.7 | 布局调试 | inspector 预留：节点 constraints/size/frame/flex 因子、溢出提示。 | ⏳ 下一轮（溢出诊断 `App.LastLayoutDiags` 已落地） |
 
 **交付物**：表单布局、可伸缩面板、高分屏 demo。
 **验收**：Row/Column 比例 flex 正确；改变窗口尺寸布局即时更新且无闪烁；125%/150% 缩放文字不糊。

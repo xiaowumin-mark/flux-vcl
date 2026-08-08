@@ -17,9 +17,11 @@ import (
 	"github.com/xiaowumin-mark/flux-vcl/internal/widget"
 )
 
-// transparentType 返回类型是否为透明容器：Column/Row 是纯逻辑分组，
-// 不创建原生控件，Element 的 handle 继承父容器，children 直接挂到祖父。
-func transparentType(t string) bool { return t == "Column" || t == "Row" }
+// transparentType 返回类型是否为透明容器：Column/Row/Expanded/Flexible 是纯
+// 逻辑分组，不创建原生控件，Element 的 handle 继承父容器，children 直接挂到祖父。
+func transparentType(t string) bool {
+	return t == "Column" || t == "Row" || t == "Expanded" || t == "Flexible"
+}
 
 // Element 是 Element 树的节点（design.md §4.3 / D1）：持久 identity。
 //
@@ -152,6 +154,11 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Enabled", Value: b})
 		}
 	case "Bounds":
+		// 透明容器无原生控件（Handle 继承父），Window 是窗体本身：它们的
+		// Bounds 只用于布局定位/诊断，应用到原生控件会把父控件搬走/把窗体外框收缩。
+		if transparentType(e.Type) || e.Type == "Window" {
+			break
+		}
 		if r, ok := v.(render.Rect); ok {
 			rc.r.SetBounds(e.Handle, r)
 			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Bounds", Value: r})

@@ -43,10 +43,17 @@ type Renderer interface {
 	SetText(h Handle, text string)
 	// SetEnabled 设置可用状态。
 	SetEnabled(h Handle, enabled bool)
-	// TextWidth 测量给定文本在当前默认字体下的宽度（DIP）。
-	// intrinsic-size 测量（design.md §6.2）：不因测量而实现控件，
-	// 因此不依赖控件句柄，Phase 3 起增加字体参数与缓存。
-	TextWidth(text string) int
+	// TextExtent 测量给定文本在当前默认字体下的宽高（DIP）。
+	// intrinsic-size 测量（design.md §6.2）：不因测量而实现控件，无句柄依赖
+	// （实现方用 bitmap canvas / 字体对象测量）。实现方内部按 text 缓存；
+	// 字体/DPI 变化时失效（Phase 3.5）。
+	TextExtent(text string) (w, h int)
+	// ClientSize 返回窗体客户区尺寸（DIP）—— 子控件布局坐标系。
+	// Window 节点布局时查询；resize 后 render 现查最新值。
+	ClientSize() (w, h int)
+	// OnResize 注册窗体 resize 回调（UI 线程调用，参数为新客户区尺寸 DIP）。
+	// 幂等：重复调用覆盖；App 在 NewApp 注册一次，仅用于触发 re-render。
+	OnResize(fn func(w, h int))
 	// SetEvent 绑定事件回调（如 "OnClick"）。fn 为绑定层可识别的事件回调
 	// （Phase 1 约定 func() / func(string)）。函数值无法比较相等性，
 	// diff 引擎每次 render 均重新绑定（D2 逃逸口行为，React 同款）。

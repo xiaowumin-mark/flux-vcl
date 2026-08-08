@@ -54,6 +54,18 @@ func Visible(v bool) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Visible", v) })
 }
 
+// MainAxis 设置 flex 容器（Row/Column）的主轴对齐方式（Phase 3.3）。
+// 缺省 MainAxisStart（与占位堆叠一致）。
+func MainAxis(a MainAxisAlignment) Opt {
+	return optFn(func(n *Node) { n.Props.Set("MainAxisAlignment", int(a)) })
+}
+
+// CrossAxis 设置 flex 容器（Row/Column）的交叉轴对齐方式。
+// CrossAxisStretch 使子控件填满交叉轴；缺省 CrossAxisStart。
+func CrossAxis(a CrossAxisAlignment) Opt {
+	return optFn(func(n *Node) { n.Props.Set("CrossAxisAlignment", int(a)) })
+}
+
 // Enabled 设置初始可用状态（缺省 true）。
 func Enabled(v bool) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Enabled", v) })

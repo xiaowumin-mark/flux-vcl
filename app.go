@@ -24,11 +24,16 @@ type App struct {
 	mu       sync.Mutex
 	renderMu sync.Mutex // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
 	pending  bool       // 脏标志：有待处理的失效（D4 合并）
+	lastDiags []LayoutDiag // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
 }
 
 // NewApp 创建 App。r 为绑定层 renderer（默认 LCL 适配见 internal/native）。
+// 注册窗体 resize 回调 → invalidate（pending 合并 + renderMu 串行化，
+// resize 风暴安全）→ Window 布局用最新客户区尺寸。
 func NewApp(r render.Renderer) *App {
-	return &App{r: r, rc: diff.New(r)}
+	a := &App{r: r, rc: diff.New(r)}
+	r.OnResize(func(w, h int) { a.invalidate() })
+	return a
 }
 
 // Mount 注册根构建函数并首次渲染。之后 State.Set 自动触发 re-render。
@@ -59,14 +64,27 @@ func (a *App) render() {
 	a.renderWidget(b())
 }
 
-// renderWidget 对一棵具体 Widget 树做 diff：占位布局（写 Bounds）→ 收集
-// 绑定依赖（订阅 State）→ reconcile。collectBindings 在 diff 前执行，保证
+// renderWidget 对一棵具体 Widget 树做 diff：布局（constraints 下传，写 Bounds）→
+// 收集绑定依赖（订阅 State）→ reconcile。collectBindings 在 diff 前执行，保证
 // State.Set 在 render 后立即能看到订阅。
 func (a *App) renderWidget(w Widget) {
 	root := w.Create()
-	layoutTree(root, a.r)
+	cw, ch := a.r.ClientSize()
+	d := &layoutDiags{}
+	layoutTree(root, a.r, Tight(cw, ch), Point{}, d)
+	a.mu.Lock()
+	a.lastDiags = d.list
+	a.mu.Unlock()
 	a.collectBindings(root)
 	a.rc.Render(root)
+}
+
+// LastLayoutDiags 返回最近一次 render 的布局溢出诊断（无则空切片）。
+// Phase 3.7 inspector 将在此之上做溢出提示 UI。
+func (a *App) LastLayoutDiags() []LayoutDiag {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]LayoutDiag(nil), a.lastDiags...)
 }
 
 // invalidate 请求一次 re-render（State.Set 调用）。

@@ -11,13 +11,16 @@ import "sync"
 // 线程安全：方法加锁，允许 State 从任意 goroutine 触发 render 的 -race 测试。
 // RunOnUI 直接同步执行（mock 无独立 UI 线程）。
 type Mock struct {
-	mu   sync.Mutex
-	ops  []Op
-	next Handle
+	mu       sync.Mutex
+	ops      []Op
+	next     Handle
+	clientW  int // 模拟窗体客户区尺寸（缺省 400x300）
+	clientH  int
+	resizeFn func(w, h int) // 已注册的 resize 回调
 }
 
 // NewMock 创建空的 Mock。
-func NewMock() *Mock { return &Mock{} }
+func NewMock() *Mock { return &Mock{clientW: 400, clientH: 300} }
 
 func (m *Mock) Create(widgetType string) Handle {
 	h := m.alloc()
@@ -63,10 +66,11 @@ func (m *Mock) SetEnabled(h Handle, enabled bool) {
 	m.mu.Unlock()
 }
 
-// TextWidth 模拟 intrinsic 测量：mock 无字体，返回按字符数的伪宽度。
+// TextExtent 模拟 intrinsic 测量：mock 无字体，返回按字符数的稳定伪值
+// （宽=len*8、高=20，与 Phase 1 占位一致，保证布局测试断言稳定）。
 // 布局引擎的真实测量在 LCL 适配层实现（design.md §6.2）。
 // 查询不产生 mutation op（布局 pass 每次 render 都调用，计入会污染 diff 断言）。
-func (m *Mock) TextWidth(text string) int { return len(text) * 8 }
+func (m *Mock) TextExtent(text string) (int, int) { return len(text) * 8, 20 }
 
 func (m *Mock) SetEvent(h Handle, event string, fn any) {
 	m.mu.Lock()
@@ -103,6 +107,39 @@ func (m *Mock) RunOnUI(fn func()) {
 }
 
 func (m *Mock) HandleAllocated(h Handle) bool { return h != 0 }
+
+// ClientSize 返回模拟窗体客户区尺寸（缺省 400x300，与 Phase 1 Window 默认一致）。
+func (m *Mock) ClientSize() (int, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.clientW, m.clientH
+}
+
+// SetClientSize 设置模拟窗体客户区尺寸（测试钩子：模拟用户拖拽 resize 后的结果）。
+func (m *Mock) SetClientSize(w, h int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clientW, m.clientH = w, h
+}
+
+// OnResize 注册 resize 回调（覆盖式）。mock 无独立 UI 线程，回调在 TriggerResize 内
+// 同步执行（与 RunOnUI 内联一致）。
+func (m *Mock) OnResize(fn func(w, h int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resizeFn = fn
+}
+
+// TriggerResize 模拟 resize 事件（测试钩子）：更新尺寸后调用已注册回调。
+func (m *Mock) TriggerResize(w, h int) {
+	m.mu.Lock()
+	fn := m.resizeFn
+	m.clientW, m.clientH = w, h
+	m.mu.Unlock()
+	if fn != nil {
+		fn(w, h)
+	}
+}
 
 func (m *Mock) alloc() Handle {
 	m.mu.Lock()

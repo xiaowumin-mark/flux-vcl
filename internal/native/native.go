@@ -42,21 +42,27 @@ func Init(dllPath string) error {
 
 // Renderer 是 energye/lcl 后端的 Renderer 实现：把窄接口调用映射到 LCL 控件。
 type Renderer struct {
-	controls map[render.Handle]lcl.IControl
-	next     render.Handle
-	form     lcl.IControl
-	formRef  *engForm
+	controls     map[render.Handle]lcl.IControl
+	next         render.Handle
+	form         lcl.IControl
+	formRef      *engForm
+	measureBmp   lcl.IBitmap        // 共享测量画布（布局在 diff 前，控件未创建）
+	measureCache map[string][2]int32 // 文本测量缓存（Phase 3.5 DPI/字体变化时失效）
 }
 
 // NewRenderer 创建 LCL 渲染器并注册主窗体（须在 Init 之后调用）。
+// 设默认窗体客户区 640x480（布局以客户区坐标系为准，Phase 3.5 前假设 96 DPI）。
 func NewRenderer() *Renderer {
 	f := &engForm{}
 	lcl.Application.NewForms(f)
 	r := &Renderer{
-		controls: make(map[render.Handle]lcl.IControl),
-		formRef:  f,
-		form:     f,
+		controls:     make(map[render.Handle]lcl.IControl),
+		measureCache: make(map[string][2]int32),
+		formRef:      f,
+		form:         f,
 	}
+	f.SetClientWidth(640)
+	f.SetClientHeight(480)
 	return r
 }
 
@@ -121,9 +127,46 @@ func (r *Renderer) SetText(h render.Handle, text string) {
 	}
 }
 
-// TextWidth 为占位 intrinsic 测量（与 Mock 一致）：每字符 8 DIP。
-// Phase 3 精修为 GDI/主题 API 测量 + 缓存（design.md §6.2）。
-func (r *Renderer) TextWidth(text string) int { return len(text) * 8 }
+// TextExtent 用共享 bitmap canvas 做 GDI 文本测量（design.md §6.2）。
+//
+// 布局在 diff 之前执行、控件未创建，因此测量不依赖控件句柄：分配一个
+// 1x1 bitmap（得到有效 HDC）＋窗体默认字体（LCL 子控件默认继承窗体字体，
+// 保证与真实渲染尺寸一致），调 TextExtentWithStr。结果按 text 缓存。
+// Phase 3.5 DPI/字体变化时需失效缓存。
+func (r *Renderer) TextExtent(text string) (int, int) {
+	if s, ok := r.measureCache[text]; ok {
+		return int(s[0]), int(s[1])
+	}
+	if r.measureBmp == nil {
+		bmp := lcl.NewBitmap()
+		bmp.SetSize(1, 1) // 分配 DIB 段 → canvas HDC 有效
+		bmp.Canvas().SetFontToFont(r.form.Font())
+		r.measureBmp = bmp
+	}
+	sz := r.measureBmp.Canvas().TextExtentWithStr(text)
+	w, h := int(sz.Cx), int(sz.Cy)
+	if w <= 0 {
+		w = len(text) * 8 // 兜底（空文本/极端字体）
+	}
+	if h <= 0 {
+		h = 20
+	}
+	r.measureCache[text] = [2]int32{int32(w), int32(h)}
+	return w, h
+}
+
+// ClientSize 返回窗体客户区尺寸（DIP）。子控件坐标以此为布局坐标系。
+func (r *Renderer) ClientSize() (int, int) {
+	return int(r.form.ClientWidth()), int(r.form.ClientHeight())
+}
+
+// OnResize 注册窗体 resize 回调。回调在 UI 线程触发（消息泵投递），
+// 参数为新客户区尺寸（DIP）。幂等：重复调用覆盖。
+func (r *Renderer) OnResize(fn func(w, h int)) {
+	r.form.SetOnResize(func(_ lcl.IObject) {
+		fn(int(r.form.ClientWidth()), int(r.form.ClientHeight()))
+	})
+}
 
 func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 	c := r.controls[h]

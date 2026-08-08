@@ -67,6 +67,16 @@ State 系统（Phase 2）、布局引擎（Phase 3）、事件/生命周期（Ph
 | 2.5 线程 marshalling（`RunOnUI` + pending 合并） | ✅ 5 goroutine 并发 Set `-race` 通过 |
 | 2.6 Key 系统（D3 稳定 key，Phase 1 已落地） | ✅ |
 
+**Phase 3（布局引擎，核心）✅ 完成（3.1–3.4；3.5 DPI / 3.6 滚动 / 3.7 inspector 下一轮）**：
+BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出诊断）+ GDI 文本测量 + resize 即时更新。
+
+| 子任务 | 状态 |
+|---|---|
+| 3.1 布局协议（`BoxConstraints`/`Size`/对齐枚举，全 DIP） | ✅ `flux/box.go` |
+| 3.2 文本测量（共享 bitmap canvas + `TextExtentWithStr` + 缓存） | ✅ 替换占位 `TextWidth` |
+| 3.3 Flex 算法（freeSpace 分配、Expanded=Tight/Flexible=Loose、只增不缩+溢出诊断） | ✅ `flux/layout.go` + 11 项测试 |
+| 3.4 定位应用 + Window resize 即时更新（零控件重建） | ✅ `App.LastLayoutDiags` 诊断钩子就绪 |
+
 ## 快速开始
 
 **前提**：Go 1.22+；`libenergy-amd64.dll`（获取方式见 [E2 文档](docs/phase0-e2-libenergy-mapping.md)，
@@ -104,7 +114,17 @@ app.Mount(func() flux.Widget {
 .\bin\basic.exe
 ```
 
-完整可运行示例见 `examples/basic`。
+完整可运行示例：
+- `examples/basic` —— State 驱动最小用例（counter + two-way 绑定）
+- `examples/layout` —— 布局引擎 demo（flex 分配、1:2 分栏、resize 即时重分割）
+
+```powershell
+# 构建并冒烟 basic（State）
+.\scripts\build.ps1 -Target basic; .\scripts\smoke.ps1 -Target basic
+
+# 构建并冒烟 layout（布局引擎）
+.\scripts\build.ps1 -Target layout; .\scripts\smoke.ps1 -Target layout
+```
 
 ## 目录结构
 
@@ -112,14 +132,18 @@ app.Mount(func() flux.Widget {
 flux-vcl/
 ├── flux.go                # 框架主包：声明式 API（构造器/Opt/App/逃逸口）
 ├── state.go               # State[T] / Bind / Binding（响应式状态 + 数据绑定，Phase 2）
+├── box.go                 # 布局协议：BoxConstraints/Size/Point/对齐枚举（Phase 3.1）
+├── layout.go              # 单遍 RenderFlex 布局引擎 + 溢出诊断（Phase 3.3/3.4）
 ├── internal/
 │   ├── widget/            # Widget 接口 + Node + Props（有序属性集，D2 diff）
 │   ├── diff/              # Element 树 + diff/reconciliation 引擎（Phase 1.4）
 │   ├── render/            # Renderer 窄接口 + Mutation op 集 + Mock
 │   └── native/            # 默认 LCL 后端适配（energye/lcl + libenergy DLL）
 ├── examples/
-│   └── basic/             # State 驱动冒烟应用（counter + two-way 绑定）
-│       └── winres/        # go-winres 资源配置（manifest/icon/version）
+│   ├── basic/             # State 驱动冒烟应用（counter + two-way 绑定）
+│   │   └── winres/        # go-winres 资源配置（manifest/icon/version）
+│   └── layout/            # 布局引擎 demo（flex 分栏 + resize 即时重分割）
+│       └── winres/
 ├── scripts/
 │   ├── build.ps1          # 构建脚手架
 │   └── smoke.ps1          # 无头冒烟

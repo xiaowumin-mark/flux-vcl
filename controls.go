@@ -27,14 +27,56 @@ func Window(args ...any) Widget {
 	return widgetNode{n}
 }
 
-// Column 垂直容器：children 自上而下排列（占位布局，Phase 3 精修）。
-func Column(children ...Widget) Widget {
-	return containerNode("Column", children)
+// Column 垂直容器：children 自上而下排列。
+//
+// 接受混合参数：子节点（Widget，可含 Expanded/Flexible）与容器选项（Opt，
+// 如 MainAxis/CrossAxis 对齐）。例如 Column(MainAxis(MainAxisCenter), Text("a")).
+func Column(args ...any) Widget { return containerArgs("Column", args) }
+
+// Row 水平容器：children 自左向右排列。
+//
+// 接受混合参数：子节点（Widget，可含 Expanded/Flexible）与容器选项（Opt，
+// 如 MainAxis/CrossAxis 对齐）。例如 Row(Expanded(Text("a")), Text("b")).
+func Row(args ...any) Widget { return containerArgs("Row", args) }
+
+// Expanded 把子控件在主轴上强制填满 flex 容器分配的剩余空间（tight，Phase 3.3）。
+// 默认 flex=1；多个 flex 子按因子比例分配 freeSpace。Expanded(child, 2) 占双份。
+func Expanded(child Widget, flex ...int) Widget { return flexNode("Expanded", child, flex) }
+
+// Flexible 允许子控件小于 flex 分配的空间（loose），与 Expanded 相反（Phase 3.3）。
+// 默认 flex=1；其余语义同 Expanded。
+func Flexible(child Widget, flex ...int) Widget { return flexNode("Flexible", child, flex) }
+
+// flexNode 构造 flex 透明包装节点：不创建原生控件，仅向布局引擎标记 flex 因子。
+// diff 引擎按 transparentType 处理（Element 句柄继承父，children 挂祖父）。
+func flexNode(t string, child Widget, flex []int) Widget {
+	n := widget.NewNode(t)
+	f := 1
+	if len(flex) > 0 {
+		f = flex[0]
+	}
+	if f <= 0 {
+		panic("flux: flex 因子必须 > 0")
+	}
+	n.Props.Set("Flex", f)
+	n.Add(child.Create())
+	return widgetNode{n}
 }
 
-// Row 水平容器：children 自左向右排列（占位布局，Phase 3 精修）。
-func Row(children ...Widget) Widget {
-	return containerNode("Row", children)
+// containerArgs 构造容器节点，从混合参数中分离子节点与 Opt。
+func containerArgs(t string, args []any) Widget {
+	n := widget.NewNode(t)
+	for _, a := range args {
+		switch v := a.(type) {
+		case Widget:
+			n.Add(v.Create())
+		case Opt:
+			v.apply(n)
+		default:
+			panic("flux." + t + ": 参数必须是 Widget 或 Opt")
+		}
+	}
+	return widgetNode{n}
 }
 
 // Text 文本标签（对应绑定层 TLabel）。布局宽度按 intrinsic 文本测量。
@@ -74,10 +116,3 @@ func Input(opts ...Opt) Widget {
 	return widgetNode{n}
 }
 
-func containerNode(t string, children []Widget) Widget {
-	n := widget.NewNode(t)
-	for _, c := range children {
-		n.Add(c.Create())
-	}
-	return widgetNode{n}
-}
