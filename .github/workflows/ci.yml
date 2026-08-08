@@ -46,6 +46,11 @@ jobs:
         run: |
           .\scripts\build.ps1 -Target events
           .\scripts\smoke.ps1 -Target events -Screenshot "$env:GITHUB_WORKSPACE\bin\events-smoke.png"
+      - name: Build & Smoke (phase5, advanced features)
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -Target phase5
+          .\scripts\smoke.ps1 -Target phase5 -Screenshot "$env:GITHUB_WORKSPACE\bin\phase5-smoke.png"
       - name: Upload smoke screenshot
         if: always()
         uses: actions/upload-artifact@v4

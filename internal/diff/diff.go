@@ -19,8 +19,14 @@ import (
 
 // transparentType 返回类型是否为透明容器：Column/Row/Expanded/Flexible 是纯
 // 逻辑分组，不创建原生控件，Element 的 handle 继承父容器，children 直接挂到祖父。
+// Component（Phase 5.4）同样是透明分组：子树 = build() 结果，身份靠外部 Key
+// （D3），不产生原生控件。
 func transparentType(t string) bool {
-	return t == "Column" || t == "Row" || t == "Expanded" || t == "Flexible"
+	switch t {
+	case "Column", "Row", "Expanded", "Flexible", "Component":
+		return true
+	}
+	return false
 }
 
 // Element 是 Element 树的节点（design.md §4.3 / D1）：持久 identity。
@@ -57,6 +63,33 @@ func New(r render.Renderer) *Reconciler { return &Reconciler{r: r} }
 
 // Root 返回当前 Element 树根（首次 Render 前为 nil）。
 func (rc *Reconciler) Root() *Element { return rc.root }
+
+// IsTransparent 报告类型是否为透明容器（无原生控件，Element 句柄继承父）。
+// 供 flux 根包的逃逸口（App.SetBounds）判断目标是否有独立原生句柄可直改。
+func IsTransparent(t string) bool { return transparentType(t) }
+
+// Lookup 按 key 在 Element 树中查找节点（深度优先，先父后子）。
+//
+// Phase 5.1 动画的逃逸口支撑：App.SetBounds 用稳定 key 定位 Element 句柄，
+// 直接应用几何而不重跑 diff（D2 逃逸口）。未找到返回 nil。
+func (rc *Reconciler) Lookup(key string) *Element {
+	if rc.root == nil || key == "" {
+		return nil
+	}
+	var find func(e *Element) *Element
+	find = func(e *Element) *Element {
+		if e.Key == key {
+			return e
+		}
+		for _, c := range e.Children {
+			if f := find(c); f != nil {
+				return f
+			}
+		}
+		return nil
+	}
+	return find(rc.root)
+}
 
 // Render 对整棵树做一次 diff：首次调用挂载整棵树，后续按 D1/D2 增量 patch。
 //
@@ -180,6 +213,16 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 		if r, ok := v.(render.Rect); ok {
 			rc.r.SetBounds(e.Handle, r)
 			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Bounds", Value: r})
+		}
+	case "Color": // Phase 5.2 Theme 背景色
+		if c, ok := v.(render.Color); ok {
+			rc.r.SetColor(e.Handle, c)
+			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Color", Value: c})
+		}
+	case "FontColor": // Phase 5.2 Theme 文字色
+		if c, ok := v.(render.Color); ok {
+			rc.r.SetFontColor(e.Handle, c)
+			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "FontColor", Value: c})
 		}
 	case "Native": // 逃逸口：控件创建后调用，注入绑定层原生对象
 		if fn, ok := v.(func(any)); ok {

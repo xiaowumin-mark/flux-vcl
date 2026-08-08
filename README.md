@@ -91,6 +91,16 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 | 4.4 IME/中文输入（`OnUTF8KeyPress` 逐字符路由，含 IME 组合结果） | ✅ 控件级 `SetOnUTF8KeyPress` |
 | 4.5 无头测试（统一事件/映射 DIP/生命周期/Source 注入） | ✅ `flux/event_test.go` + `internal/native/mapping_test.go` |
 
+**Phase 5（高级特性）✅ 完成**：动画（Curve/Tween/`AnimationController` 状态机 + `App.Animate` 主线程 16ms pump + `App.SetBounds` 逃逸口直接落地，绕开整树 re-diff）+ 主题（`Theme` 调色板 + `Color`/`FontColor` Opt，切换 = 全量 re-diff 只 patch 变化颜色）+ Async（后台 goroutine + `RunOnUI` marshalling）+ 组件化（`Component(build, Key)` 透明分组，身份靠外部 Key 稳定）。
+
+| 子任务 | 状态 |
+|---|---|
+| 5.1 动画（Curve/EaseIn/Out/InOut/ElasticOut、Tween、Controller.Step、App.Animate pump、App.SetBounds D2 逃逸口） | ✅ `flux/animation.go` + `App.Animate/SetBounds` |
+| 5.2 主题（`Theme{Font,Color,Radius,Animation}`、Light/Dark、`Color`/`FontColor` Opt + diff 属性级 patch） | ✅ `flux/theme.go`；FontSize/Radius 为文档字段（native 未接入） |
+| 5.3 Async（`Async[T](app, load, onSuccess, onError…)`：后台 goroutine + RunOnUI marshal，D4） | ✅ 包级泛型函数（Go 方法不支持泛型） |
+| 5.4 Component（`Build() Widget` 透明分组；组件身份靠外部 Key（D3），不在 Build 内生成 key/嵌套类型） | ✅ `flux.Component` + diff/layout Component 分支 |
+| 5.5 无头测试（曲线端点、Tween、Controller 状态机、Animate pump 驱动、SetBounds 命中/跳过、主题零 mutation、组件 key 复用、Async 成败两径、ARGB→TColor 换算） | ✅ `flux/phase5_test.go` + `internal/native/mapping_test.go` |
+
 ## 快速开始
 
 **前提**：Go 1.22+；`libenergy-amd64.dll`（获取方式见 [E2 文档](docs/phase0-e2-libenergy-mapping.md)，
@@ -132,6 +142,7 @@ app.Mount(func() flux.Widget {
 - `examples/basic` —— State 驱动最小用例（counter + two-way 绑定）
 - `examples/layout` —— 布局引擎 demo（flex 分配、1:2 分栏、resize 即时重分割、DPI 读数）
 - `examples/events` —— 事件与生命周期 demo（hover 坐标 / click Source / 键盘 / 中文 IME / 生命周期计数）
+- `examples/phase5` —— 高级特性 demo（点击按钮：计数 + 方块滑动动画 + 异步加载；点击"主题"切换 Light/Dark）
 
 ```powershell
 # 构建并冒烟 basic（State）
@@ -142,6 +153,9 @@ app.Mount(func() flux.Widget {
 
 # 构建并冒烟 events（事件与生命周期）
 .\scripts\build.ps1 -Target events; .\scripts\smoke.ps1 -Target events
+
+# 构建并冒烟 phase5（动画/主题/Async/组件）
+.\scripts\build.ps1 -Target phase5; .\scripts\smoke.ps1 -Target phase5
 ```
 
 ## 目录结构
@@ -152,9 +166,11 @@ flux-vcl/
 ├── state.go               # State[T] / Bind / Binding（响应式状态 + 数据绑定，Phase 2）
 ├── event.go               # 统一事件 Event{Type,X,Y,Key,Text,Button,Mods,Source}（Phase 4.1）
 ├── event_opts.go          # 事件/生命周期 Opt：OnClick/OnMouse*/OnKey*/OnMount/OnUpdate/OnUnmount
+├── animation.go           # Curve/Tween/AnimationController 动画状态机（Phase 5.1）
+├── theme.go               # Theme 调色板 + Color/FontColor Opt（Phase 5.2）
 ├── box.go                 # 布局协议：BoxConstraints/Size/Point/对齐枚举（Phase 3.1）
 ├── layout.go              # 单遍 RenderFlex 布局 + ScrollBox 滚动 + NodeDiag 诊断（Phase 3）
-├── controls.go            # 控件构造器：Window/Column/Row/ScrollBox/Text/Button/Input
+├── controls.go            # 控件构造器：Window/Column/Row/ScrollBox/Component/Text/Button/Input
 ├── internal/
 │   ├── widget/            # Widget 接口 + Node + Props（有序属性集，D2 diff）
 │   ├── diff/              # Element 树 + diff/reconciliation 引擎（Phase 1.4）
@@ -165,7 +181,9 @@ flux-vcl/
 │   │   └── winres/        # go-winres 资源配置（manifest/icon/version）
 │   ├── layout/            # 布局引擎 demo（flex 分栏 + resize 重分割 + 滚动列表）
 │   │   └── winres/
-│   └── events/            # 事件与生命周期 demo（hover/click/键盘/中文 IME/生命周期计数）
+│   ├── events/            # 事件与生命周期 demo（hover/click/键盘/中文 IME/生命周期计数）
+│   │   └── winres/
+│   └── phase5/            # 高级特性 demo（动画/主题/Async/组件）
 │       └── winres/
 ├── scripts/
 │   ├── build.ps1          # 构建脚手架

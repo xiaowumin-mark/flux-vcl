@@ -43,6 +43,17 @@ type Renderer interface {
 	SetText(h Handle, text string)
 	// SetEnabled 设置可用状态。
 	SetEnabled(h Handle, enabled bool)
+	// SetColor 设置控件背景色（ARGB；透明合成由后端决定，原生控件无 alpha）。
+	// Phase 5.2 Theme 的颜色落点（diff 按 "Color" 属性分发）。
+	SetColor(h Handle, color Color)
+	// SetFontColor 设置控件文字颜色（经字体对象，ARGB）。TLabel/TEdit/TButton
+	// 等有 Font 的控件均可；无 Font 的控件忽略。Phase 5.2 Theme。
+	SetFontColor(h Handle, color Color)
+	// NewTimer 创建主线程定时器：intervalMs 毫秒后每 intervalMs 周期触发 fn，
+	// 直至返回的停止函数被调用（幂等）。主线程定时器（D4）：
+	// 真实绑定用 TTimer（消息泵上触发，无 goroutine/marshalling）；
+	// Mock 不真实调度 —— 保存回调，由测试经 FireTimer 手动驱动（确定性断言）。
+	NewTimer(intervalMs int, fn func()) (stop func())
 	// TextExtent 测量给定文本在当前默认字体下的宽高（DIP）。
 	// intrinsic-size 测量（design.md §6.2）：不因测量而实现控件，无句柄依赖
 	// （实现方用 bitmap canvas / 字体对象测量）。实现方内部按 text 缓存；

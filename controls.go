@@ -39,6 +39,30 @@ func Column(args ...any) Widget { return containerArgs("Column", args) }
 // 如 MainAxis/CrossAxis 对齐）。例如 Row(Expanded(Text("a")), Text("b")).
 func Row(args ...any) Widget { return containerArgs("Row", args) }
 
+// Component 包装构建函数为 Widget（design.md §4.1 组件化，Phase 5.4）。
+//
+// 组件是透明分组节点（diff 不建原生控件）：子树 = build() 产物，按透明容器
+// 参与 diff/layout（Element 句柄继承父，子控件挂祖父）。
+//
+// 组件身份靠外部 Key 稳定（D3）—— 绝不在 Build 内生成 key / 定义嵌套类型
+// （React 教训：嵌套类型每次 render 是新类型，破坏 canUpdate 的原地复用）。
+// 因此 Component 接受 Opts（典型只有 Key）：Key("card") 落在透明组件节点上，
+// 使 diff 能按该 key 跨 render 复用子树（子控件原地 patch 不重建）。
+//
+//	Component(func() Widget {
+//	    return Column(Text("name"), Button("OK", Key("ok")))
+//	}, Key("login-card"))
+func Component(build func() Widget, opts ...Opt) Widget {
+	n := widget.NewNode("Component")
+	for _, o := range opts {
+		o.apply(n)
+	}
+	if w := build(); w != nil {
+		n.Add(w.Create())
+	}
+	return widgetNode{n}
+}
+
 // ScrollBox 垂直滚动容器（对应绑定层 TScrollBox，Phase 3.6）。
 //
 // SingleChildScrollView 语义：单子内容（通常为 Column），内容超高时由原生

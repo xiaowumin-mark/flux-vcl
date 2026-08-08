@@ -113,6 +113,15 @@ func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 		// 父容器已按 flex 语义算好约束 c，此处原样传给唯一子（tight/loose 已定）。
 		sz = layoutTree(n.Children[0], r, c, pos, d)
 		setBounds(n, pos, sz)
+	case "Component":
+		// 透明组件（Phase 5.4）：单子 passthrough —— 同一约束、同一位置传给
+		// build() 产物，自身尺寸 = 子尺寸（Component 自身 Bounds 与子一致）。
+		if len(n.Children) > 0 {
+			sz = layoutTree(n.Children[0], r, c, pos, d)
+		} else {
+			sz = leafSize(0, 0, n, c)
+		}
+		setBounds(n, pos, sz)
 	case "Text":
 		w, h := r.TextExtent(n.Props.String("Text"))
 		sz = leafSize(w, h, n, c)
@@ -166,7 +175,7 @@ func setPos(n *Node, pos Point) {
 	}
 	br := b.(render.Rect)
 	switch n.Type {
-	case "Column", "Row", "Expanded", "Flexible":
+	case "Column", "Row", "Expanded", "Flexible", "Component":
 		offsetSubtree(n, pos.X-br.X, pos.Y-br.Y)
 	default:
 		br.X, br.Y = pos.X, pos.Y

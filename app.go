@@ -2,6 +2,7 @@ package flux
 
 import (
 	"sync"
+	"time"
 
 	"github.com/xiaowumin-mark/flux-vcl/internal/diff"
 	"github.com/xiaowumin-mark/flux-vcl/internal/render"
@@ -51,6 +52,66 @@ func (a *App) Render(w Widget) { a.renderWidget(w) }
 
 // Root 返回当前 Element 树根（Inspector / 测试用）。
 func (a *App) Root() *diff.Element { return a.rc.Root() }
+
+// Animate 在 UI 线程上以 ~16ms（60fps）推进一次动画，直到 duration 结束。
+// onStep 每帧收到 curve 后的进度值（0..1，含终点 1.0）。返回停止函数（提前停止）。
+//
+// pump：主线程定时器（native TTimer，D4）驱动 AnimationController.Step —— 无需
+// goroutine/marshalling，回调天然在 UI 线程。落地方式（D2 逃逸口）：onStep 里用
+// App.SetBounds 直接应用几何/颜色，不触发整树 re-diff —— 高频属性绕开 diff
+// （development-plan §5.1）；低频属性也可直接 Set State（每帧 re-render 有成本）。
+//
+//	duration 为 0 时立即回调一次 1.0 并结束。
+func (a *App) Animate(duration time.Duration, curve Curve, onStep func(v float64)) (stop func()) {
+	ctrl := NewAnimationController(duration, curve)
+	ctrl.Start(onStep)
+	var stopFn func()
+	stopFn = a.r.NewTimer(16, func() {
+		ctrl.Step(16 * time.Millisecond)
+		if !ctrl.Running() {
+			stopFn() // 到达终点：停表（幂等）
+		}
+	})
+	return func() {
+		stopFn()
+		ctrl.Stop()
+	}
+}
+
+// SetBounds 按稳定 key 直接应用控件几何（DIP）—— 动画高频落地路径（D2 逃逸口）。
+//
+// 不经 diff/布局（不重跑 render）：逐帧 SetBounds 比整树 re-diff 便宜一个量级。
+// 目标必须是带稳定 key 的真实控件（透明容器/Window 跳过 —— 无独立原生句柄）。
+// 与布局的关系：本方法不改 Element 的 Bounds 属性，布局在下次 render 会按
+// 布局结果决定是否 patch 回 —— 布局槽位不变时 diff 不发 SetBounds，动画位置保持。
+func (a *App) SetBounds(key string, r render.Rect) {
+	if e := a.rc.Lookup(key); e != nil && !diff.IsTransparent(e.Type) && e.Type != "Window" {
+		a.r.SetBounds(e.Handle, r)
+	}
+}
+
+// Async 在后台 goroutine 执行 load；完成后经 renderer.RunOnUI marshal 到 UI 线程
+// 调用 onSuccess（D4 marshalling，任意 goroutine 安全）。onError（可选）在 load
+// 返回非 nil error 时于 UI 线程调用。回调里通常 Set State 触发 re-render。
+//
+// 说明：Go 不允许泛型方法，故为包级函数（type 参数走自由函数）——
+// a 为 App 实例。用法：
+//
+//	flux.Async(app, func() (string, error) { return fetch(url) },
+//	    func(s string) { data.Set(s) },
+//	    func(err error) { status.Set("error: " + err.Error()) })
+func Async[T any](a *App, load func() (T, error), onSuccess func(T), onError ...func(error)) {
+	go func() {
+		v, err := load()
+		if err != nil {
+			if len(onError) > 0 {
+				a.r.RunOnUI(func() { onError[0](err) })
+			}
+			return
+		}
+		a.r.RunOnUI(func() { onSuccess(v) })
+	}()
+}
 
 // render 取当前 build 并渲染（build 为空则跳过，未 Mount）。renderMu 与重入
 // 防护在 renderWidget 内统一处理（见下）。

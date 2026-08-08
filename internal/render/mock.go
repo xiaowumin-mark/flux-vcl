@@ -18,6 +18,7 @@ type Mock struct {
 	clientH  int
 	resizeFn func(w, h int) // 已注册的 resize 回调
 	handlers map[Handle]map[string]any // 已注册事件回调（Phase 4 触发测试用）
+	timerFn  func()          // NewTimer 注册的回调（nil=未注册/已停止；FireTimer 驱动）
 }
 
 // NewMock 创建空的 Mock。
@@ -65,6 +66,42 @@ func (m *Mock) SetEnabled(h Handle, enabled bool) {
 	m.mu.Lock()
 	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "Enabled", Value: enabled})
 	m.mu.Unlock()
+}
+
+func (m *Mock) SetColor(h Handle, color Color) {
+	m.mu.Lock()
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "Color", Value: color})
+	m.mu.Unlock()
+}
+
+func (m *Mock) SetFontColor(h Handle, color Color) {
+	m.mu.Lock()
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "FontColor", Value: color})
+	m.mu.Unlock()
+}
+
+// NewTimer 存储回调供 FireTimer 手动驱动（mock 无真实定时器/消息泵）。
+// 停止函数幂等：置 timerFn 为 nil，后续 FireTimer 为 no-op。
+func (m *Mock) NewTimer(intervalMs int, fn func()) (stop func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.timerFn = fn
+	return func() {
+		m.mu.Lock()
+		m.timerFn = nil
+		m.mu.Unlock()
+	}
+}
+
+// FireTimer 手动触发一次已注册的定时器回调（测试驱动动画帧）。
+// 未注册/已停止时为 no-op。
+func (m *Mock) FireTimer() {
+	m.mu.Lock()
+	fn := m.timerFn
+	m.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // TextExtent 模拟 intrinsic 测量：mock 无字体，返回按字符数的稳定伪值

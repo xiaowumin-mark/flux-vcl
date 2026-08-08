@@ -316,15 +316,34 @@
 
 ## Phase 5 — 高级特性 · 目标：表现力
 
-| # | 子任务 | 要点 / 参考 |
-|---|---|---|
-| 5.1 | **动画** | 主线程 60fps（TTimer/自定义 pump）；Tween/Curve/Transition；高频属性用**直接绑定**（D2 逃逸口）避免整树 re-diff。 |
-| 5.2 | Theme | `Theme{Font,Color,Radius,Animation}`（design.md §14）；Light/Dark/Fluent；主题切换=全量 re-diff（重入 diff 引擎）。 |
-| 5.3 | Async | `Async(Load, OnSuccess)`（design.md §15）：后台 goroutine + `runOnUI` marshalling（D4）。 |
-| 5.4 | Component | `Build() Widget`（design.md §4.1）；组件身份（**不在 Build 内定义嵌套类型/生成 key** —— React 教训）。 |
+> **进展（2026-08-09）：全部完成。** 动画（纯逻辑状态机 + 主线程 pump + D2 逃逸口落地）、
+> 主题（数据化调色板 + 属性级 patch）、Async（后台 goroutine + RunOnUI marshal）、
+> Component（透明分组 + 外部 Key 身份）落地。工程发现：
+>
+> - **Go 限制：方法不支持泛型** → `Async` 为包级泛型函数 `Async[T](a *App, load, onSuccess, onError…)`
+>   （方法泛型会编译失败，design.md §15 的 `Async(Load, OnSuccess)` 以自由函数落地）。
+> - **Go 限制：type/func 包级同名冲突** → 颜色类型命名 `ColorValue`（别名 `render.Color`），
+>   让出 `Color` 标识符给 Opt 构造器 `Color(th.Primary)`；用户几乎不写类型名（`RGB()`/主题字段即够）。
+> - **pump 分层**：`AnimationController` 是纯状态机（elapsed/duration/curve/onStep/onEnd，mutex 保护、
+>   可无头测试），**不持有定时器**；`App.Animate` 用主线程 TTimer（~16ms）驱动 Step，回调天然在
+>   UI 线程（无 goroutine/marshalling 成本）。动画落地走 `App.SetBounds`（D2 逃逸口，`diff.Lookup`
+>   按 key 定位真实控件句柄；透明容器/Window 跳过），**不触发整树 re-diff**。
+> - **主题=数据不是运行时对象**：构建函数按当前 Theme 显式传颜色（Color/FontColor Opt）；
+>   切换 = State 变 → 全量 re-diff → diff 只 patch 变化的颜色属性（未变子树零 mutation，D7c）。
+>   `FontSize/Radius` 为文档字段（native 未接入字体大小/圆角），诚实标注。
+> - **Component 透明化**：与 Column/Row/Expanded 同为透明分组节点（无原生控件、Element 句柄继承
+>   父、子挂祖父），diff/layout 各加 "Component" 分支。身份靠**外部** `Key`（D3）：Component 接受
+>   `opts ...Opt`（典型仅 `Key("card")`），子控件按 key 跨 render 原地 patch 不重建。
 
-**交付物**：淡入淡出、主题切换、异步加载 demo。
-**验收**：60fps 动画不冻结 UI；切换主题无闪烁；async 回调安全落地。
+| # | 子任务 | 要点 / 参考 | 状态 |
+|---|---|---|---|
+| 5.1 | **动画** | 主线程 60fps（TTimer/自定义 pump）；Curve（Linear/EaseIn/Out/InOut/ElasticOut）/Tween/AnimationController（0..1 状态机，不持定时器）；高频属性用**直接绑定**（`App.SetBounds` D2 逃逸口）避免整树 re-diff。 | ✅ 完成（`flux/animation.go` + `App.Animate/SetBounds`；`flux/phase5_test.go` Mock FireTimer 驱动 pump） |
+| 5.2 | Theme | `Theme{Font,Color,Radius,Animation}`（design.md §14）；Light/Dark；主题切换=全量 re-diff（重入 diff 引擎，只 patch 变化颜色）。 | ✅ 完成（`flux/theme.go`：`ColorValue`/`RGB`/`Theme`/Light/Dark + `Color`/`FontColor` Opt + diff 分发；FontSize/Radius 为文档字段） |
+| 5.3 | Async | `Async(Load, OnSuccess)`（design.md §15）：后台 goroutine + `RunOnUI` marshalling（D4）。 | ✅ 完成（包级泛型 `Async[T]`；失败走 onError 可选回调） |
+| 5.4 | Component | `Build() Widget`（design.md §4.1）；组件身份（**不在 Build 内定义嵌套类型/生成 key** —— React 教训，Key 由外部经 opts 传入）。 | ✅ 完成（`flux.Component` 透明分组 + diff/layout "Component" 分支） |
+
+**交付物**：`examples/phase5` —— 点击按钮：计数（冒烟目标）+ ElasticOut 方块滑动（App.SetBounds 逐帧直接落地）+ 500ms 异步加载（RunOnUI 回 UI 线程）；点击"主题" chip 切换 Light/Dark（State → 全量 re-diff）。
+**验收**：60fps 动画不冻结 UI（无整树 re-diff，SetBounds 逃逸口；`go test -race` 全绿）；切换主题无闪烁（只 patch 变化颜色，未变子树零 mutation）；async 回调安全落地（D4 + `closed` 门，关机竞态防护复用 Phase 3.6）。
 
 ---
 

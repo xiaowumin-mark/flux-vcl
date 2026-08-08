@@ -20,6 +20,7 @@ package native
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"syscall"
 
@@ -181,6 +182,56 @@ func (r *Renderer) SetText(h render.Handle, text string) {
 	} else {
 		c.SetCaption(text)
 	}
+}
+
+// SetColor 设置控件背景色（Phase 5.2 Theme）。ARGB 换算为 LCL TColor（BGR）：
+// IControl 统一暴露 SetColor（TButton/TEdit/TLabel/TScrollBox/TEngForm 均有）。
+func (r *Renderer) SetColor(h render.Handle, color render.Color) {
+	r.controls[h].SetColor(colorToTColor(color))
+}
+
+// SetFontColor 设置控件文字颜色（经字体对象）。LCL 的 IControl 无 SetFontColor，
+// 文字色统一走 Font().SetColor（TControl.Font() 返回 IFont）。无 Font 语义的
+// 控件（极少数）忽略 —— 不 panic（与事件的结构化断言策略一致，D6）。
+func (r *Renderer) SetFontColor(h render.Handle, color render.Color) {
+	if f := r.controls[h].Font(); f != nil {
+		f.SetColor(colorToTColor(color))
+	}
+}
+
+// NewTimer 创建主线程定时器（Phase 5.1 动画 pump，TTimer/自定义 pump）。
+//
+// energye/lcl 的 TTimer 在应用消息泵上触发（主线程，无 goroutine/marshalling，
+// 契合 D4 单一 UI 线程）。intervalMs 毫秒后每周期触发 fn，直至 stop 被调用
+// （幂等：禁用 + Free）。关闭流程保护：窗体 teardown 后不再触发（closed 门，
+// 与 RunOnUI 同策略，杜绝关机竞态）。
+func (r *Renderer) NewTimer(intervalMs int, fn func()) (stop func()) {
+	t := lcl.NewTimer(r.form)
+	t.SetInterval(uint32(intervalMs))
+	t.SetEnabled(true)
+	t.SetOnTimer(func(_ lcl.IObject) {
+		if r.closed.Load() || fn == nil {
+			return
+		}
+		fn()
+	})
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			t.SetEnabled(false)
+			t.Free()
+		})
+	}
+}
+
+// colorToTColor 把 ARGB（0xAARRGGBB）换算为 LCL TColor（$00BBGGRR，低 24 位
+// BGR）。alpha 忽略（原生控件无透明合成）。独立纯函数便于无 DLL 单测
+// （见 mapping_test.go）。
+func colorToTColor(c render.Color) types.TColor {
+	r := byte(c >> 16)
+	g := byte(c >> 8)
+	b := byte(c)
+	return types.TColor(uint32(b)<<16 | uint32(g)<<8 | uint32(r))
 }
 
 // TextExtent 用共享 bitmap canvas 做 GDI 文本测量（design.md §6.2）。

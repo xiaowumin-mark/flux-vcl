@@ -78,6 +78,33 @@ func TestMouseEventDIPNormalization(t *testing.T) {
 	}
 }
 
+// TestColorToTColor ARGB（0xAARRGGBB）→ LCL TColor（低 24 位 BGR $00BBGGRR）换算。
+// 覆盖字节序（R/G/B 通道位置互换）与 alpha 忽略。
+func TestColorToTColor(t *testing.T) {
+	cases := []struct {
+		in   render.Color
+		want types.TColor
+	}{
+		{render.Color(0xFF000000), types.TColor(0x000000)}, // 黑：BGR 全 0
+		{render.Color(0xFFFFFFFF), types.TColor(0xFFFFFF)}, // 白：BGR 全 FF
+		// 红 RGB(FF,0,0) = 0xFFFF0000 → TColor $0000FF（R 落低字节）
+		{render.Color(0xFFFF0000), types.TColor(0x0000FF)},
+		// 绿 RGB(0,FF,0) = 0xFF00FF00 → TColor $00FF00（G 落中间字节）
+		{render.Color(0xFF00FF00), types.TColor(0x00FF00)},
+		// 蓝 RGB(0,0,FF) = 0xFF0000FF → TColor $FF0000（B 落高字节）
+		{render.Color(0xFF0000FF), types.TColor(0xFF0000)},
+		// 混合 0xAABBCC → $CCBBAA（三通道翻转，B 为最高有效）
+		{render.Color(0xFFAABBCC), types.TColor(0xCCBBAA)},
+		// alpha 0x12 被忽略（原生控件无透明合成）
+		{render.Color(0x12345678), types.TColor(0x785634)},
+	}
+	for _, c := range cases {
+		if got := colorToTColor(c.in); got != c.want {
+			t.Errorf("colorToTColor(%#x) = %#x，期望 %#x", c.in, got, c.want)
+		}
+	}
+}
+
 // TestEventTypeString 事件类型名（demo/inspector 展示）。
 func TestEventTypeString(t *testing.T) {
 	cases := map[render.EventType]string{
