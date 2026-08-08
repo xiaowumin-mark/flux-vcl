@@ -17,17 +17,6 @@ func applyOpts(n *Node, opts []Opt) {
 	}
 }
 
-// OnClick 绑定点击事件。事件回调每次 render 重新绑定（函数值无法比较相等性）。
-// Phase 1 事件签名为 func()（无 sender/坐标，Phase 4 引入统一 Event）。
-func OnClick(fn func()) Opt {
-	return optFn(func(n *Node) { n.Props.Set("OnClick", fn) })
-}
-
-// OnChange 绑定文本变化事件（Input 等可编辑控件）。fn 接收新文本。
-func OnChange(fn func(text string)) Opt {
-	return optFn(func(n *Node) { n.Props.Set("OnChange", fn) })
-}
-
 // Title 设置窗体标题（Window 用；内部走 Text 属性 → 绑定层 SetCaption）。
 func Title(s string) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Text", s) })

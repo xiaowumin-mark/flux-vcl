@@ -18,13 +18,14 @@ import (
 //
 // 绑定层 renderer 必须由 internal/native 的适配器创建（D6 隔离）。
 type App struct {
-	r        render.Renderer
-	rc       *diff.Reconciler
-	build    func() Widget
-	mu       sync.Mutex
-	renderMu sync.Mutex // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
-	pending  bool       // 脏标志：有待处理的失效（D4 合并）
-	lastDiags []LayoutDiag // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
+	r          render.Renderer
+	rc         *diff.Reconciler
+	build      func() Widget
+	mu         sync.Mutex
+	renderMu   sync.Mutex // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
+	pending    bool       // 脏标志：有待处理的失效（D4 合并）
+	inRender   bool       // 重入防护：当前已有 renderWidget 在栈上（生命周期钩子等 render 中触发 State.Set）
+	lastDiags  []LayoutDiag // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
 	lastInspect []NodeDiag // 最近一次 render 的全节点布局诊断（Phase 3.7 inspector）
 }
 
@@ -51,8 +52,8 @@ func (a *App) Render(w Widget) { a.renderWidget(w) }
 // Root 返回当前 Element 树根（Inspector / 测试用）。
 func (a *App) Root() *diff.Element { return a.rc.Root() }
 
-// render 取当前 build 并渲染（build 为空则跳过，未 Mount）。
-// renderMu 保证同一时刻只有一个 reconcile 进行（并发 Set 时的串行化纪律）。
+// render 取当前 build 并渲染（build 为空则跳过，未 Mount）。renderMu 与重入
+// 防护在 renderWidget 内统一处理（见下）。
 func (a *App) render() {
 	a.mu.Lock()
 	b := a.build
@@ -60,15 +61,32 @@ func (a *App) render() {
 	if b == nil {
 		return
 	}
-	a.renderMu.Lock()
-	defer a.renderMu.Unlock()
 	a.renderWidget(b())
 }
 
 // renderWidget 对一棵具体 Widget 树做 diff：布局（constraints 下传，写 Bounds）→
 // 收集绑定依赖（订阅 State）→ reconcile。collectBindings 在 diff 前执行，保证
 // State.Set 在 render 后立即能看到订阅。
+//
+// 重入防护（Phase 4.3 工程发现）：生命周期钩子（OnMount/OnUpdate/OnUnmount）
+// 在 reconcile 内触发，若钩子回调里 Set State → invalidate → RunOnUI（主线程
+// 内联）→ renderWidget，会重入当前栈：非重入 renderMu 自锁 + 无限递归。
+// 因此 renderWidget 持有 inRender 守卫：重入调用只置 pending 并返回，由当前
+// render 结束后 finishRender 统一 flush（D4 合并更新，递归变一次尾调）。
 func (a *App) renderWidget(w Widget) {
+	a.mu.Lock()
+	if a.inRender {
+		a.pending = true // 已有 render 在栈上：排队，由当前 render 结束时 flush
+		a.mu.Unlock()
+		return
+	}
+	a.inRender = true
+	a.mu.Unlock()
+	defer a.finishRender()
+
+	a.renderMu.Lock() // 串行化 reconcile：并发 Set 也只允许一个 render 进行
+	defer a.renderMu.Unlock()
+
 	root := w.Create()
 	cw, ch := a.r.ClientSize()
 	d := &layoutDiags{}
@@ -80,6 +98,24 @@ func (a *App) renderWidget(w Widget) {
 	a.mu.Unlock()
 	a.collectBindings(root)
 	a.rc.Render(root)
+	// D4 延后销毁落地点：reconcile 移除的控件在此统一物理释放（在 UI 线程、
+	// 事件回调触发 render 时也晚于 reconcile 完成）。
+	if d, ok := a.r.(drainer); ok {
+		d.DrainDestroy()
+	}
+}
+
+// finishRender 结束一次 renderWidget：清 inRender，若 render 期间有重入排队
+// 的 State.Set（pending），flush 一次（递归走 render() → 最新 build）。
+func (a *App) finishRender() {
+	a.mu.Lock()
+	a.inRender = false
+	again := a.pending
+	a.pending = false
+	a.mu.Unlock()
+	if again {
+		a.render()
+	}
 }
 
 // LastLayoutDiags 返回最近一次 render 的布局溢出诊断（无则空切片）。
@@ -120,6 +156,13 @@ func (a *App) invalidate() {
 		a.mu.Unlock()
 		a.render()
 	})
+}
+
+// drainer 是可选接口：实现方在每次 render 完成后统一物理释放延后销毁的
+// 控件（D4 销毁入队延后，见 internal/native.Renderer.DrainDestroy）。
+// Mock 不实现（同步销毁，op 记录即语义），仅真实绑定层延后物理 Free。
+type drainer interface {
+	DrainDestroy()
 }
 
 // collectBindings 遍历节点树，把登记了 bindKey 的绑定订阅到 App（幂等）。

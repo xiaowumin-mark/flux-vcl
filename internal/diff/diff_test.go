@@ -193,11 +193,11 @@ func TestEventReboundEachRender(t *testing.T) {
 	rc := diff.New(m)
 
 	btn := btnNode("go", "")
-	btn.Props.Set("OnClick", func() {})
+	btn.Props.Set("OnClick", func(render.Event) {})
 	rc.Render(windowTree(colWith(btn)))
 
 	btn2 := btnNode("go", "")
-	btn2.Props.Set("OnClick", func() {})
+	btn2.Props.Set("OnClick", func(render.Event) {})
 	ops := rc.Render(windowTree(colWith(btn2)))
 
 	if n := countOps(ops, render.OpSetEvent); n != 1 {

@@ -70,9 +70,10 @@ type Renderer struct {
 	measureCache map[string][2]int32 // 文本测量缓存（字体随 DPI 变化时失效）
 	dpi          int32               // 当前显示器 DPI（0=未查询，invalidateDPI 清零强制重查）
 	canvasDpi    int32               // 测量 bitmap DC 的 DPI（进程内固定，缓存一次；0=未查询）
-	resizeFn     func(w, h int)     // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
-	closeFn      func()             // OnClose 回调（demo 停止后台轮询）
-	closed       atomic.Bool        // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
+	resizeFn       func(w, h int) // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
+	closeFn        func()         // OnClose 回调（demo 停止后台轮询）
+	closed         atomic.Bool    // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
+	pendingDestroy []lcl.IControl // D4 延后销毁队列：render 完成时 DrainDestroy 统一 Free
 }
 
 // NewRenderer 创建 LCL 渲染器并注册主窗体（须在 Init 之后调用）。
@@ -120,13 +121,27 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 	return h
 }
 
+// Destroy 销毁控件。销毁入队延后（D4：绝不在事件回调内同步 Free，
+// LCLRefCount>0 会崩溃）。句柄从映射表移除（后续 op 不再命中），LCL 对象
+// 物理 Free 由 DrainDestroy 在 render 完成后统一执行（App 每次 render 后调用；
+// 也是"事件回调内触发 render → 移除控件"的安全边界）。
 func (r *Renderer) Destroy(h render.Handle) {
 	c := r.controls[h]
 	if c == nil || c == r.form {
 		return // 主窗体不显式 Free
 	}
-	c.Free()
 	delete(r.controls, h)
+	r.pendingDestroy = append(r.pendingDestroy, c)
+}
+
+// DrainDestroy 物理释放积压的待销毁控件（D4 延后销毁的落地点）。
+// App 在每次 render/reconcile 完成后调用；进入关闭流程后也立即清空
+// （teardown 期间不再保留待释放对象）。
+func (r *Renderer) DrainDestroy() {
+	for _, c := range r.pendingDestroy {
+		c.Free()
+	}
+	r.pendingDestroy = nil
 }
 
 func (r *Renderer) SetParent(child, parent render.Handle) {
@@ -234,11 +249,97 @@ func (r *Renderer) emitResize() {
 	r.resizeFn(w, h)
 }
 
+// mouseEvents / keyEvents 是 LCL 鼠标/键盘事件的结构化接口。energye/lcl 的
+// 具体控件（TButton/TLabel/TEdit/TScrollBox/TEngForm）各自实现这些方法，但
+// IControl 接口只声明 OnClick —— 这里用结构化断言换取窄接口内的多态访问
+// （D6：不引入对具体控件类型的依赖）。TLabel 无 HWND（非 TWinControl），
+// 断言 keyEvents 失败 → 键盘事件 panic（可读错误）。
+type mouseEvents interface {
+	SetOnMouseDown(fn lcl.TMouseEvent)
+	SetOnMouseUp(fn lcl.TMouseEvent)
+	SetOnMouseMove(fn lcl.TMouseMoveEvent)
+	SetOnMouseEnter(fn lcl.TNotifyEvent)
+	SetOnMouseLeave(fn lcl.TNotifyEvent)
+}
+
+type keyEvents interface {
+	SetOnKeyDown(fn lcl.TKeyEvent)
+	SetOnKeyUp(fn lcl.TKeyEvent)
+	SetOnKeyPress(fn lcl.TKeyPressEvent)
+	SetOnUTF8KeyPress(fn lcl.TUTF8KeyPressEvent)
+}
+
+// SetEvent 把统一事件回调（func(render.Event)）映射到 LCL 事件（Phase 4.2）。
+//
+// 坐标经 DIP 归一：LCL 鼠标回调的 X/Y 是物理像素（相对控件客户区），
+// 用 render.PXToDIP 换算为 DIP（D5 全坐标 DIP）。Source 由 diff 引擎包装注入，
+// 这里只组装事件负载。OnChange 保持 func(string)（Input 双向绑定路径）。
 func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 	c := r.controls[h]
 	switch event {
 	case "OnClick":
-		c.SetOnClick(func(_ lcl.IObject) { fn.(func())() })
+		c.SetOnClick(func(_ lcl.IObject) {
+			fn.(func(render.Event))(render.Event{Type: render.EventClick})
+		})
+	case "OnMouseDown", "OnMouseUp":
+		m, ok := c.(mouseEvents)
+		if !ok {
+			panic(fmt.Sprintf("native: 控件 %d 不支持鼠标事件 %q", h, event))
+		}
+		et := render.EventMouseDown
+		if event == "OnMouseUp" {
+			et = render.EventMouseUp
+		}
+		m.SetOnMouseDown(func(_ lcl.IObject, button types.TMouseButton, shift types.TShiftState, x, y int32) {
+			fn.(func(render.Event))(mouseEvent(et, button, shift, int(x), int(y), r.dpiAt()))
+		})
+	case "OnMouseMove":
+		m, ok := c.(mouseEvents)
+		if !ok {
+			panic(fmt.Sprintf("native: 控件 %d 不支持鼠标事件 %q", h, event))
+		}
+		m.SetOnMouseMove(func(_ lcl.IObject, shift types.TShiftState, x, y int32) {
+			fn.(func(render.Event))(render.Event{
+				Type: render.EventMouseMove,
+				X:    render.PXToDIP(int(x), r.dpiAt()),
+				Y:    render.PXToDIP(int(y), r.dpiAt()),
+				Mods: mapShift(shift),
+			})
+		})
+	case "OnMouseEnter", "OnMouseLeave":
+		m, ok := c.(mouseEvents)
+		if !ok {
+			panic(fmt.Sprintf("native: 控件 %d 不支持鼠标事件 %q", h, event))
+		}
+		et := render.EventMouseEnter
+		if event == "OnMouseLeave" {
+			et = render.EventMouseLeave
+		}
+		m.SetOnMouseEnter(func(_ lcl.IObject) {
+			fn.(func(render.Event))(render.Event{Type: et})
+		})
+	case "OnKeyDown", "OnKeyUp":
+		k, ok := c.(keyEvents)
+		if !ok {
+			panic(fmt.Sprintf("native: 控件 %d 不支持键盘事件 %q（无 HWND 的控件无键盘焦点）", h, event))
+		}
+		et := render.EventKeyDown
+		if event == "OnKeyUp" {
+			et = render.EventKeyUp
+		}
+		k.SetOnKeyDown(func(_ lcl.IObject, key *uint16, shift types.TShiftState) {
+			fn.(func(render.Event))(render.Event{Type: et, Key: *key, Mods: mapShift(shift)})
+		})
+	case "OnKeyPress":
+		// 4.4 IME/中文输入：走 SetOnUTF8KeyPress（energye/lcl v1.0.3 在
+		// TWinControl 上可用，含 IME 组合结果；不依赖计划的"仅 TForm"担忧）。
+		k, ok := c.(keyEvents)
+		if !ok {
+			panic(fmt.Sprintf("native: 控件 %d 不支持 OnKeyPress", h))
+		}
+		k.SetOnUTF8KeyPress(func(_ lcl.IObject, s *string) {
+			fn.(func(render.Event))(render.Event{Type: render.EventKeyPress, Text: *s})
+		})
 	case "OnChange":
 		ed, ok := c.(lcl.ICustomEdit)
 		if !ok {
@@ -248,6 +349,55 @@ func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 	default:
 		panic(fmt.Sprintf("native: 未知事件 %q", event))
 	}
+}
+
+// dpiAt 返回事件构造时使用的 DPI（等价 currentDPI，语义别名：事件坐标换算用）。
+func (r *Renderer) dpiAt() int {
+	return int(r.currentDPI())
+}
+
+// mouseEvent 组装鼠标按下/释放事件负载（DIP 坐标 + 按键 + 修饰键）。
+// 独立纯函数便于无 DLL 单测（见 mapping_test.go）。
+func mouseEvent(et render.EventType, button types.TMouseButton, shift types.TShiftState, x, y, dpi int) render.Event {
+	return render.Event{
+		Type:   et,
+		X:      render.PXToDIP(x, dpi),
+		Y:      render.PXToDIP(y, dpi),
+		Button: mapButton(button),
+		Mods:   mapShift(shift),
+	}
+}
+
+// mapButton 把 LCL TMouseButton 映射到统一 MouseButton。
+func mapButton(b types.TMouseButton) render.MouseButton {
+	switch b {
+	case types.MbLeft:
+		return render.ButtonLeft
+	case types.MbRight:
+		return render.ButtonRight
+	case types.MbMiddle:
+		return render.ButtonMiddle
+	default:
+		return render.ButtonNone
+	}
+}
+
+// mapShift 把 LCL TShiftState（位集合）映射到统一 Modifier 掩码。
+func mapShift(s types.TShiftState) render.Modifier {
+	var m render.Modifier
+	if s.In(types.SsShift) {
+		m |= render.ModShift
+	}
+	if s.In(types.SsCtrl) {
+		m |= render.ModCtrl
+	}
+	if s.In(types.SsAlt) {
+		m |= render.ModAlt
+	}
+	if s.In(types.SsMeta) || s.In(types.SsSuper) {
+		m |= render.ModWin
+	}
+	return m
 }
 
 func (r *Renderer) AttachRef(h render.Handle, ref render.Ref) {

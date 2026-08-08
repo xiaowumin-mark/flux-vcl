@@ -38,13 +38,18 @@ jobs:
       - name: Build
         shell: pwsh
         run: .\scripts\build.ps1
-      - name: Smoke test
+      - name: Smoke test (basic)
         shell: pwsh
         run: .\scripts\smoke.ps1 -Screenshot "$env:GITHUB_WORKSPACE\bin\basic-smoke.png"
+      - name: Build & Smoke (events, Phase 4)
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -Target events
+          .\scripts\smoke.ps1 -Target events -Screenshot "$env:GITHUB_WORKSPACE\bin\events-smoke.png"
       - name: Upload smoke screenshot
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: basic-smoke-screenshot
-          path: bin/basic-smoke.png
+          name: smoke-screenshots
+          path: bin/*-smoke.png
           if-no-files-found: warn

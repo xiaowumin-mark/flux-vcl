@@ -17,6 +17,7 @@ type Mock struct {
 	clientW  int // 模拟窗体客户区尺寸（缺省 400x300）
 	clientH  int
 	resizeFn func(w, h int) // 已注册的 resize 回调
+	handlers map[Handle]map[string]any // 已注册事件回调（Phase 4 触发测试用）
 }
 
 // NewMock 创建空的 Mock。
@@ -74,8 +75,26 @@ func (m *Mock) TextExtent(text string) (int, int) { return len(text) * 8, 20 }
 
 func (m *Mock) SetEvent(h Handle, event string, fn any) {
 	m.mu.Lock()
+	if m.handlers == nil {
+		m.handlers = make(map[Handle]map[string]any)
+	}
+	if m.handlers[h] == nil {
+		m.handlers[h] = make(map[string]any)
+	}
+	m.handlers[h][event] = fn
 	m.ops = append(m.ops, Op{Type: OpSetEvent, Handle: h, Key: event, Value: fn})
 	m.mu.Unlock()
+}
+
+// EventHandler 返回控件 h 上已注册的事件回调（Phase 4 测试触发用；未注册返回
+// nil）。mock 不驱动原生消息循环，测试取回调后自行调用以模拟事件分发。
+func (m *Mock) EventHandler(h Handle, event string) any {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.handlers == nil || m.handlers[h] == nil {
+		return nil
+	}
+	return m.handlers[h][event]
 }
 
 // AttachRef 在 mock 下无真实原生对象：注入 nil 作为占位。

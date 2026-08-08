@@ -74,7 +74,7 @@ func main() {
 				// 顶栏：标题 + counter 按钮（冒烟断言目标）+ 操作提示
 				flux.Row(
 					flux.Text("Panel demo", flux.Key("title")),
-					flux.Button(flux.Bind(count), flux.Key("btn"), flux.OnClick(func() {
+					flux.Button(flux.Bind(count), flux.Key("btn"), flux.OnClick(func(_ flux.Event) {
 						count.Set(count.Get() + 1)
 					})),
 					flux.Text("拖动窗口边框，看左右面板即时重分割", flux.Key("hint")),

@@ -256,16 +256,61 @@
 
 ## Phase 4 — 事件系统与生命周期 · 目标：统一交互
 
-| # | 子任务 | 要点 / 参考 |
-|---|---|---|
-| 4.1 | 统一事件 | `Event{Source,X,Y,Type}`（design.md §10）；**显式回调注册**（D6，禁反射）。 |
-| 4.2 | Mouse/Keyboard 映射 | 原生控件 OnClick/OnMouseDown/OnKeyDown → 统一事件；坐标 DIP 归一。 |
-| 4.3 | 生命周期 | `OnMount/OnUpdate/OnUnmount`（design.md §12）；卸载时入队销毁（D4）。 |
-| 4.4 | **IME/中文输入** | form 级路由 `OnUTF8KeyPress`（已确认在正式版 v2.2.3，仅绑定 TForm，govcl issue #126）；自定义编辑器 Win32 IMM 或 `OnWndProc` 挂 `WM_CHAR`/`WM_IME_*` 预案。 |
+> **进展（2026-08-09）：全部完成。** 统一事件模型落地：`internal/render/event.go`
+> `Event{Type,X,Y,Key,Text,Button,Mods,Source}`（全 DIP），flux 根包以 `type Event = render.Event`
+> 别名 + 事件/生命周期 Opt（`OnClick/OnMouse*/OnKey*/OnPress` 收 `func(Event)`，
+> `OnMount/OnUpdate/OnUnmount` 收 `func()`）。native 边界把 LCL 鼠标/键盘事件映射为
+> 统一事件并做 DIP 归一（`mouseEvent/mapButton/mapShift` 纯函数可单测）；diff 引擎对
+> `func(render.Event)` 回调注入稳定 `Source="Type#Key"`（D3）后转发，共享 handler 可区分来源。
+> 生命周期：`OnMount`（子树挂载完成后，父后于子）`/OnUpdate`（Flutter didUpdateWidget 语义，
+> 仅真实属性变化）`/OnUnmount`（物理释放前）；卸载控件入队延后销毁（D4，
+> `App.DrainDestroy` 在 render 后统一 Free）。中文输入（4.4）：energye/lcl v1.0.3 的
+> `SetOnUTF8KeyPress` 在 **TWinControl** 上可用（非 TForm-only，计划原担忧不成立），控件级
+> 逐字符路由，含 IME 组合结果。`examples/events` demo 全链路演示 + CI 冒烟（click 0→1）通过。
+>
+> **工程发现/偏差（实现记录）**：
+> - **统一事件放 `internal/render`，不是 flux**：`Event` 需被 native 适配层构造（跨包），
+>   放 render 后 flux 以 `type Event = render.Event` 别名转发，`func(flux.Event)` 与
+>   `func(render.Event)` 同一类型（别名不产生新类型），diff 注入与用户签名天然一致。
+> - **LCL 的 `IControl` 只声明 `SetOnClick`**：鼠标/键盘 setter（`SetOnMouseDown`、
+>   `SetOnKeyDown`、`SetOnUTF8KeyPress`…）是**具体类型**（TButton/TEdit/TScrollBox）的方法，
+>   不在 IControl 接口上 → native 适配层用两个结构接口（`mouseEvents`/`keyEvents`）做
+>   类型断言，控件类型不支持的事件静默忽略（不 panic）。
+> - **DIP 归一收在 native 边界，接口保持 DIP**：`render.Event.X/Y` 是 DIP；适配层拿到
+>   原生像素坐标后经 `PXToDIP` 换算（与 Phase 3.5 同一换算，`render.PXToDIP`）。mock
+>   测试用 144 DPI 场景断言 144px→96DIP。
+> - **生命周期钩子是函数值，diff 恒判变化**：为保 D7c"相同树零 mutation"，`applyProp`
+>   对 `OnMount/OnUpdate/OnUnmount` 显式跳过（不落 SetEvent），由
+>   `mount/reconcile/destroySubtree` 显式触发；`patchProps` 返回"真实属性变化"bool
+>   （值非函数且非 `_bind`/生命周期键），`OnUpdate` 只在真实变化时触发 —— Flutter
+>   didUpdateWidget 语义，避免"每次 render 都回调 → 钩子里 Set State → 无限 re-render"。
+> - **重入 render 死锁（Phase 4.3 最关键的工程发现）**：`OnMount` 等钩子在 reconcile 内
+>   触发，若钩子回调里 `State.Set` → `invalidate` → `RunOnUI`（mock 内联 / 主线程同步）
+>   → `renderWidget` 重入当前栈：非重入 `renderMu` **自锁** + 无限递归。修复：App 增加
+>   `inRender` 重入守卫 —— 重入调用只置 `pending` 返回，由当前 render 结束时的
+>   `finishRender` 统一 flush 一次（D4 合并更新，递归变尾调）。测试
+>   `TestStateSetInsideLifecycleNoDeadlock` 用 `Mount`（有 build）验证收敛。
+> - **生命周期钩子内 Set State 测试必须走 `Mount` 而非 `Render`**：`Render` 是单树手动
+>   路径（`App.build==nil`），flush 为 no-op —— State 自动更新只存在于 `Mount` 路径
+>   （`Render` 文档本就注明"不触发 State 自动更新"）。
+> - **`OnUpdate` 仅在真实属性变化触发**（同上）：`examples/events` 里按钮 OnUpdate 靠
+>   `count.Set` 驱动（点击 +1，文本真变）；hover 去重（同坐标跳过 Set）避免状态栏文本
+>   无谓刷新。挂载时序：`OnMount` 在子树挂载完成后触发（父后于子），钩子可访问完整子树。
+> - **`OnUTF8KeyPress` 的 Text 是 `*string`（UTF-8 逐字符，含 IME 组合结果）**：绑定层
+>   `SetOnUTF8KeyPress` 收到字符串直接存入 `Event.Text`；`TKeyDown/KeyUp` 的 `*uint16`
+>   虚拟键码存入 `Event.Key`。中文输入路径独立于虚拟键码 —— 4.4 落地为
+>   "TEdit 原生 IME（组合窗/候选）→ `OnUTF8KeyPress` 逐字符路由"，无需自定义 IMM。
 
-**交付物**：完整交互示例（hover/点击/键盘/焦点）。
+| # | 子任务 | 要点 / 参考 | 状态 |
+|---|---|---|---|
+| 4.1 | 统一事件 | `Event{Type,X,Y,Key,Text,Button,Mods,Source}`（design.md §10）；**显式回调注册**（D6，禁反射）。 | ✅ 完成（`internal/render/event.go` + flux 别名 + `flux/event_opts.go`） |
+| 4.2 | Mouse/Keyboard 映射 | 原生控件 OnClick/OnMouseDown/OnKeyDown → 统一事件；坐标 DIP 归一（native 边界 `PXToDIP`）。 | ✅ 完成（`internal/native` 结构接口 + `mapping_test.go`） |
+| 4.3 | 生命周期 | `OnMount/OnUpdate/OnUnmount`（design.md §12）；卸载时入队销毁（D4）。 | ✅ 完成（diff 触发 + `App.DrainDestroy`） |
+| 4.4 | **IME/中文输入** | form 级路由 `OnUTF8KeyPress`（计划担忧 TForm-only；实测 energye/lcl v1.0.3 在 **TWinControl** 上可用，控件级路由即可）。 | ✅ 完成（`SetOnUTF8KeyPress` → `Event.Text`） |
+
+**交付物**：完整交互示例（hover/点击/键盘/焦点/中文 IME）—— 已达成（examples/events）。
 **验收**：中文输入正常；事件不阻塞主线程（长时间 handler 自动离屏）；销毁不崩溃。
-**风险**：IME 边界（政府已知 bug）—— 限制范围，普通输入用 TMemo/TEdit 能力内。
+**风险**：IME 边界（政府已知 bug）—— 限制范围，普通输入用 TMemo/TEdit 能力内（4.4 实测控件级路由可用，风险降级）。
 
 ---
 
@@ -346,7 +391,7 @@ P5 ──► P6 ──► P7
 | diff 引擎正确性（重建/焦点漂移） | 高 | D7 三不变量测试；Inspector 高亮重建 |
 | goroutine 碰 UI 崩溃 | 高 | D4 调度器 + 测试 |
 | 原生控件测量不准 | 中 | intrinsic 函数 + 一次性实现测量缓存校准 |
-| IME/中文边界 | 中 | 限制范围；form 级 OnUTF8KeyPress |
+| IME/中文边界 | 低 | Phase 4.4 实测 energye/lcl v1.0.3 `OnUTF8KeyPress` 控件级可用（含 IME 组合结果），风险降级；长文输入留 TMemo |
 | 社区"Delphi 包装"标签 / 弃坑担忧 | 中 | 卖 Go 声明式叙事；截图/示例/维护政策 |
 | 引用伪造数据（SEO 内容农场） | 低 | 只引用一手来源（见 research.md §8.4） |
 

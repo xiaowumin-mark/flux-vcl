@@ -56,7 +56,7 @@ func main() {
 				flux.Text("Hello, FluxVCL! State 驱动的最小用例", flux.Key("label")),
 
 				flux.Text("1) counter：点按钮 +1，文本由 State 驱动刷新", flux.Key("c-hint")),
-				flux.Button(flux.Bind(count), flux.Key("btn"), flux.OnClick(func() {
+				flux.Button(flux.Bind(count), flux.Key("btn"), flux.OnClick(func(_ flux.Event) {
 					count.Set(count.Get() + 1) // 外部修改 State → 自动 re-render
 				})),
 

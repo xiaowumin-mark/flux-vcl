@@ -38,7 +38,7 @@ func TestConstructorsBuildNode(t *testing.T) {
 func TestOptionsApply(t *testing.T) {
 	var clicked bool
 	b := flux.Button("go",
-		flux.OnClick(func() { clicked = true }),
+		flux.OnClick(func(_ flux.Event) { clicked = true }),
 		flux.Key("ok"),
 		flux.Width(200),
 		flux.Height(50),
@@ -51,7 +51,7 @@ func TestOptionsApply(t *testing.T) {
 	if !ok {
 		t.Fatal("OnClick 属性缺失")
 	}
-	fn.(func())()
+	fn.(func(flux.Event))(flux.Event{})
 	if !clicked {
 		t.Error("OnClick 回调未执行")
 	}
@@ -96,7 +96,7 @@ func TestAppRenderMockEndToEnd(t *testing.T) {
 	build = func() flux.Widget {
 		return flux.Window(flux.Column(
 			flux.Text(text, flux.Key("t")),
-			flux.Button("Click me", flux.Key("b"), flux.OnClick(func() {
+			flux.Button("Click me", flux.Key("b"), flux.OnClick(func(_ flux.Event) {
 				text = "Clicked!"
 				app.Render(build())
 			})),
@@ -110,7 +110,7 @@ func TestAppRenderMockEndToEnd(t *testing.T) {
 	}
 
 	// 模拟点击：执行按钮事件回调 → 修改 text → re-render
-	onClickOf(t, build().Create(), "Button")()
+	onClickOf(t, build().Create(), "Button")(flux.Event{})
 
 	ops := m.Ops()[base:]
 	if n := countOps(ops, render.OpCreate); n != 0 {
@@ -169,11 +169,11 @@ func boundsOf(e *diff.Element) render.Rect {
 }
 
 // onClickOf 在节点树中查找指定类型控件的 OnClick 回调。
-func onClickOf(t *testing.T, n *flux.Node, typ string) func() {
+func onClickOf(t *testing.T, n *flux.Node, typ string) func(flux.Event) {
 	t.Helper()
 	if n.Type == typ {
 		if fn, ok := n.Props.Get("OnClick"); ok {
-			return fn.(func())
+			return fn.(func(flux.Event))
 		}
 	}
 	for _, c := range n.Children {

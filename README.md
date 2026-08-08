@@ -11,7 +11,8 @@ Window(
 
         Button(
             "OK",
-            OnClick(func() {
+            OnClick(func(e Event) {
+                // e.Type == EventClick；e.Source == "Button#..."
                 // ...
             }),
         ),
@@ -80,6 +81,16 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 | 3.6 滚动容器（SingleChildScroll 语义、滚动轴 unbounded 测量、原生滚动条） | ✅ `flux.ScrollBox` + `layoutScrollBox`；demo 左面板滚动列表 |
 | 3.7 布局调试（全节点 constraints/size/frame/flex 因子） | ✅ `App.Inspect()` + `NodeDiag` |
 
+**Phase 4（事件系统与生命周期）✅ 完成**：统一事件（`Event{Type,X,Y,Key,Text,Button,Mods,Source}`）+ 鼠标/键盘映射（DIP 坐标归一）+ 生命周期（`OnMount/OnUpdate/OnUnmount`，卸载延后销毁）+ 中文输入（`OnUTF8KeyPress` 路由）。
+
+| 子任务 | 状态 |
+|---|---|
+| 4.1 统一事件（`render.Event` + flux 别名；显式回调注册，禁反射） | ✅ `flux/event_opts.go` |
+| 4.2 鼠标/键盘映射（native 边界归一 DIP；`Source="Type#Key"` 注入） | ✅ `internal/native` + diff 注入 |
+| 4.3 生命周期（`OnMount/OnUpdate/OnUnmount`；D4 卸载入队延后销毁） | ✅ `internal/diff` + `App.DrainDestroy` |
+| 4.4 IME/中文输入（`OnUTF8KeyPress` 逐字符路由，含 IME 组合结果） | ✅ 控件级 `SetOnUTF8KeyPress` |
+| 4.5 无头测试（统一事件/映射 DIP/生命周期/Source 注入） | ✅ `flux/event_test.go` + `internal/native/mapping_test.go` |
+
 ## 快速开始
 
 **前提**：Go 1.22+；`libenergy-amd64.dll`（获取方式见 [E2 文档](docs/phase0-e2-libenergy-mapping.md)，
@@ -96,7 +107,7 @@ app.Mount(func() flux.Widget {
     return flux.Window(
         flux.Column(
             flux.Text("Count: "+fmt.Sprint(count.Get())),
-            flux.Button(flux.Bind(count), flux.OnClick(func() {
+            flux.Button(flux.Bind(count), flux.OnClick(func(_ flux.Event) {
                 count.Set(count.Get() + 1) // 外部修改 State → 自动 re-render
             })),
             flux.Input(flux.Bind(name)),
@@ -120,6 +131,7 @@ app.Mount(func() flux.Widget {
 完整可运行示例：
 - `examples/basic` —— State 驱动最小用例（counter + two-way 绑定）
 - `examples/layout` —— 布局引擎 demo（flex 分配、1:2 分栏、resize 即时重分割、DPI 读数）
+- `examples/events` —— 事件与生命周期 demo（hover 坐标 / click Source / 键盘 / 中文 IME / 生命周期计数）
 
 ```powershell
 # 构建并冒烟 basic（State）
@@ -127,6 +139,9 @@ app.Mount(func() flux.Widget {
 
 # 构建并冒烟 layout（布局引擎）
 .\scripts\build.ps1 -Target layout; .\scripts\smoke.ps1 -Target layout
+
+# 构建并冒烟 events（事件与生命周期）
+.\scripts\build.ps1 -Target events; .\scripts\smoke.ps1 -Target events
 ```
 
 ## 目录结构
@@ -135,6 +150,8 @@ app.Mount(func() flux.Widget {
 flux-vcl/
 ├── flux.go                # 框架主包：声明式 API（构造器/Opt/App/逃逸口）
 ├── state.go               # State[T] / Bind / Binding（响应式状态 + 数据绑定，Phase 2）
+├── event.go               # 统一事件 Event{Type,X,Y,Key,Text,Button,Mods,Source}（Phase 4.1）
+├── event_opts.go          # 事件/生命周期 Opt：OnClick/OnMouse*/OnKey*/OnMount/OnUpdate/OnUnmount
 ├── box.go                 # 布局协议：BoxConstraints/Size/Point/对齐枚举（Phase 3.1）
 ├── layout.go              # 单遍 RenderFlex 布局 + ScrollBox 滚动 + NodeDiag 诊断（Phase 3）
 ├── controls.go            # 控件构造器：Window/Column/Row/ScrollBox/Text/Button/Input
@@ -146,7 +163,9 @@ flux-vcl/
 ├── examples/
 │   ├── basic/             # State 驱动冒烟应用（counter + two-way 绑定）
 │   │   └── winres/        # go-winres 资源配置（manifest/icon/version）
-│   └── layout/            # 布局引擎 demo（flex 分栏 + resize 重分割 + 滚动列表）
+│   ├── layout/            # 布局引擎 demo（flex 分栏 + resize 重分割 + 滚动列表）
+│   │   └── winres/
+│   └── events/            # 事件与生命周期 demo（hover/click/键盘/中文 IME/生命周期计数）
 │       └── winres/
 ├── scripts/
 │   ├── build.ps1          # 构建脚手架
