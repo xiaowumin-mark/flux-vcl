@@ -166,13 +166,15 @@
 
 ## Phase 3 — 布局引擎 · 目标：现代布局
 
-> **进展（2026-08-09）：布局核心完成（3.1–3.4）；3.5 DPI 完成；3.6 滚动 / 3.7 inspector 拆至下一轮。**
+> **进展（2026-08-09）：布局核心完成（3.1–3.4）；3.5 DPI 完成；3.6 滚动 / 3.7 inspector 完成，Phase 3 全部收尾。**
 > 落地：`box.go`（BoxConstraints/Size/Point/对齐枚举，全 DIP）、`layout.go` 单遍 RenderFlex
 > 重写（Expanded=Tight/Flexible=Loose、freeSpace 分配、主轴 spaceBetween/Around/Evenly、
 > 交叉轴 Start/Center/End/Stretch、只增不缩 + 溢出诊断）、`TextExtent` GDI 测量替换占位
 > （共享 bitmap canvas + `TextExtentWithStr` + 缓存）、Window resize 即时更新
-> （`OnResize→invalidate→re-render`，零控件重建）。`examples/layout` demo：resize 时
-> 左右面板 1:2 即时重分割；冒烟断言按钮 0→1 + 干净退出。
+> （`OnResize→invalidate→re-render`，零控件重建）。3.6 滚动容器 `ScrollBox`（SingleChildScroll
+> 语义，滚动轴 unbounded 测量 + 原生 TScrollBox AutoScroll 滚动条）。3.7 inspector 数据
+> 源 `App.Inspect()`（全节点 constraints/size/frame/flex）。`examples/layout` demo：resize 时
+> 左右面板 1:2 即时重分割，左面板滚动列表；冒烟断言按钮 0→1 + 干净退出。
 >
 > **工程发现/偏差（实现记录）**：
 > - **单遍 RenderFlex，非 Measure/Layout 两遍**（design.md §6.2 的两遍在交互/动画场景
@@ -208,6 +210,33 @@
 > - **demo 加 DPI 读数**：底部 Text 绑 State，后台 goroutine 每秒经 `RunOnUI` 读
 >   `r.DPI()`（UI 线程纪律），变化时跨线程 Set → re-render 自动 marshal（Phase 2
 >   marshalling dogfood）。
+>
+> **3.6/3.7 工程发现（实现记录）**：
+> - **真实容器的局部坐标空间**：ScrollBox 是第二个"真实容器"（有原生句柄）后，透明容器
+>   链"窗体绝对坐标"假设被打破。坐标规则：真实容器（Window/ScrollBox）子树坐标相对自身
+>   客户区（局部，原生 `SetBounds` 相对父）；透明容器（Column/Row/Expanded/Flexible，
+>   diff 不建句柄、子挂祖父）子树为窗体绝对坐标。`setPos` 只定位真实容器自身 Bounds
+>   （不平移子树），`offsetSubtree` 在真实容器边界停止下钻。`layoutScrollBox` 内容用
+>   `Point{}` 局部原点布局。
+> - **滚动语义（SingleChildScrollView）**：单子内容用 `{交叉轴 0..crossMax, 滚动轴(高)
+>   unbounded}` 约束测量 → 内容总高；自身 = viewport = `c.Constrain(内容)`：内容超高被
+>   钳制出现原生滚动条、内容偏矮收缩到内容（自适应）。滚动轴溢出不记溢出诊断（滚动是
+>   目的），交叉轴溢出记。已知限制：滚动内容内 `Expanded` 在 unbounded 主轴下被压 0
+>   （Flutter 同需 IntrinsicHeight）—— demo 滚动内容只用非 flex 行。
+> - **TScrollBox 配置**：`NewScrollBox(form)` + `SetAutoScroll(true)`（LCL 按子包围盒
+>   自动算滚动范围、滚动条自动出现）+ `SetDoubleBuffered(true)`（防闪烁）。无
+>   OnScrollViewChanged 事件（滚动条位置回写需轮询/钩 WM_VSCROLL，MVP 不做）。
+>   `WM_SETREDRAW` 批量防闪烁留 Phase 5 虚拟化。
+> - **NodeDiag 的 Frame 时机**：`record` 在布局递归内执行，早于父容器 `setPos` 平移子树，
+>   故 `NodeDiag.Frame` 留空、由 `finalize(root)` 在整棵布局完成后后序回填（与 record
+>   同序），与 diff 应用的一致 Bounds。
+> - **关机竞态（0xC0000005，ScrollBox+DPI goroutine 触发）**：后台 goroutine 的
+>   `lcl.RunOnMainThreadSync` 与窗体 teardown 竞争，在 `Application.Run()` 内间歇崩溃
+>   （纯 LCL 最小复现不崩、FluxVCL 集成层崩、加探针即消失 → heisenbug 竞态；50ms tick
+>   压力下必现、修复后 8/8 干净）。修复（纵深防御）：`Renderer.RunOnUI` 在窗体
+>   `OnClose` 置 `closed` 门后直接丢弃（不再产生任何 DLL sync 调用）；
+>   `emitResize` 同门控；demo 用 `r.OnClose` 关闭 `done` 通道停止后台轮询 goroutine。
+>   教训：LCL 对象只在主线程访问是必要不充分 —— 关机期间连"主线程同步调用"本身都要避免。
 
 | # | 子任务 | 要点 / 参考 | 状态 |
 |---|---|---|---|
@@ -216,12 +245,12 @@
 | 3.3 | Flex 算法 | RenderFlex 精确实现：非 flex 主轴 unbounded、freeSpace/flex 分配、Expanded=tight/Flexible=loose、主轴对齐分布、只增不缩+溢出诊断。 | ✅ 完成 |
 | 3.4 | 定位应用 | `SetBounds` 写 frame；框架控件 `Align=alNone`（D5）；逃逸口 Align 还原。 | ✅ 完成（Bounds 写 Props，diff 应用；逃逸口 Align 还原待 3.5 校量） |
 | 3.5 | **DPI** | PerMonitorV2 manifest（已就位）；DIP→像素换算（`render.DIPToPX/PXToDIP`）；`WM_DPICHANGED` 钩子（先 `InheritedWndProc` 放行再清缓存 + 全量 re-layout）；字体策略：不调 `ScaleForPPI`、不改 `Application.Scaled`（测量归一化自洽）。 | ✅ 完成 |
-| 3.6 | 滚动容器 | 滚动轴 unbounded 约束；TScrollBox 原生滚动 + `WM_SETREDRAW` 防闪烁。 | ⏳ 下一轮 |
-| 3.7 | 布局调试 | inspector 预留：节点 constraints/size/frame/flex 因子、溢出提示。 | ⏳ 下一轮（溢出诊断 `App.LastLayoutDiags` 已落地） |
+| 3.6 | 滚动容器 | 滚动轴 unbounded 约束；TScrollBox 原生滚动 + DoubleBuffered 防闪烁（`WM_SETREDRAW` 留 Phase 5 虚拟化）。 | ✅ 完成 |
+| 3.7 | 布局调试 | inspector 预留：节点 constraints/size/frame/flex 因子、溢出提示。 | ✅ 完成（`App.Inspect()` 全节点 + `App.LastLayoutDiags` 溢出） |
 
-**交付物**：表单布局、可伸缩面板、高分屏 demo。
-**验收**：Row/Column 比例 flex 正确；改变窗口尺寸布局即时更新且无闪烁；125%/150% 缩放文字不糊（3.5 完成换算与钩子，冒烟回归通过；125%/150% 观感待手动验证，demo 底部有 DPI 读数）。
-**风险**：测量与真实渲染尺寸不一致（字体匹配、主题 padding）—— 用"隐藏实现一次性测量+缓存"校准。
+**交付物**：表单布局、可伸缩面板、滚动列表、高分屏 demo。
+**验收**：Row/Column 比例 flex 正确；改变窗口尺寸布局即时更新且无闪烁；125%/150% 缩放文字不糊（3.5 完成换算与钩子，冒烟回归通过；125%/150% 观感待手动验证，demo 底部有 DPI 读数）。滚动列表可拖滚动条、内容超高滚动、resize 后滚动范围即时更新、干净退出。
+**风险**：测量与真实渲染尺寸不一致（字体匹配、主题 padding）—— 用"隐藏实现一次性测量+缓存"校准。TScrollBox 原生滚动无法 headless 验证 —— 冒烟回归 + 手动验证兜底。
 
 ---
 

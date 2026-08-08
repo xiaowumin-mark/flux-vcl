@@ -15,8 +15,8 @@ import "github.com/xiaowumin-mark/flux-vcl/internal/render"
 // layoutGap 是 flex 容器子控件间的基础间距（DIP）。
 const layoutGap = 4
 
-// LayoutDiag 是一次 render 布局的溢出诊断（Phase 3.7 inspector 的前身，
-// 本轮供测试断言）。OverflowW/H 为容器尺寸超出约束的量（0 表示该轴未溢出）。
+// LayoutDiag 是一次 render 布局的溢出诊断（Phase 3.7 inspector 数据源之一）。
+// OverflowW/H 为容器尺寸超出约束的量（0 表示该轴未溢出）。
 type LayoutDiag struct {
 	Type      string
 	Key       string
@@ -24,9 +24,21 @@ type LayoutDiag struct {
 	OverflowH int
 }
 
+// NodeDiag 是布局引擎对每个节点的诊断（Phase 3.7 inspector 数据源）：
+// 节点收到的 Constraints、布局出的 Size、最终 Frame（Props["Bounds"]，DIP）
+// 与 flex 因子（Expanded/Flexible 才 >0）。与 LayoutDiag（仅溢出）互补。
+type NodeDiag struct {
+	Type, Key   string
+	Constraints BoxConstraints
+	Size        Size
+	Frame       render.Rect
+	Flex        int
+}
+
 // layoutDiags 收集布局诊断（App 每次 render 新建，布局后读取）。
 type layoutDiags struct {
-	list []LayoutDiag
+	list  []LayoutDiag // 溢出诊断（LastLayoutDiags）
+	nodes []NodeDiag   // 全节点诊断（Inspect）
 }
 
 func (d *layoutDiags) overflow(n *Node, ow, oh int) {
@@ -34,6 +46,41 @@ func (d *layoutDiags) overflow(n *Node, ow, oh int) {
 		return
 	}
 	d.list = append(d.list, LayoutDiag{Type: n.Type, Key: n.Key, OverflowW: ow, OverflowH: oh})
+}
+
+// record 收集一个节点的布局诊断。Frame 留空，由 finalize 在整棵布局完成后
+// 统一填最终值（父容器 setPos 平移子树发生在递归内，record 时点可能早于平移）。
+func (d *layoutDiags) record(n *Node, c BoxConstraints, sz Size) {
+	if d == nil {
+		return
+	}
+	d.nodes = append(d.nodes, NodeDiag{
+		Type: n.Type, Key: n.Key,
+		Constraints: c, Size: sz,
+		Flex: flexFactor(n),
+	})
+}
+
+// finalize 在布局完成后按后序（与 record 同序）回填每个节点的最终 Frame。
+// 后序遍历与 layoutTree 的 record 时机（子先于父）严格一致。
+func (d *layoutDiags) finalize(root *Node) {
+	if d == nil {
+		return
+	}
+	idx := 0
+	var walk func(n *Node)
+	walk = func(n *Node) {
+		for _, c := range n.Children {
+			walk(c)
+		}
+		if idx < len(d.nodes) {
+			if b, ok := n.Props.Get("Bounds"); ok {
+				d.nodes[idx].Frame = b.(render.Rect)
+			}
+			idx++
+		}
+	}
+	walk(root)
 }
 
 // flexKid 是 flex 容器的一个子项（测量/定位工作单元）。
@@ -47,6 +94,7 @@ type flexKid struct {
 // layoutTree 布局一棵子树，返回其在约束 c 下的内容尺寸，并把绝对 frame 写入
 // 每个节点的 Props["Bounds"]。pos 为绝对坐标（窗体客户区坐标系）。
 func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags) Size {
+	var sz Size
 	switch n.Type {
 	case "Window":
 		cw, ch := r.ClientSize()
@@ -56,39 +104,38 @@ func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 		if ch <= 0 {
 			ch = 300
 		}
-		return layoutRoot(n, r, Tight(cw, ch), pos, d)
+		sz = layoutRoot(n, r, Tight(cw, ch), pos, d)
 	case "Row":
-		return layoutFlex(n, r, c, pos, d, true)
+		sz = layoutFlex(n, r, c, pos, d, true)
 	case "Column":
-		return layoutFlex(n, r, c, pos, d, false)
+		sz = layoutFlex(n, r, c, pos, d, false)
 	case "Expanded", "Flexible":
 		// 父容器已按 flex 语义算好约束 c，此处原样传给唯一子（tight/loose 已定）。
-		sz := layoutTree(n.Children[0], r, c, pos, d)
+		sz = layoutTree(n.Children[0], r, c, pos, d)
 		setBounds(n, pos, sz)
-		return sz
 	case "Text":
 		w, h := r.TextExtent(n.Props.String("Text"))
-		sz := leafSize(w, h, n, c)
+		sz = leafSize(w, h, n, c)
 		setBounds(n, pos, sz)
-		return sz
 	case "Button":
 		w, _ := r.TextExtent(n.Props.String("Text"))
 		bw := w + 32 // 左右 padding
 		if bw < 88 {
 			bw = 88
 		}
-		sz := leafSize(bw, 32, n, c)
+		sz = leafSize(bw, 32, n, c)
 		setBounds(n, pos, sz)
-		return sz
 	case "Input":
-		sz := leafSize(180, 28, n, c)
+		sz = leafSize(180, 28, n, c)
 		setBounds(n, pos, sz)
-		return sz
+	case "ScrollBox":
+		sz = layoutScrollBox(n, r, c, pos, d)
 	default: // 未知类型（含第三方控件）：默认尺寸
-		sz := leafSize(100, 32, n, c)
+		sz = leafSize(100, 32, n, c)
 		setBounds(n, pos, sz)
-		return sz
 	}
+	d.record(n, c, sz)
+	return sz
 }
 
 // leafSize 用 Width/Height Opt 覆盖 intrinsic 尺寸后钳制到约束（D5 constrain）。
@@ -107,24 +154,44 @@ func setBounds(n *Node, pos Point, sz Size) {
 	n.Props.Set("Bounds", render.Rect{X: pos.X, Y: pos.Y, W: sz.W, H: sz.H})
 }
 
-// setPos 把节点定位到绝对位置 pos（平移其 Bounds）；透明容器则平移整棵子树
-// （嵌套 flex 时保持子树内部相对结构）。
+// setPos 把节点定位到绝对位置 pos。
+//
+// 透明容器（Column/Row/Expanded/Flexible，diff 不建句柄、子挂祖父）平移整棵子树
+// 保持内部相对结构；叶控件与真实容器（Window/ScrollBox）只定位自身 —— 真实容器
+// 的子树坐标已相对其客户区（局部坐标空间），不能被父级平移破坏。
 func setPos(n *Node, pos Point) {
 	b, ok := n.Props.Get("Bounds")
 	if !ok {
 		return
 	}
 	br := b.(render.Rect)
-	offsetSubtree(n, pos.X-br.X, pos.Y-br.Y)
+	switch n.Type {
+	case "Column", "Row", "Expanded", "Flexible":
+		offsetSubtree(n, pos.X-br.X, pos.Y-br.Y)
+	default:
+		br.X, br.Y = pos.X, pos.Y
+		n.Props.Set("Bounds", br)
+	}
 }
 
-// offsetSubtree 平移节点及其子树的 Bounds（dx/dy）。
+// realContainer 报告类型是否为真实容器（拥有原生句柄）：其子树坐标相对自身
+// 客户区（局部坐标空间），平移子树时在边界停止下钻（diff 层子控件 SetParent 挂
+// 自身，SetBounds 需相对自身）。
+func realContainer(t string) bool {
+	return t == "Window" || t == "ScrollBox"
+}
+
+// offsetSubtree 平移节点及其子树的 Bounds（dx/dy）。遇真实容器边界停止 ——
+// 其子树已是相对该容器的局部坐标，不应随外部坐标平移。
 func offsetSubtree(n *Node, dx, dy int) {
 	if b, ok := n.Props.Get("Bounds"); ok {
 		br := b.(render.Rect)
 		br.X += dx
 		br.Y += dy
 		n.Props.Set("Bounds", br)
+	}
+	if realContainer(n.Type) {
+		return
 	}
 	for _, c := range n.Children {
 		offsetSubtree(c, dx, dy)
@@ -186,6 +253,32 @@ func layoutRoot(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 		ow = crossExtent - crossMax
 	}
 	d.overflow(n, ow, oh)
+	return sz
+}
+
+// layoutScrollBox 布局垂直滚动容器（Phase 3.6，SingleChildScrollView 语义）。
+//
+// 内容（单子）用 {交叉轴 0..crossMax, 滚动轴(高) unbounded} 约束测量 → 内容总高
+// contentH；自身 = viewport = c.Constrain(contentW, contentH)：内容超高被约束钳制
+// （原生 TScrollBox 滚动条出现）、内容偏矮则收缩到内容（自适应）。内容在局部坐标
+// 空间布局（pos=(0,0)，相对 ScrollBox 客户区原点 —— 原生 SetBounds 相对父）；父级
+// 定位 ScrollBox 自身只平移其 Bounds（setPos 真实容器分支），内容不被破坏。
+// 滚动轴溢出不记诊断（滚动是目的），交叉轴溢出记。
+func layoutScrollBox(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags) Size {
+	_, crossMax := axisMax(c, false)
+	contentW, contentH := 0, 0
+	if len(n.Children) > 0 {
+		cc := BoxConstraints{MinW: 0, MaxW: crossMax, MinH: 0, MaxH: unbounded}
+		cs := layoutTree(n.Children[0], r, cc, Point{}, d) // 局部坐标：相对客户区原点
+		contentW, contentH = cs.W, cs.H
+	}
+	sz := c.Constrain(contentW, contentH)
+	setBounds(n, pos, sz)
+	ow := 0
+	if crossMax >= 0 && contentW > crossMax {
+		ow = contentW - crossMax
+	}
+	d.overflow(n, ow, 0) // 滚动轴（垂直）永不记溢出
 	return sz
 }
 

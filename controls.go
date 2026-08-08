@@ -39,6 +39,16 @@ func Column(args ...any) Widget { return containerArgs("Column", args) }
 // 如 MainAxis/CrossAxis 对齐）。例如 Row(Expanded(Text("a")), Text("b")).
 func Row(args ...any) Widget { return containerArgs("Row", args) }
 
+// ScrollBox 垂直滚动容器（对应绑定层 TScrollBox，Phase 3.6）。
+//
+// SingleChildScrollView 语义：单子内容（通常为 Column），内容超高时由原生
+// TScrollBox 滚动条滚动；自身尺寸 = viewport（内容超高→钳制到约束出现滚动条，
+// 内容偏矮→收缩到内容）。滚动内容在滚动轴（垂直）用 unbounded 约束测量；
+// 已知限制：滚动内容内的 Expanded 会被压成 0（Flutter 同需 IntrinsicHeight）。
+//
+//	ScrollBox(Column(Text("a"), Text("b")))
+func ScrollBox(child Widget) Widget { return containerArgs("ScrollBox", []any{child}) }
+
 // Expanded 把子控件在主轴上强制填满 flex 容器分配的剩余空间（tight，Phase 3.3）。
 // 默认 flex=1；多个 flex 子按因子比例分配 freeSpace。Expanded(child, 2) 占双份。
 func Expanded(child Widget, flex ...int) Widget { return flexNode("Expanded", child, flex) }

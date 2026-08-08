@@ -4,7 +4,10 @@
 //  1. flex 分配：Expanded 拿满剩余空间、flex 因子 1:2 按比例分割（左 1/3、右 2/3）；
 //  2. 主轴/交叉轴对齐：CrossAxisStretch 让面板内容撑满交叉轴；
 //  3. resize 即时更新：拖动窗口边框 → 窗体 resize 事件 → invalidate → re-render，
-//     左右面板按新客户区尺寸即时重分割（零控件重建，diff 只 patch Bounds）。
+//     左右面板按新客户区尺寸即时重分割（零控件重建，diff 只 patch Bounds）；
+//  4. 滚动容器（Phase 3.6）：左面板 Expanded(ScrollBox(20 行)) —— Expanded 给
+//     ScrollBox 有界 viewport，内容超高时原生 TScrollBox 滚动条滚动（SingleChildScroll
+//     语义，滚动轴 unbounded 测量）；resize 后滚动范围随新 viewport 即时更新。
 //
 // 工程约束（Phase 0 冒烟结论）：LCL 的 TLabel 无独立 HWND，Win32 冒烟无法读
 // label 文本；因此顶部 counter 按钮文本（TButton 有 HWND）作为"点击生效"信号
@@ -27,6 +30,17 @@ import (
 	flux "github.com/xiaowumin-mark/flux-vcl"
 	"github.com/xiaowumin-mark/flux-vcl/internal/native"
 )
+
+// scrollItems 左面板滚动列表内容：20 行文本（Phase 3.6 滚动容器 demo）。
+// 行高 20 + 间距 4 → 内容总高 476，超 viewport 触发原生滚动；行 key 稳定
+// （si0..si19）保证 diff 只 patch Bounds 不重建。
+func scrollItems() flux.Widget {
+	var kids []any
+	for i := range 20 {
+		kids = append(kids, flux.Text(fmt.Sprintf("scroll item %d", i), flux.Key(fmt.Sprintf("si%d", i))))
+	}
+	return flux.Column(kids...)
+}
 
 func main() {
 	// DLL 由构建脚本复制到 exe 旁；显式指定绝对路径（E2 验证项）
@@ -75,6 +89,9 @@ func main() {
 						flux.Text("Left 1/3", flux.Key("lt")),
 						flux.Input(flux.Bind(leftName), flux.Key("li")),
 						flux.Text(flux.Bind(leftName), flux.Key("echo")),
+						// Phase 3.6 滚动列表：Expanded 给 ScrollBox 有界高度，
+						// 内容 20 行超高 → 原生滚动条（滚动轴 unbounded 测量）。
+						flux.Expanded(flux.ScrollBox(scrollItems())),
 					), 1),
 					flux.Expanded(flux.Column(
 						flux.Key("right"),
@@ -94,14 +111,25 @@ func main() {
 	// DPI 读数：定时器在后台 goroutine 读 r.DPI()，变化时跨线程 Set State →
 	// re-render 自动 marshal 到 UI 线程（Phase 2 marshalling）。读操作经
 	// r.RunOnUI 包住（UI 线程纪律：LCL 对象只在主线程访问）。
+	//
+	// 关机纪律（Phase 3.6）：窗体关闭时 r.OnClose 关闭 done 通道停止轮询 ——
+	// 后台 goroutine 的 RunOnMainThreadSync 与窗体 teardown 竞争会触发间歇性
+	// 0xC0000005（框架 RunOnUI 的 closed 门是兜底，双保险）。
+	done := make(chan struct{})
+	r.OnClose(func() { close(done) })
 	go func() {
 		var last int32
-		for range time.Tick(time.Second) {
-			var d int
-			r.RunOnUI(func() { d = r.DPI() })
-			if int32(d) != last {
-				last = int32(d)
-				dpiLabel.Set(fmt.Sprintf("DPI: %d", d))
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(time.Second):
+				var d int
+				r.RunOnUI(func() { d = r.DPI() })
+				if int32(d) != last {
+					last = int32(d)
+					dpiLabel.Set(fmt.Sprintf("DPI: %d", d))
+				}
 			}
 		}
 	}()

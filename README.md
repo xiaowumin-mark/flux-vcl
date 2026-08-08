@@ -67,8 +67,8 @@ State 系统（Phase 2）、布局引擎（Phase 3）、事件/生命周期（Ph
 | 2.5 线程 marshalling（`RunOnUI` + pending 合并） | ✅ 5 goroutine 并发 Set `-race` 通过 |
 | 2.6 Key 系统（D3 稳定 key，Phase 1 已落地） | ✅ |
 
-**Phase 3（布局引擎，核心）✅ 完成（3.1–3.5；3.6 滚动 / 3.7 inspector 下一轮）**：
-BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出诊断）+ GDI 文本测量 + resize 即时更新 + DPI 感知（DIP↔像素换算、WM_DPICHANGED 全量重排）。
+**Phase 3（布局引擎，核心）✅ 完成**：
+BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出诊断）+ GDI 文本测量 + resize 即时更新 + DPI 感知（DIP↔像素换算、WM_DPICHANGED 全量重排）+ 滚动容器（TScrollBox 原生滚动）+ inspector 数据源（节点 constraints/size/frame/flex）。
 
 | 子任务 | 状态 |
 |---|---|
@@ -77,6 +77,8 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 | 3.3 Flex 算法（freeSpace 分配、Expanded=Tight/Flexible=Loose、只增不缩+溢出诊断） | ✅ `flux/layout.go` + 11 项测试 |
 | 3.4 定位应用 + Window resize 即时更新（零控件重建） | ✅ `App.LastLayoutDiags` 诊断钩子就绪 |
 | 3.5 DPI（DIP↔像素换算、WM_DPICHANGED 钩子、测量归一化） | ✅ `internal/render/dip.go` + native 边界换算；demo 底部 DPI 读数 |
+| 3.6 滚动容器（SingleChildScroll 语义、滚动轴 unbounded 测量、原生滚动条） | ✅ `flux.ScrollBox` + `layoutScrollBox`；demo 左面板滚动列表 |
+| 3.7 布局调试（全节点 constraints/size/frame/flex 因子） | ✅ `App.Inspect()` + `NodeDiag` |
 
 ## 快速开始
 
@@ -134,7 +136,8 @@ flux-vcl/
 ├── flux.go                # 框架主包：声明式 API（构造器/Opt/App/逃逸口）
 ├── state.go               # State[T] / Bind / Binding（响应式状态 + 数据绑定，Phase 2）
 ├── box.go                 # 布局协议：BoxConstraints/Size/Point/对齐枚举（Phase 3.1）
-├── layout.go              # 单遍 RenderFlex 布局引擎 + 溢出诊断（Phase 3.3/3.4）
+├── layout.go              # 单遍 RenderFlex 布局 + ScrollBox 滚动 + NodeDiag 诊断（Phase 3）
+├── controls.go            # 控件构造器：Window/Column/Row/ScrollBox/Text/Button/Input
 ├── internal/
 │   ├── widget/            # Widget 接口 + Node + Props（有序属性集，D2 diff）
 │   ├── diff/              # Element 树 + diff/reconciliation 引擎（Phase 1.4）
@@ -143,7 +146,7 @@ flux-vcl/
 ├── examples/
 │   ├── basic/             # State 驱动冒烟应用（counter + two-way 绑定）
 │   │   └── winres/        # go-winres 资源配置（manifest/icon/version）
-│   └── layout/            # 布局引擎 demo（flex 分栏 + resize 即时重分割）
+│   └── layout/            # 布局引擎 demo（flex 分栏 + resize 重分割 + 滚动列表）
 │       └── winres/
 ├── scripts/
 │   ├── build.ps1          # 构建脚手架

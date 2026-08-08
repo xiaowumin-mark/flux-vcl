@@ -20,6 +20,7 @@ package native
 
 import (
 	"fmt"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/energye/lcl/api"
@@ -70,6 +71,8 @@ type Renderer struct {
 	dpi          int32               // 当前显示器 DPI（0=未查询，invalidateDPI 清零强制重查）
 	canvasDpi    int32               // 测量 bitmap DC 的 DPI（进程内固定，缓存一次；0=未查询）
 	resizeFn     func(w, h int)     // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
+	closeFn      func()             // OnClose 回调（demo 停止后台轮询）
+	closed       atomic.Bool        // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
 }
 
 // NewRenderer 创建 LCL 渲染器并注册主窗体（须在 Init 之后调用）。
@@ -101,6 +104,14 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 		c = lcl.NewLabel(r.form)
 	case "Input":
 		c = lcl.NewEdit(r.form)
+	case "ScrollBox":
+		// 垂直滚动容器（Phase 3.6）：AutoScroll=true 让 LCL 自动按子控件包围盒
+		// 计算滚动范围、滚动条自动出现；DoubleBuffered 防闪烁（WM_SETREDRAW 批量
+		// 防闪烁留 Phase 5 虚拟化）。
+		sb := lcl.NewScrollBox(r.form)
+		sb.SetAutoScroll(true)
+		sb.SetDoubleBuffered(true)
+		c = sb
 	default:
 		panic(fmt.Sprintf("native: 未知控件类型 %q", widgetType))
 	}
@@ -214,8 +225,9 @@ func (r *Renderer) OnResize(fn func(w, h int)) {
 }
 
 // emitResize 统一触发 resize 回调：读当前 ClientSize（DIP）→ 回调。
+// 窗体进入关闭流程后丢弃（teardown 期间 ClientSize 可能已失效）。
 func (r *Renderer) emitResize() {
-	if r.resizeFn == nil {
+	if r.closed.Load() || r.resizeFn == nil {
 		return
 	}
 	w, h := r.ClientSize()
@@ -249,12 +261,32 @@ func (r *Renderer) ApplyNative(h render.Handle, fn func(obj any)) {
 // RunOnUI 把 fn marshal 到 UI 线程执行（D4 marshalling）。
 // 已在主线程（事件回调内）则直接执行；否则经 lcl.RunOnMainThreadSync 阻塞
 // 等待主线程消费 —— State 从任意 goroutine 触发 re-render 的规范路径。
+//
+// 关机竞态防护（Phase 3.6）：窗体进入关闭流程后（OnClose 置 closed），
+// 直接丢弃 —— 后台 goroutine 的 RunOnMainThreadSync 与窗体 teardown 竞争会在
+// Application.Run() 内触发间歇性 0xC0000005（能量层复现：goroutine+ScrollBox）。
+// 关闭后不再产生任何对 DLL 的 sync 调用，杜绝竞态窗口。
 func (r *Renderer) RunOnUI(fn func()) {
+	if r.closed.Load() {
+		return
+	}
 	if api.CurrentThreadId() == api.MainThreadId() {
 		fn()
 		return
 	}
 	lcl.RunOnMainThreadSync(fn)
+}
+
+// OnClose 注册窗体关闭回调，并置 closed 门（此后 RunOnUI/invalidate 一律丢弃）。
+// fn 在窗体销毁前于主线程触发 —— demo 用它停止后台轮询 goroutine，双保险。
+func (r *Renderer) OnClose(fn func()) {
+	r.closeFn = fn
+	r.formRef.SetOnClose(func(_ lcl.IObject, _ *types.TCloseAction) {
+		r.closed.Store(true)
+		if fn != nil {
+			fn()
+		}
+	})
 }
 
 func (r *Renderer) HandleAllocated(h render.Handle) bool {

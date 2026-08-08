@@ -25,6 +25,7 @@ type App struct {
 	renderMu sync.Mutex // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
 	pending  bool       // 脏标志：有待处理的失效（D4 合并）
 	lastDiags []LayoutDiag // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
+	lastInspect []NodeDiag // 最近一次 render 的全节点布局诊断（Phase 3.7 inspector）
 }
 
 // NewApp 创建 App。r 为绑定层 renderer（默认 LCL 适配见 internal/native）。
@@ -72,8 +73,10 @@ func (a *App) renderWidget(w Widget) {
 	cw, ch := a.r.ClientSize()
 	d := &layoutDiags{}
 	layoutTree(root, a.r, Tight(cw, ch), Point{}, d)
+	d.finalize(root) // 布局完成后后序回填 Frame（record 时点早于父 setPos 平移）
 	a.mu.Lock()
 	a.lastDiags = d.list
+	a.lastInspect = d.nodes
 	a.mu.Unlock()
 	a.collectBindings(root)
 	a.rc.Render(root)
@@ -85,6 +88,14 @@ func (a *App) LastLayoutDiags() []LayoutDiag {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]LayoutDiag(nil), a.lastDiags...)
+}
+
+// Inspect 返回最近一次 render 的全节点布局诊断（constraints/size/frame/flex），
+// 与 LastLayoutDiags（溢出）互补 —— Phase 3.7 inspector 数据源。无则空切片。
+func (a *App) Inspect() []NodeDiag {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]NodeDiag(nil), a.lastInspect...)
 }
 
 // invalidate 请求一次 re-render（State.Set 调用）。
