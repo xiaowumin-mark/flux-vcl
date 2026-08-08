@@ -51,9 +51,9 @@ func main() {
 	r := native.NewRenderer()
 	app := flux.NewApp(r)
 
-	count := flux.NewState(0)         // counter（smoke 断言按钮文本变数字）
-	themeDark := flux.NewState(false) // Light/Dark 主题（5.2）
-	load := flux.NewState("idle")     // Async 加载状态（5.3）
+	count := flux.NewState(0)          // counter（smoke 断言按钮文本变数字）
+	themeName := flux.NewState("light") // 主题名 light/dark（5.2）；Bind 到 chip 文字以订阅 re-render
+	load := flux.NewState("idle")      // Async 加载状态（5.3）
 
 	// 当前动画的停止函数：连续点击时先停上一段（每帧 SetBounds 是幂等的覆盖，
 	// 但停止可省 60fps pump 的 CPU）。
@@ -123,14 +123,8 @@ func main() {
 
 	app.Mount(func() flux.Widget {
 		th := flux.LightTheme
-		if themeDark.Get() {
+		if themeName.Get() == "dark" {
 			th = flux.DarkTheme
-		}
-		themeName := "light"
-		toggleHint := "点击切暗色"
-		if themeDark.Get() {
-			themeName = "dark"
-			toggleHint = "点击切亮色"
 		}
 
 		return flux.Window(
@@ -149,14 +143,20 @@ func main() {
 					}),
 				),
 
-				// 主题切换（5.2）：可点击 Text chip（TLabel 无 HWND，非 Button，不扰冒烟）
+				// 主题切换（5.2）：可点击 Text chip（TLabel 无 HWND，非 Button，不扰冒烟）。
+				// Bind(themeName) 把 State 订阅到 App —— Set 才触发全量 re-diff（同 count/load 路径）。
 				flux.Row(
-					flux.Text(themeName+" ▸ "+toggleHint, flux.Key("theme-chip"),
+					flux.Text(flux.Bind(themeName), flux.Key("theme-chip"),
 						flux.FontColor(th.Accent),
 						flux.OnClick(func(e flux.Event) {
-							themeDark.Set(!themeDark.Get()) // State 变 → 全量 re-diff
+							if themeName.Get() == "light" {
+								themeName.Set("dark") // State 变 → 全量 re-diff（仅 patch 颜色属性）
+							} else {
+								themeName.Set("light")
+							}
 						}),
 					),
+					flux.Text(" ▸ 点击切换主题", flux.FontColor(th.Text)),
 					flux.Expanded(flux.Text("", flux.Width(1))),
 				),
 
