@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/energye/lcl/lcl"
 
@@ -48,8 +49,9 @@ func main() {
 	app := flux.NewApp(r)
 
 	// State 原语：Set 可跨 goroutine，re-render 自动 marshal 到 UI 线程。
-	count := flux.NewState(0)       // 顶部 counter（冒烟信号：点击后按钮文本为数字）
+	count := flux.NewState(0)        // 顶部 counter（冒烟信号：点击后按钮文本为数字）
 	leftName := flux.NewState("左面板") // 左面板输入框（two-way → 文本回显）
+	dpiLabel := flux.NewState(fmt.Sprintf("DPI: %d", r.DPI())) // 底部 DPI 读数（Phase 3.5）
 
 	app.Mount(func() flux.Widget {
 		return flux.Window(
@@ -82,11 +84,27 @@ func main() {
 					), 2),
 				)),
 
-				// 底栏
+				// 底栏：固定文案 + DPI 读数（Phase 3.5；跨 goroutine State.Set dogfood）
 				flux.Text("Bottom bar", flux.Key("bottom")),
+				flux.Text(flux.Bind(dpiLabel), flux.Key("dpi")),
 			),
 		)
 	})
+
+	// DPI 读数：定时器在后台 goroutine 读 r.DPI()，变化时跨线程 Set State →
+	// re-render 自动 marshal 到 UI 线程（Phase 2 marshalling）。读操作经
+	// r.RunOnUI 包住（UI 线程纪律：LCL 对象只在主线程访问）。
+	go func() {
+		var last int32
+		for range time.Tick(time.Second) {
+			var d int
+			r.RunOnUI(func() { d = r.DPI() })
+			if int32(d) != last {
+				last = int32(d)
+				dpiLabel.Set(fmt.Sprintf("DPI: %d", d))
+			}
+		}
+	}()
 
 	lcl.Application.Run()
 }

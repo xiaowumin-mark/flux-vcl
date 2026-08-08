@@ -166,7 +166,7 @@
 
 ## Phase 3 — 布局引擎 · 目标：现代布局
 
-> **进展（2026-08-09）：布局核心完成（3.1–3.4）；3.5 DPI / 3.6 滚动 / 3.7 inspector 拆至下一轮。**
+> **进展（2026-08-09）：布局核心完成（3.1–3.4）；3.5 DPI 完成；3.6 滚动 / 3.7 inspector 拆至下一轮。**
 > 落地：`box.go`（BoxConstraints/Size/Point/对齐枚举，全 DIP）、`layout.go` 单遍 RenderFlex
 > 重写（Expanded=Tight/Flexible=Loose、freeSpace 分配、主轴 spaceBetween/Around/Evenly、
 > 交叉轴 Start/Center/End/Stretch、只增不缩 + 溢出诊断）、`TextExtent` GDI 测量替换占位
@@ -192,6 +192,22 @@
 >   搬走 / 把窗体边框收缩。
 > - **溢出诊断钩子**：`layoutDiags` 收集 `App.LastLayoutDiags()`（Type/Key/OverflowW/H），
 >   本轮供测试断言，3.7 inspector 在其上做溢出提示 UI。
+> - **DPI 换算收在 native 边界，接口保持 DIP**（`internal/render/dip.go` 纯函数，
+>   `DIPToPX`/`PXToDIP` 四舍五入、`math.Round` 远离零语义，与 Win32 MulDiv 一致）：布局
+>   引擎与 Renderer 接口（ClientSize/TextExtent/SetBounds）零改动，mock/既有测试全绿。
+> - **DPI 源 fallback 链**：`GetDpiForWindow`（user32 syscall，perMonitorV2 下返回窗口
+>   所在显示器真实 DPI）→ `Monitor().PixelsPerInch()` → 96；结果缓存，`WM_DPICHANGED`
+>   时 `invalidateDPI` 清零强制重查。
+> - **WM_DPICHANGED 钩子**：`SetOnWndProc` 中先 `InheritedWndProc(msg)` 放行 LCL 默认
+>   （窗体按建议矩形 resize、字体随 widgetset 缩放；InheritedWndProc 走 Pascal 父类，
+>   不会递归），再清 DPI + 文本测量缓存并 `emitResize` 触发全量 re-layout。
+>   字体策略：不调 `ScaleForPPI`、不改 `Application.Scaled` —— 需手动 125%/150% 验证。
+> - **TextExtent 显示器无关**：bitmap DC 的 DPI（`GetDeviceCaps(LOGPIXELSX=88)`）进程内
+>   固定、缓存一次；测量到的物理像素经 `PXToDIP` 归一化为 DIP，`measureCache` 无需随
+>   显示器 DPI 失效（仅字体随 DPI 变化时清空，钩子统一处理）。
+> - **demo 加 DPI 读数**：底部 Text 绑 State，后台 goroutine 每秒经 `RunOnUI` 读
+>   `r.DPI()`（UI 线程纪律），变化时跨线程 Set → re-render 自动 marshal（Phase 2
+>   marshalling dogfood）。
 
 | # | 子任务 | 要点 / 参考 | 状态 |
 |---|---|---|---|
@@ -199,12 +215,12 @@
 | 3.2 | **intrinsic-size 函数** | `Size Measure(font, text, dpi, constraints)`；GDI 文本测量（`TCanvas.TextWidth/TextHeight/TextExtent`）；主题 API（`BCM_GETIDEALSIZE`/`GetThemePartSize`）一次实现测量+缓存；缓存失效（文本/字体/DPI 变化）。 | ✅ 完成（GDI 测量+缓存；主题 API 待 3.5） |
 | 3.3 | Flex 算法 | RenderFlex 精确实现：非 flex 主轴 unbounded、freeSpace/flex 分配、Expanded=tight/Flexible=loose、主轴对齐分布、只增不缩+溢出诊断。 | ✅ 完成 |
 | 3.4 | 定位应用 | `SetBounds` 写 frame；框架控件 `Align=alNone`（D5）；逃逸口 Align 还原。 | ✅ 完成（Bounds 写 Props，diff 应用；逃逸口 Align 还原待 3.5 校量） |
-| 3.5 | **DPI** | PerMonitorV2 manifest；DIP→像素 `MulDiv`；`WM_DPICHANGED` 全量 re-layout；`TForm.Scaled=false`。 | ⏳ 下一轮 |
+| 3.5 | **DPI** | PerMonitorV2 manifest（已就位）；DIP→像素换算（`render.DIPToPX/PXToDIP`）；`WM_DPICHANGED` 钩子（先 `InheritedWndProc` 放行再清缓存 + 全量 re-layout）；字体策略：不调 `ScaleForPPI`、不改 `Application.Scaled`（测量归一化自洽）。 | ✅ 完成 |
 | 3.6 | 滚动容器 | 滚动轴 unbounded 约束；TScrollBox 原生滚动 + `WM_SETREDRAW` 防闪烁。 | ⏳ 下一轮 |
 | 3.7 | 布局调试 | inspector 预留：节点 constraints/size/frame/flex 因子、溢出提示。 | ⏳ 下一轮（溢出诊断 `App.LastLayoutDiags` 已落地） |
 
 **交付物**：表单布局、可伸缩面板、高分屏 demo。
-**验收**：Row/Column 比例 flex 正确；改变窗口尺寸布局即时更新且无闪烁；125%/150% 缩放文字不糊。
+**验收**：Row/Column 比例 flex 正确；改变窗口尺寸布局即时更新且无闪烁；125%/150% 缩放文字不糊（3.5 完成换算与钩子，冒烟回归通过；125%/150% 观感待手动验证，demo 底部有 DPI 读数）。
 **风险**：测量与真实渲染尺寸不一致（字体匹配、主题 padding）—— 用"隐藏实现一次性测量+缓存"校准。
 
 ---
