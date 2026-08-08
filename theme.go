@@ -23,11 +23,15 @@ func RGB(r, g, b uint8) ColorValue { return render.RGB(r, g, b) }
 
 // Theme 是主题调色板。Primary/Surface/Text/Accent 供构建函数取用，
 // Background 通常传给 Window 的 Color Opt，Primary 给按钮，Text 给文字。
+//
+// win32 后端渲染限制（探针实测）：子控件背景色普遍不渲染 —— TButton 由 OS
+// 主题绘制，其 Color/FontColor 均为空操作；TLabel 的背景 Color 同样不显示。
+// 主题切换的可见信号实际来自窗体背景（Window Color）与文字 FontColor。
 type Theme struct {
-	Primary    ColorValue // 主色（按钮/强调）
-	Background ColorValue // 窗体背景
-	Surface    ColorValue // 卡片/面板表面
-	Text       ColorValue // 主要文字
+	Primary    ColorValue // 主色（按钮/强调；win32 TButton 背景色不渲染）
+	Background ColorValue // 窗体背景（win32 下渲染 ✓）
+	Surface    ColorValue // 卡片/面板表面（win32 TLabel 背景不渲染）
+	Text       ColorValue // 主要文字（win32 下渲染 ✓）
 	Accent     ColorValue // 点缀色（hover/选中）
 	FontSize   int        // 文档字段：字体大小（Phase 5 未接入 native 字体缩放）
 	Radius     int        // 文档字段：圆角（原生控件无统一圆角 API）

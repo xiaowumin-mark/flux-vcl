@@ -93,6 +93,8 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 
 **Phase 5（高级特性）✅ 完成**：动画（Curve/Tween/`AnimationController` 状态机 + `App.Animate` 主线程 16ms pump + `App.SetBounds` 逃逸口直接落地，绕开整树 re-diff）+ 主题（`Theme` 调色板 + `Color`/`FontColor` Opt，切换 = 全量 re-diff 只 patch 变化颜色）+ Async（后台 goroutine + `RunOnUI` marshalling）+ 组件化（`Component(build, Key)` 透明分组，身份靠外部 Key 稳定）。
 
+> **已知限制（win32 后端，探针实测）**：TButton 由 OS 主题绘制，`Color`/`FontColor` 均不渲染；TLabel 背景 `Color` 也不渲染。主题切换的可见信号实际来自窗体背景（`Window(Color(...))`）与文字 `FontColor`。为让按钮支持主题色，需 owner-draw 改造（见 [design.md](docs/design.md)）。
+
 | 子任务 | 状态 |
 |---|---|
 | 5.1 动画（Curve/EaseIn/Out/InOut/ElasticOut、Tween、Controller.Step、App.Animate pump、App.SetBounds D2 逃逸口） | ✅ `flux/animation.go` + `App.Animate/SetBounds` |

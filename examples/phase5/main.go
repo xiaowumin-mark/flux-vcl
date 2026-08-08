@@ -6,6 +6,9 @@
 //     应用几何（D2 逃逸口），不触发整树 re-diff —— 高频属性绕开 diff 落地。
 //  2. 5.2 Theme：右上角"主题"文字可点击，Light/Dark 切换 = State 变 → 全量
 //     re-diff → diff 引擎只 patch 变化的颜色属性（未变子树零 mutation）。
+//     注意（win32 后端实测）：TButton 由 OS 主题绘制，Color/FontColor 不渲染；
+//     TLabel 的背景 Color 也不渲染（仅窗体背景 + 文字 FontColor 生效）。故主题的
+//     可见切换体现在窗体背景、文字色与 chip 上，按钮保持系统默认外观。
 //  3. 5.3 Async：点击按钮后台 goroutine 模拟 500ms 加载，完成后经
 //     renderer.RunOnUI marshal 回 UI 线程更新状态文字（D4 marshalling）。
 //  4. 5.4 Component：状态卡 = Component(build, Key("card")) 透明分组，身份靠
@@ -133,9 +136,11 @@ func main() {
 			flux.Column(
 				flux.Text("动画 / 主题 / Async / 组件 —— 点击下方按钮", flux.FontColor(th.Text)),
 
-				// 唯一按钮（smoke 约束）：点击 = 计数（0→1）+ 滑动动画 + 异步加载
+				// 唯一按钮（smoke 约束）：点击 = 计数（0→1）+ 滑动动画 + 异步加载。
+				// 注：win32 后端下 LCL TButton 由 OS 主题绘制，Color/FontColor 均不渲染
+				// （探针实测内部状态更新、屏幕像素不变）。故按钮不设背景/文字色 —— 主题
+				// 切换的可见信号来自窗体背景、文字 FontColor 与主题 chip。
 				flux.Button(flux.Bind(count), flux.Key("btn"),
-					flux.Color(th.Primary), flux.FontColor(flux.RGB(0xFF, 0xFF, 0xFF)),
 					flux.OnClick(func(e flux.Event) {
 						count.Set(count.Get() + 1)
 						slide()     // 5.1 动画（D2 逃逸口，不经 re-diff）
