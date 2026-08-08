@@ -13,5 +13,6 @@ Agent.md
 *.dylib
 *.test
 *.out
+*.syso
 go.work
 go.work.sum
