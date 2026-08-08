@@ -28,6 +28,11 @@ func OnChange(fn func(text string)) Opt {
 	return optFn(func(n *Node) { n.Props.Set("OnChange", fn) })
 }
 
+// Title 设置窗体标题（Window 用；内部走 Text 属性 → 绑定层 SetCaption）。
+func Title(s string) Opt {
+	return optFn(func(n *Node) { n.Props.Set("Text", s) })
+}
+
 // Key 设置稳定身份（D3）。列表/可变子节点必须用模型来源的稳定 key，
 // 绝不用数组 index、绝不每次 render 随机 —— 否则 VCL 焦点/caret/IME 会漂移。
 func Key(k string) Opt {

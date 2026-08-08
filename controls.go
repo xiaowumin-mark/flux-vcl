@@ -8,9 +8,23 @@ import "github.com/xiaowumin-mark/flux-vcl/internal/widget"
 // Column/Row 为透明容器：不映射原生控件，仅表达布局分组（diff 引擎直接
 // 把子控件挂到祖父容器）。布局为占位实现（见 layout.go，Phase 3 精修）。
 
-// Window 顶层窗体（对应绑定层 TEngForm）。children 按列堆叠。
-func Window(children ...Widget) Widget {
-	return containerNode("Window", children)
+// Window 顶层窗体（对应绑定层 TEngForm）。子节点按列堆叠。
+//
+// 接受混合参数：子节点（Widget，如 Column/Text/Button）与窗体选项（Opt，
+// 如 Title/Width/Height）。例如 Window(Title("hi"), Column(Text("x"))).
+func Window(args ...any) Widget {
+	n := widget.NewNode("Window")
+	for _, a := range args {
+		switch v := a.(type) {
+		case Widget:
+			n.Add(v.Create())
+		case Opt:
+			v.apply(n)
+		default:
+			panic("flux.Window: 参数必须是 Widget 或 Opt")
+		}
+	}
+	return widgetNode{n}
 }
 
 // Column 垂直容器：children 自上而下排列（占位布局，Phase 3 精修）。
