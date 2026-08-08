@@ -149,6 +149,17 @@ func (r *Renderer) ApplyNative(h render.Handle, fn func(obj any)) {
 	fn(r.controls[h])
 }
 
+// RunOnUI 把 fn marshal 到 UI 线程执行（D4 marshalling）。
+// 已在主线程（事件回调内）则直接执行；否则经 lcl.RunOnMainThreadSync 阻塞
+// 等待主线程消费 —— State 从任意 goroutine 触发 re-render 的规范路径。
+func (r *Renderer) RunOnUI(fn func()) {
+	if api.CurrentThreadId() == api.MainThreadId() {
+		fn()
+		return
+	}
+	lcl.RunOnMainThreadSync(fn)
+}
+
 func (r *Renderer) HandleAllocated(h render.Handle) bool {
 	_, ok := r.controls[h]
 	return ok

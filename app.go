@@ -1,23 +1,29 @@
 package flux
 
 import (
+	"sync"
+
 	"github.com/xiaowumin-mark/flux-vcl/internal/diff"
 	"github.com/xiaowumin-mark/flux-vcl/internal/render"
 )
 
 // App 管理一棵声明式 UI 树的 reconciliation 生命周期。
 //
-// 用法：NewApp(绑定层 renderer) → Render(Widget)。每次状态变化重建 Widget 树
-// 并再次 Render：diff 引擎只 patch 变化的属性（D2），不重建未变化控件（D1/D7）。
-// 事件回调（OnClick 等）里调用 Render 即可触发更新（State 系统属 Phase 2）。
+// 用法：NewApp(绑定层 renderer) → Mount(build)。build 是每次 render 调用的
+// 根构建函数；任一订阅的 State 变化（State.Set）自动触发"重新调用 build →
+// 布局 → diff"（经 RunOnUI marshal，合并更新）。
 //
 //	app := flux.NewApp(nativeAdapter)          // 绑定层 renderer
-//	app.Render(flux.Window(flux.Button("OK")))
+//	app.Mount(func() flux.Widget { return flux.Window(flux.Text(flux.Bind(count))) })
 //
 // 绑定层 renderer 必须由 internal/native 的适配器创建（D6 隔离）。
 type App struct {
-	r  render.Renderer
-	rc *diff.Reconciler
+	r        render.Renderer
+	rc       *diff.Reconciler
+	build    func() Widget
+	mu       sync.Mutex
+	renderMu sync.Mutex // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
+	pending  bool       // 脏标志：有待处理的失效（D4 合并）
 }
 
 // NewApp 创建 App。r 为绑定层 renderer（默认 LCL 适配见 internal/native）。
@@ -25,12 +31,76 @@ func NewApp(r render.Renderer) *App {
 	return &App{r: r, rc: diff.New(r)}
 }
 
-// Render 对整棵树做一次 diff：先占位布局（写 Bounds），再 reconcile。
-func (a *App) Render(w Widget) {
-	root := w.Create()
-	layoutTree(root, a.r)
-	a.rc.Render(root)
+// Mount 注册根构建函数并首次渲染。之后 State.Set 自动触发 re-render。
+func (a *App) Mount(build func() Widget) {
+	a.mu.Lock()
+	a.build = build
+	a.mu.Unlock()
+	a.render()
 }
+
+// Render 手动渲染一棵具体树（Phase 1 兼容路径；不触发 State 自动更新，请用 Mount）。
+func (a *App) Render(w Widget) { a.renderWidget(w) }
 
 // Root 返回当前 Element 树根（Inspector / 测试用）。
 func (a *App) Root() *diff.Element { return a.rc.Root() }
+
+// render 取当前 build 并渲染（build 为空则跳过，未 Mount）。
+// renderMu 保证同一时刻只有一个 reconcile 进行（并发 Set 时的串行化纪律）。
+func (a *App) render() {
+	a.mu.Lock()
+	b := a.build
+	a.mu.Unlock()
+	if b == nil {
+		return
+	}
+	a.renderMu.Lock()
+	defer a.renderMu.Unlock()
+	a.renderWidget(b())
+}
+
+// renderWidget 对一棵具体 Widget 树做 diff：占位布局（写 Bounds）→ 收集
+// 绑定依赖（订阅 State）→ reconcile。collectBindings 在 diff 前执行，保证
+// State.Set 在 render 后立即能看到订阅。
+func (a *App) renderWidget(w Widget) {
+	root := w.Create()
+	layoutTree(root, a.r)
+	a.collectBindings(root)
+	a.rc.Render(root)
+}
+
+// invalidate 请求一次 re-render（State.Set 调用）。
+//
+// 合并（D4）：pending 标志保证同一周期内多次 Set 只触发一次 render。
+// State.Set 在调用 invalidate 前已提交值，故被吞并的 Set 其新值仍会被
+// 本次 render 读到（render 时 Get 当前值）——不丢最后一次写入。
+// renderMu 串行化 reconcile：并发 Set 时即使两个 flush 都入队，也只有一个
+// render 在进行。经 renderer.RunOnUI marshal 到 UI 线程，任意 goroutine 安全。
+func (a *App) invalidate() {
+	a.mu.Lock()
+	if a.pending {
+		a.mu.Unlock()
+		return
+	}
+	a.pending = true
+	a.mu.Unlock()
+
+	a.r.RunOnUI(func() {
+		a.mu.Lock()
+		a.pending = false
+		a.mu.Unlock()
+		a.render()
+	})
+}
+
+// collectBindings 遍历节点树，把登记了 bindKey 的绑定订阅到 App（幂等）。
+func (a *App) collectBindings(n *Node) {
+	if v, ok := n.Props.Get(bindKey); ok {
+		if b, ok := v.(bindable); ok {
+			b.bindTo(a)
+		}
+	}
+	for _, c := range n.Children {
+		a.collectBindings(c)
+	}
+}

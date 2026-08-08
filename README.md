@@ -56,29 +56,41 @@ Window(
 
 State 系统（Phase 2）、布局引擎（Phase 3）、事件/生命周期（Phase 4）见 [开发计划](docs/development-plan.md)。
 
+**Phase 2（State 系统与数据绑定）✅ 完成**：`State[T]` / `Bind` / 单向 / 双向绑定 / 线程 marshalling / 作用域失效。
+
+| 子任务 | 状态 |
+|---|---|
+| 2.1 `State[T]` 原语（mutex + 订阅，跨 goroutine 安全） | ✅ `flux/state.go` |
+| 2.2 单向绑定（`Text(Bind(state))` → 属性 patch） | ✅ |
+| 2.3 双向绑定（`Input(Bind(state))` → OnChange 回写） | ✅ |
+| 2.4 作用域失效（未变子树跳过，等价 D7c） | ✅ `TestStateScopeInvalidation` |
+| 2.5 线程 marshalling（`RunOnUI` + pending 合并） | ✅ 5 goroutine 并发 Set `-race` 通过 |
+| 2.6 Key 系统（D3 稳定 key，Phase 1 已落地） | ✅ |
+
 ## 快速开始
 
 **前提**：Go 1.22+；`libenergy-amd64.dll`（获取方式见 [E2 文档](docs/phase0-e2-libenergy-mapping.md)，
 可通过环境变量 `FVCL_LIBENERGY_DLL` 指定路径）。
 
 ```go
-// 声明式 UI：UI 即结构，状态变化重建树，diff 引擎只 patch 变化的属性
+// 状态驱动 UI：State 变化自动 re-render，diff 引擎只 patch 变化的属性
 // （r 为绑定层 renderer，由 internal/native 适配，见 examples/basic/main.go）
 app := flux.NewApp(r)
 
-var count int
-build := func() flux.Widget {
+count := flux.NewState(0)  // 单向：按钮文本随 State 刷新
+name := flux.NewState("")  // 双向：输入框 ↔ State 同步
+app.Mount(func() flux.Widget {
     return flux.Window(
         flux.Column(
-            flux.Text("Count: "+strconv.Itoa(count)),
-            flux.Button("+1", flux.OnClick(func() {
-                count++
-                app.Render(build()) // 零控件重建，只更新文本
+            flux.Text("Count: "+fmt.Sprint(count.Get())),
+            flux.Button(flux.Bind(count), flux.OnClick(func() {
+                count.Set(count.Get() + 1) // 外部修改 State → 自动 re-render
             })),
+            flux.Input(flux.Bind(name)),
+            flux.Text(flux.Bind(name)), // 回显
         ),
     )
-}
-app.Render(build())
+})
 ```
 
 ```powershell
@@ -94,34 +106,19 @@ app.Render(build())
 
 完整可运行示例见 `examples/basic`。
 
-## 快速开始
-
-**前提**：Go 1.22+；`libenergy-amd64.dll`（获取方式见 [E2 文档](docs/phase0-e2-libenergy-mapping.md)，
-可通过环境变量 `FVCL_LIBENERGY_DLL` 指定路径）。
-
-```powershell
-# 构建（生成资源 -> windowsgui exe -> 复制 DLL）
-.\scripts\build.ps1
-
-# 无头冒烟（验证窗口出现、按钮点击生效、干净退出）
-.\scripts\smoke.ps1
-
-# 或手动运行
-.\bin\basic.exe
-```
-
 ## 目录结构
 
 ```
 flux-vcl/
 ├── flux.go                # 框架主包：声明式 API（构造器/Opt/App/逃逸口）
+├── state.go               # State[T] / Bind / Binding（响应式状态 + 数据绑定，Phase 2）
 ├── internal/
 │   ├── widget/            # Widget 接口 + Node + Props（有序属性集，D2 diff）
 │   ├── diff/              # Element 树 + diff/reconciliation 引擎（Phase 1.4）
 │   ├── render/            # Renderer 窄接口 + Mutation op 集 + Mock
 │   └── native/            # 默认 LCL 后端适配（energye/lcl + libenergy DLL）
 ├── examples/
-│   └── basic/             # 声明式冒烟应用（窗体+文本+按钮+输入框+点击）
+│   └── basic/             # State 驱动冒烟应用（counter + two-way 绑定）
 │       └── winres/        # go-winres 资源配置（manifest/icon/version）
 ├── scripts/
 │   ├── build.ps1          # 构建脚手架

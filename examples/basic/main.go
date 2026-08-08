@@ -1,14 +1,15 @@
-// FluxVCL Phase 1 冒烟应用：examples/basic
+// FluxVCL Phase 2 冒烟应用：examples/basic
 //
-// 声明式 UI 最小用例（design.md §4）：Window(Column(Text, Button, Input))。
-// 演示 diff/reconciliation 引擎（Phase 1.4）：
-//  1. 点击按钮 → 重建 Widget 树 → App.Render → 只 patch 变化的属性，零控件重建。
-//  2. 输入框 OnChange → 把输入同步到 Text（单向事件流，State 属 Phase 2）。
+// State 系统与数据绑定最小用例（design.md §8-9）：
+//  1. counter：Button(Bind(count)) + OnClick 修改 State → 自动 re-render，
+//     按钮文本随 State 刷新（零控件重建，diff 只 patch 文本）。
+//  2. two-way：Input(Bind(name)) ↔ Text(Bind(name)) —— 输入经 OnChange 回写
+//     State，State 变化又驱动 Text 回显（单向渲染流 + 双向绑定）。
 //
 // 工程约束（Phase 0 冒烟结论）：LCL 的 TLabel 无独立 HWND，Win32 冒烟无法读
-// label 文本；因此点击时同步更新按钮文本作为"点击生效"的可观测信号。
+// label 文本；因此 counter 的"点击生效"信号直接落在按钮文本（TButton 有 HWND）。
 //
-// 初始化序列（E2 结论）：Init → NewRenderer(NewForms) → 声明式 Render → Run。
+// 初始化序列（E2 结论）：Init → NewRenderer(NewForms) → Mount(build) → Run。
 // Go 包版本必须与 libenergy DLL 严格一致：lcl v1.0.3 ↔ libenergy-amd64.dll。
 //
 // 构建：scripts/build.ps1（生成 winres 资源 → windowsgui exe → 复制 DLL）。
@@ -44,29 +45,27 @@ func main() {
 	r := native.NewRenderer()
 	app := flux.NewApp(r)
 
-	var count int
-	var label = "Hello, FluxVCL! 点下面按钮试试"
-	btnText := "Click me"
-	var build func() flux.Widget // 闭包自引用需先声明再赋值
-	build = func() flux.Widget {
+	// State 原语：Set 可跨 goroutine，re-render 自动 marshal 到 UI 线程。
+	count := flux.NewState(0)       // counter 计数（单向绑定 → Button 文本）
+	name := flux.NewState("FluxVCL") // two-way 绑定目标（Input ↔ Text 回显）
+
+	app.Mount(func() flux.Widget {
 		return flux.Window(
-			flux.Title("FluxVCL "+flux.Version+" - basic"),
+			flux.Title("FluxVCL "+flux.Version+" - basic (Phase 2)"),
 			flux.Column(
-				flux.Text(label, flux.Key("label")),
-				flux.Button(btnText, flux.Key("btn"), flux.OnClick(func() {
-					count++
-					label = fmt.Sprintf("已点击 %d 次", count)
-					btnText = fmt.Sprintf("Clicked %d", count) // 可观测信号（TLabel 无 HWND）
-					app.Render(build())
+				flux.Text("Hello, FluxVCL! State 驱动的最小用例", flux.Key("label")),
+
+				flux.Text("1) counter：点按钮 +1，文本由 State 驱动刷新", flux.Key("c-hint")),
+				flux.Button(flux.Bind(count), flux.Key("btn"), flux.OnClick(func() {
+					count.Set(count.Get() + 1) // 外部修改 State → 自动 re-render
 				})),
-				flux.Input(flux.Key("input"), flux.OnChange(func(v string) {
-					label = "输入: " + v
-					app.Render(build())
-				})),
+
+				flux.Text("2) two-way：输入框 ↔ State ↔ 文本回显", flux.Key("t-hint")),
+				flux.Input(flux.Bind(name), flux.Key("input")),
+				flux.Text(flux.Bind(name), flux.Key("echo")),
 			),
 		)
-	}
-	app.Render(build())
+	})
 
 	lcl.Application.Run()
 }

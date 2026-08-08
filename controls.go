@@ -38,19 +38,33 @@ func Row(children ...Widget) Widget {
 }
 
 // Text 文本标签（对应绑定层 TLabel）。布局宽度按 intrinsic 文本测量。
-func Text(text string, opts ...Opt) Widget {
+// text 为字符串或 State 绑定（Text(Bind(state))，渲染值随 State 变化）。
+func Text(text any, opts ...Opt) Widget {
 	n := widget.NewNode("Text")
-	n.Props.Set("Text", text)
+	setTextProp(n, text)
 	applyOpts(n, opts)
 	return widgetNode{n}
 }
 
-// Button 按钮（对应绑定层 TButton）。text 为按钮文本。
-func Button(text string, opts ...Opt) Widget {
+// Button 按钮（对应绑定层 TButton）。text 为按钮文本，可为字符串或 State 绑定。
+func Button(text any, opts ...Opt) Widget {
 	n := widget.NewNode("Button")
-	n.Props.Set("Text", text)
+	setTextProp(n, text)
 	applyOpts(n, opts)
 	return widgetNode{n}
+}
+
+// setTextProp 把文本参数（string 或 bindable）写入节点 Props。
+func setTextProp(n *Node, text any) {
+	switch v := text.(type) {
+	case string:
+		n.Props.Set("Text", v)
+	case bindable:
+		n.Props.Set("Text", v.renderText())
+		n.Props.Set(bindKey, v) // 登记绑定依赖（collectBindings 订阅）
+	default:
+		panic("flux: 文本参数必须是 string 或 Bind(...)")
+	}
 }
 
 // Input 单行输入框（对应绑定层 TEdit）。

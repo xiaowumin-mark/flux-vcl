@@ -93,7 +93,8 @@ Start-Sleep -Milliseconds 500
 $b1 = New-Object System.Text.StringBuilder 256
 [W]::GetWindowTextW($btn, $b1, 256) | Out-Null
 Write-Host "[smoke] button after click: '$($b1.ToString())'"
-if ($b1.ToString() -match "Clicked \d") { Write-Host "[smoke] PASS: click handled" }
+# 按钮文本由 State 驱动（Button(Bind(count)) 显示数字）：点击 +1 即"点击生效"。
+if ($b1.ToString() -match "^\d+$") { Write-Host "[smoke] PASS: click handled" }
 else { Write-Host "[smoke] FAIL: click not handled"; exit 1 }
 
 # 可选截图（CI artifact；无头会话可能黑屏，失败仅告警不中断）

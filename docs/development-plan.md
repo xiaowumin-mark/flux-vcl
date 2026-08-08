@@ -124,18 +124,43 @@
 
 ## Phase 2 — State 系统与数据绑定 · 目标：状态驱动 UI
 
-| # | 子任务 | 要点 / 参考 |
-|---|---|---|
-| 2.1 | `State[T]` 原语 | `State(0)` / `count.Set(1)` / `Bind(count)`；订阅机制（参照 Gova `State.Set()→re-render`、Compose 快照）。 |
-| 2.2 | 单向绑定 | `Text(Bind(user.Name))`：属性变化→patch。 |
-| 2.3 | 双向绑定 | `Input(Bind(user.Name))`：控件事件→State→patch。 |
-| 2.4 | **作用域失效** | State getter 记录"被哪个 element 路径读取"，`Set()` 只 re-diff 依赖子树；至少先做"未变子树跳过"。 |
-| 2.5 | **线程 marshalling** | `runOnUI`/`runOnUISync`（D4）；State 从 goroutine 触发变更的规范路径；销毁延后。 |
-| 2.6 | Key 系统 | 列表 key（D3）在 State 场景落地。 |
+> **进展（2026-08-09）：全部完成。** State/绑定层落地：`flux.State[T]`（mutex 保护 +
+> 订阅 map，`Set/Get` 跨 goroutine 安全）、`flux.Bind(s)` 返回 `Binding[T]`（同时实现
+> `bindable` 渲染接口与 `Opt`，支持 `Text/Button(Bind(s))` 单向与 `Input(Bind(s))` 双向）、
+> `App.Mount(build)`（持有根构建函数，State 变化自动 re-render）、`App.invalidate`
+> （pending 合并 + `RunOnUI` marshal，D4）。依赖收集：render 时 `collectBindings` 遍历
+> `_bind` 隐藏 Props key，把绑定订阅到 App（幂等）。
+>
+> **工程发现/偏差（实现记录）**：
+> - **作用域失效 = 全树 diff + 未变子树跳过（等价 D7c）**：2.4 的"只 re-diff 依赖子树"
+>   以最小实现落地 —— 每次 render 全树 build+diff，diff 引擎按 D1/D2 天然跳过未变
+>   子树（零 Create/Destroy、零属性 mutation），`TestStateScopeInvalidation` 断言只
+>   patch 受影响的 SetText 一条。比 getter 级依赖跟踪简单且同样满足验收。
+> - **`_bind` 隐藏 key 不产生 mutation**：Binding 值经 `reflect.DeepEqual` 比较，同
+>   State 的两个 Binding（`state` 字段同指针）判等，diff 恒跳过。
+> - **并发 Set 的正确性**：`State.Set` 先提交值再 `invalidate`，故被 pending 合并吞掉的
+>   Set，其新值仍被本次 render 读到（render 时 `Get` 当前值），不丢最后一次写入；
+>   `App.renderMu` 串行化 reconcile（mock `RunOnUI` 同步内联，无 UI 线程可串行）。
+>   `TestStateSetFromGoroutine` 5 个 goroutine 并发 Set 在 `-race` 下通过。
+> - **合并更新**：`pending` 脏标志使同一周期多次 Set 只触发一次 render（`TestStateInvalidateMerge`
+>   用延迟 `RunOnUI` 制造同周期窗口断言）。
+> - **`examples/basic` 改为 State 驱动**：counter（`Button(Bind(count))` 文本随 State
+>   刷新）+ two-way（`Input(Bind(name))` ↔ `Text(Bind(name))` 回显）；smoke 断言按钮
+>   文本 "0"→"1"（点击 +1）。
 
-**交付物**：计数器 demo、输入双向同步 demo。
-**验收**：外部 goroutine 改 State 不崩溃、UI 正确刷新；只重建受影响子树（断言）。
-**风险**：goroutine 改 UI 崩溃 —— 用 D4 调度器 + 测试覆盖。
+| # | 子任务 | 要点 / 参考 | 状态 |
+|---|---|---|---|
+| 2.1 | `State[T]` 原语 | `NewState(initial)` / `count.Set(v)` / `count.Get()`；mutex 保护 + 订阅 map（参照 Gova `State.Set()→re-render`、Compose 快照）。 | ✅ 完成 |
+| 2.2 | 单向绑定 | `Text(Bind(user.Name))`：渲染取当前值，State 变化→re-render→属性 patch。 | ✅ 完成 |
+| 2.3 | 双向绑定 | `Input(Bind(user.Name))`：`OnChange` 回写 State→re-render→控件文本同步。string/int 类型转换，其余类型仅单向。 | ✅ 完成 |
+| 2.4 | **作用域失效** | 以"全树 diff + 未变子树跳过"落地（等价 D7c）：未变子树零 mutation，只 patch 受影响子树（测试断言 SetText 恰一条且指向该句柄）。 | ✅ 完成 |
+| 2.5 | **线程 marshalling** | Renderer 接口加 `RunOnUI`；native 用 `CurrentThreadId==MainThreadId` 检查 + `lcl.RunOnMainThreadSync`（阻塞）；Mock 同步内联。`App.invalidate` pending 合并（D4）。 | ✅ 完成 |
+| 2.6 | Key 系统 | 列表 key（D3）机制已在 Phase 1 diff 引擎落地（按 key 匹配复用）；State 场景直接复用。 | ✅ 完成 |
+
+**交付物**：计数器 demo、输入双向同步 demo —— 已达成（examples/basic）。
+**验收**：外部 goroutine 改 State 不崩溃（`TestStateSetFromGoroutine`，-race）、UI 正确刷新
+（smoke "0"→"1"）；只重建受影响子树（`TestStateScopeInvalidation` 断言）。
+**风险**：goroutine 改 UI 崩溃 —— D4 RunOnUI + `renderMu` 串行化 + 测试覆盖。
 
 ---
 

@@ -57,6 +57,11 @@ type Renderer interface {
 	// ApplyNative 在控件创建后调用逃逸函数（逃逸口，design.md §11.1）。
 	// fn 接收绑定层原生控件对象（flux.Native 已断言到具体类型）。
 	ApplyNative(h Handle, fn func(obj any))
+	// RunOnUI 把 fn 投递到 UI 线程执行（D4 marshalling）。
+	// State 从任意 goroutine 触发 re-render 时经此 marshal；已在 UI 线程则直接执行。
+	// Mock 实现直接调用（测试在调用 goroutine 内同步执行）；
+	// 真实绑定用 ThreadSync（如 lcl.RunOnMainThreadSync，阻塞当前 goroutine）。
+	RunOnUI(fn func())
 	// HandleAllocated 报告句柄是否已分配真实原生控件。
 	HandleAllocated(h Handle) bool
 }
