@@ -91,14 +91,14 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 | 4.4 IME/中文输入（`OnUTF8KeyPress` 逐字符路由，含 IME 组合结果） | ✅ 控件级 `SetOnUTF8KeyPress` |
 | 4.5 无头测试（统一事件/映射 DIP/生命周期/Source 注入） | ✅ `flux/event_test.go` + `internal/native/mapping_test.go` |
 
-**Phase 5（高级特性）✅ 完成**：动画（Curve/Tween/`AnimationController` 状态机 + `App.Animate` 主线程 16ms pump + `App.SetBounds` 逃逸口直接落地，绕开整树 re-diff）+ 主题（`Theme` 调色板 + `Color`/`FontColor` Opt，切换 = 全量 re-diff 只 patch 变化颜色）+ Async（后台 goroutine + `RunOnUI` marshalling）+ 组件化（`Component(build, Key)` 透明分组，身份靠外部 Key 稳定）。
+**Phase 5（高级特性）✅ 完成**：动画（Curve/Tween/`AnimationController` 状态机 + `App.Animate` 主线程 16ms pump + `App.SetBounds` 逃逸口直接落地，绕开整树 re-diff）+ 主题（`Theme` 调色板 + `Color`/`FontColor` Opt + 标题栏沉浸式暗色 `DarkTitleBar`，切换 = 全量 re-diff 只 patch 变化颜色）+ Async（后台 goroutine + `RunOnUI` marshalling）+ 组件化（`Component(build, Key)` 透明分组，身份靠外部 Key 稳定）。
 
-> **已知限制（win32 后端，探针实测）**：TButton 由 OS 主题绘制，`Color`/`FontColor` 均不渲染；TLabel 背景 `Color` 也不渲染。主题切换的可见信号实际来自窗体背景（`Window(Color(...))`）与文字 `FontColor`。为让按钮支持主题色，需 owner-draw 改造（见 [design.md](docs/design.md)）。
+> **已知限制（win32 后端，探针实测）**：TButton 由 OS 主题绘制，`Color`/`FontColor` 均不渲染；TLabel 背景 `Color` 也不渲染。主题切换的可见信号实际来自窗体背景（`Window(Color(...))`）、文字 `FontColor` 与标题栏（`DarkTitleBar` → win32 DWM 沉浸式暗色，随主题亮/暗）。为让按钮支持主题色，需 owner-draw 改造（见 [design.md](docs/design.md)）。
 
 | 子任务 | 状态 |
 |---|---|
 | 5.1 动画（Curve/EaseIn/Out/InOut/ElasticOut、Tween、Controller.Step、App.Animate pump、App.SetBounds D2 逃逸口） | ✅ `flux/animation.go` + `App.Animate/SetBounds` |
-| 5.2 主题（`Theme{Font,Color,Radius,Animation}`、Light/Dark、`Color`/`FontColor` Opt + diff 属性级 patch） | ✅ `flux/theme.go`；FontSize/Radius 为文档字段（native 未接入） |
+| 5.2 主题（`Theme{Font,Color,Radius,Animation}`、Light/Dark、`Color`/`FontColor` Opt + `DarkTitleBar` 标题栏暗色 + diff 属性级 patch） | ✅ `flux/theme.go`；FontSize/Radius 为文档字段（native 未接入） |
 | 5.3 Async（`Async[T](app, load, onSuccess, onError…)`：后台 goroutine + RunOnUI marshal，D4） | ✅ 包级泛型函数（Go 方法不支持泛型） |
 | 5.4 Component（`Build() Widget` 透明分组；组件身份靠外部 Key（D3），不在 Build 内生成 key/嵌套类型） | ✅ `flux.Component` + diff/layout Component 分支 |
 | 5.5 无头测试（曲线端点、Tween、Controller 状态机、Animate pump 驱动、SetBounds 命中/跳过、主题零 mutation、组件 key 复用、Async 成败两径、ARGB→TColor 换算） | ✅ `flux/phase5_test.go` + `internal/native/mapping_test.go` |
@@ -196,6 +196,9 @@ flux-vcl/
 
 ## 文档
 
+- [贡献指南](CONTRIBUTING.md) —— 工作流、提交信息、分支/PR 规范
+- [开发规范](docs/development-guide.md) —— 代码风格、架构不变量 D1–D7、测试/文档规范
+- [命名规范](docs/naming-conventions.md) —— example/包/标识符/资源命名
 - [设计文档](docs/design.md) —— 架构、三棵树模型、布局/State/事件设计
 - [开发计划](docs/development-plan.md) —— Phase 0–7 任务与验收标准
 - [底座选型调研](docs/govcl-vs-lcl.md) —— LCL vs VCL 选型依据

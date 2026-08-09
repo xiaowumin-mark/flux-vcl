@@ -49,6 +49,10 @@ type Renderer interface {
 	// SetFontColor 设置控件文字颜色（经字体对象，ARGB）。TLabel/TEdit/TButton
 	// 等有 Font 的控件均可；无 Font 的控件忽略。Phase 5.2 Theme。
 	SetFontColor(h Handle, color Color)
+	// SetTitleBarDark 设置窗体标题栏沉浸式暗色（win32 DWM，Phase 5.2 Theme）。
+	// dark=true → 暗色标题栏（Win10 1809+ DwmSetWindowAttribute）。仅 Window
+	// 有标题栏；实现方忽略 h 直接用主窗体句柄。主题切换时随 Theme 应用。
+	SetTitleBarDark(h Handle, dark bool)
 	// NewTimer 创建主线程定时器：intervalMs 毫秒后每 intervalMs 周期触发 fn，
 	// 直至返回的停止函数被调用（幂等）。主线程定时器（D4）：
 	// 真实绑定用 TTimer（消息泵上触发，无 goroutine/marshalling）；

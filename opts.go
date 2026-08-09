@@ -59,3 +59,10 @@ func CrossAxis(a CrossAxisAlignment) Opt {
 func Enabled(v bool) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Enabled", v) })
 }
+
+// DarkTitleBar 设置窗体标题栏沉浸式暗色（Window 用；内部走 "TitleBarDark" 属性 →
+// 绑定层 DwmSetWindowAttribute）。dark=true → 暗色标题栏，false → 系统默认亮色。
+// Phase 5.2 Theme：主题切换时随 Theme.DarkTitleBar 传入，让标题栏与客户区一起变暗。
+func DarkTitleBar(dark bool) Opt {
+	return optFn(func(n *Node) { n.Props.Set("TitleBarDark", dark) })
+}

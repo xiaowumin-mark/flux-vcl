@@ -261,8 +261,49 @@ func TestThemeData(t *testing.T) {
 	if lt.Text == dt.Text {
 		t.Error("Light/Dark 文字色应不同")
 	}
+	if lt.DarkTitleBar {
+		t.Error("Light 主题标题栏应为非暗色")
+	}
+	if !dt.DarkTitleBar {
+		t.Error("Dark 主题标题栏应为暗色")
+	}
 	if got := flux.RGB(0x12, 0x34, 0x56); got != render.Color(0xFF123456) {
 		t.Errorf("RGB(12,34,56) = %#x，期望 0xFF123456", got)
+	}
+}
+
+// TestThemeTitleBarOpt DarkTitleBar Opt 写入 Window Props，diff 应用 SetTitleBarDark op
+// （标题栏沉浸式暗色），且属性不变时零 mutation、值翻转时 patch。
+func TestThemeTitleBarOpt(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+
+	tree := func(dark bool) flux.Widget {
+		return flux.Window(flux.DarkTitleBar(dark), flux.Column())
+	}
+	app.Render(tree(true))
+	findOp := func(v bool) *render.Op {
+		for i := range m.Ops() {
+			op := &m.Ops()[i]
+			if op.Key == "TitleBarDark" && op.Value == v {
+				return op
+			}
+		}
+		return nil
+	}
+	if op := findOp(true); op == nil {
+		t.Errorf("TitleBarDark=true op 缺失：%+v", m.Ops())
+	}
+
+	base := len(m.Ops())
+	app.Render(tree(true))
+	if len(m.Ops()) != base {
+		t.Errorf("相同树二次 render 应零 mutation，实际 %d 条", len(m.Ops())-base)
+	}
+
+	app.Render(tree(false))
+	if op := findOp(false); op == nil {
+		t.Errorf("TitleBarDark=false patch op 缺失：%+v", m.Ops())
 	}
 }
 

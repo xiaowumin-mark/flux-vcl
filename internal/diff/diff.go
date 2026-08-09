@@ -224,6 +224,11 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 			rc.r.SetFontColor(e.Handle, c)
 			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "FontColor", Value: c})
 		}
+	case "TitleBarDark": // Phase 5.2 Theme 标题栏沉浸式暗色（win32 DWM；仅 Window 生效）
+		if b, ok := v.(bool); ok {
+			rc.r.SetTitleBarDark(e.Handle, b)
+			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "TitleBarDark", Value: b})
+		}
 	case "Native": // 逃逸口：控件创建后调用，注入绑定层原生对象
 		if fn, ok := v.(func(any)); ok {
 			rc.r.ApplyNative(e.Handle, fn)

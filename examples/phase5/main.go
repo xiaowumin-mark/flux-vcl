@@ -7,8 +7,9 @@
 //  2. 5.2 Theme：右上角"主题"文字可点击，Light/Dark 切换 = State 变 → 全量
 //     re-diff → diff 引擎只 patch 变化的颜色属性（未变子树零 mutation）。
 //     注意（win32 后端实测）：TButton 由 OS 主题绘制，Color/FontColor 不渲染；
-//     TLabel 的背景 Color 也不渲染（仅窗体背景 + 文字 FontColor 生效）。故主题的
-//     可见切换体现在窗体背景、文字色与 chip 上，按钮保持系统默认外观。
+//     TLabel 的背景 Color 也不渲染。主题的可见切换体现在窗体背景、文字色、主题
+//     chip 与标题栏（DarkTitleBar → win32 DWM 沉浸式暗色，随 th.DarkTitleBar
+//     切换亮/暗）；按钮保持系统默认外观。
 //  3. 5.3 Async：点击按钮后台 goroutine 模拟 500ms 加载，完成后经
 //     renderer.RunOnUI marshal 回 UI 线程更新状态文字（D4 marshalling）。
 //  4. 5.4 Component：状态卡 = Component(build, Key("card")) 透明分组，身份靠
@@ -133,6 +134,7 @@ func main() {
 		return flux.Window(
 			flux.Title("FluxVCL "+flux.Version+" - phase5 (高级特性)"),
 			flux.Color(th.Background),
+			flux.DarkTitleBar(th.DarkTitleBar), // 标题栏随主题亮/暗（win32 DWM 沉浸式暗色）
 			flux.Column(
 				flux.Text("动画 / 主题 / Async / 组件 —— 点击下方按钮", flux.FontColor(th.Text)),
 

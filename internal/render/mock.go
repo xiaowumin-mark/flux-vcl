@@ -80,6 +80,12 @@ func (m *Mock) SetFontColor(h Handle, color Color) {
 	m.mu.Unlock()
 }
 
+func (m *Mock) SetTitleBarDark(h Handle, dark bool) {
+	m.mu.Lock()
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "TitleBarDark", Value: dark})
+	m.mu.Unlock()
+}
+
 // NewTimer 存储回调供 FireTimer 手动驱动（mock 无真实定时器/消息泵）。
 // 停止函数幂等：置 timerFn 为 nil，后续 FireTimer 为 no-op。
 func (m *Mock) NewTimer(intervalMs int, fn func()) (stop func()) {

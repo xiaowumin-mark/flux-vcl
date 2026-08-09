@@ -23,40 +23,45 @@ func RGB(r, g, b uint8) ColorValue { return render.RGB(r, g, b) }
 
 // Theme 是主题调色板。Primary/Surface/Text/Accent 供构建函数取用，
 // Background 通常传给 Window 的 Color Opt，Primary 给按钮，Text 给文字。
+// DarkTitleBar 传给 Window 的 DarkTitleBar Opt（标题栏沉浸式暗色）。
 //
 // win32 后端渲染限制（探针实测）：子控件背景色普遍不渲染 —— TButton 由 OS
 // 主题绘制，其 Color/FontColor 均为空操作；TLabel 的背景 Color 同样不显示。
-// 主题切换的可见信号实际来自窗体背景（Window Color）与文字 FontColor。
+// 主题切换的可见信号实际来自窗体背景（Window Color）、文字 FontColor 与
+// 标题栏（DarkTitleBar，win32 DWM 沉浸式暗色，已接入 native）。
 type Theme struct {
-	Primary    ColorValue // 主色（按钮/强调；win32 TButton 背景色不渲染）
-	Background ColorValue // 窗体背景（win32 下渲染 ✓）
-	Surface    ColorValue // 卡片/面板表面（win32 TLabel 背景不渲染）
-	Text       ColorValue // 主要文字（win32 下渲染 ✓）
-	Accent     ColorValue // 点缀色（hover/选中）
-	FontSize   int        // 文档字段：字体大小（Phase 5 未接入 native 字体缩放）
-	Radius     int        // 文档字段：圆角（原生控件无统一圆角 API）
+	Primary      ColorValue // 主色（按钮/强调；win32 TButton 背景色不渲染）
+	Background   ColorValue // 窗体背景（win32 下渲染 ✓）
+	Surface      ColorValue // 卡片/面板表面（win32 TLabel 背景不渲染）
+	Text         ColorValue // 主要文字（win32 下渲染 ✓）
+	Accent       ColorValue // 点缀色（hover/选中）
+	DarkTitleBar bool       // 标题栏沉浸式暗色（win32 DWM，已接入 native；true=暗色）
+	FontSize     int        // 文档字段：字体大小（Phase 5 未接入 native 字体缩放）
+	Radius       int        // 文档字段：圆角（原生控件无统一圆角 API）
 }
 
 // LightTheme 浅色主题（类 Flutter Material Light 调性）。
 var LightTheme = Theme{
-	Primary:    RGB(0x1E, 0x90, 0xFF),
-	Background: RGB(0xF5, 0xF5, 0xF5),
-	Surface:    RGB(0xFF, 0xFF, 0xFF),
-	Text:       RGB(0x21, 0x21, 0x21),
-	Accent:     RGB(0xFF, 0x6F, 0x00),
-	FontSize:   14,
-	Radius:     4,
+	Primary:      RGB(0x1E, 0x90, 0xFF),
+	Background:   RGB(0xF5, 0xF5, 0xF5),
+	Surface:      RGB(0xFF, 0xFF, 0xFF),
+	Text:         RGB(0x21, 0x21, 0x21),
+	Accent:       RGB(0xFF, 0x6F, 0x00),
+	DarkTitleBar: false, // 亮色标题栏
+	FontSize:     14,
+	Radius:       4,
 }
 
 // DarkTheme 深色主题。
 var DarkTheme = Theme{
-	Primary:    RGB(0x4F, 0xA8, 0xFF),
-	Background: RGB(0x12, 0x12, 0x12),
-	Surface:    RGB(0x1E, 0x1E, 0x1E),
-	Text:       RGB(0xE6, 0xE6, 0xE6),
-	Accent:     RGB(0xFF, 0xA7, 0x26),
-	FontSize:   14,
-	Radius:     4,
+	Primary:      RGB(0x4F, 0xA8, 0xFF),
+	Background:   RGB(0x12, 0x12, 0x12),
+	Surface:      RGB(0x1E, 0x1E, 0x1E),
+	Text:         RGB(0xE6, 0xE6, 0xE6),
+	Accent:       RGB(0xFF, 0xA7, 0x26),
+	DarkTitleBar: true, // 暗色标题栏（win32 DWM 沉浸式暗色）
+	FontSize:     14,
+	Radius:       4,
 }
 
 // Color 设置控件背景色（Phase 5.2）。对应 native IControl.SetColor；

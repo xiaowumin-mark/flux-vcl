@@ -328,9 +328,14 @@
 >   可无头测试），**不持有定时器**；`App.Animate` 用主线程 TTimer（~16ms）驱动 Step，回调天然在
 >   UI 线程（无 goroutine/marshalling 成本）。动画落地走 `App.SetBounds`（D2 逃逸口，`diff.Lookup`
 >   按 key 定位真实控件句柄；透明容器/Window 跳过），**不触发整树 re-diff**。
-> - **主题=数据不是运行时对象**：构建函数按当前 Theme 显式传颜色（Color/FontColor Opt）；
->   切换 = State 变 → 全量 re-diff → diff 只 patch 变化的颜色属性（未变子树零 mutation，D7c）。
->   `FontSize/Radius` 为文档字段（native 未接入字体大小/圆角），诚实标注。
+> - **主题=数据不是运行时对象**：构建函数按当前 Theme 显式传颜色（Color/FontColor Opt）与标题栏
+>   暗色（DarkTitleBar Opt）；切换 = State 变 → 全量 re-diff → diff 只 patch 变化的颜色属性
+>   （未变子树零 mutation，D7c）。`FontSize/Radius` 为文档字段（native 未接入字体大小/圆角）——
+>   `DarkTitleBar` 为**已接入**字段（诚实标注）。
+> - **标题栏暗色（win32 DWM）**：`Theme.DarkTitleBar`（Light=false / Dark=true）+ `Window(DarkTitleBar(..))`
+>   Opt → diff 属性级 patch → 绑定层 `DwmSetWindowAttribute`（dwmapi.dll，零 CGO syscall；
+>   `DWMWA_USE_IMMERSIVE_DARK_MODE` 属性 20，1809 前回退 19）。DWM 即时重绘标题栏，无需
+>   Recreate/Redraw —— 继窗体背景、文字色之后主题切换的第三个可见信号。
 > - **win32 渲染限制（探针实测）**：LCL `TButton` 由 OS 主题绘制（原生 Win32 按钮），`Color`/
 >   `FontColor` 均为空操作 —— LCL 内部状态正确更新、屏幕像素不变；`TSpeedButton`/`TBitBtn` 背景
 >   同样不渲染（含显式 Invalidate/Repaint）；`TLabel` 背景 `Color` 也不渲染。主题切换的可见信号
@@ -344,14 +349,15 @@
 | # | 子任务 | 要点 / 参考 | 状态 |
 |---|---|---|---|
 | 5.1 | **动画** | 主线程 60fps（TTimer/自定义 pump）；Curve（Linear/EaseIn/Out/InOut/ElasticOut）/Tween/AnimationController（0..1 状态机，不持定时器）；高频属性用**直接绑定**（`App.SetBounds` D2 逃逸口）避免整树 re-diff。 | ✅ 完成（`flux/animation.go` + `App.Animate/SetBounds`；`flux/phase5_test.go` Mock FireTimer 驱动 pump） |
-| 5.2 | Theme | `Theme{Font,Color,Radius,Animation}`（design.md §14）；Light/Dark；主题切换=全量 re-diff（重入 diff 引擎，只 patch 变化颜色）。 | ✅ 完成（`flux/theme.go`：`ColorValue`/`RGB`/`Theme`/Light/Dark + `Color`/`FontColor` Opt + diff 分发；FontSize/Radius 为文档字段） |
+| 5.2 | Theme | `Theme{Font,Color,Radius,Animation}`（design.md §14）；Light/Dark；标题栏沉浸式暗色（`DarkTitleBar` → DWM）；主题切换=全量 re-diff（重入 diff 引擎，只 patch 变化颜色）。 | ✅ 完成（`flux/theme.go`：`ColorValue`/`RGB`/`Theme`/Light/Dark + `Color`/`FontColor`/`DarkTitleBar` Opt + diff 分发；`DarkTitleBar` 已接入 native，FontSize/Radius 为文档字段） |
 | 5.3 | Async | `Async(Load, OnSuccess)`（design.md §15）：后台 goroutine + `RunOnUI` marshalling（D4）。 | ✅ 完成（包级泛型 `Async[T]`；失败走 onError 可选回调） |
 | 5.4 | Component | `Build() Widget`（design.md §4.1）；组件身份（**不在 Build 内定义嵌套类型/生成 key** —— React 教训，Key 由外部经 opts 传入）。 | ✅ 完成（`flux.Component` 透明分组 + diff/layout "Component" 分支） |
 
 **交付物**：`examples/phase5` —— 点击按钮：计数（冒烟目标）+ ElasticOut 方块滑动（App.SetBounds 逐帧直接落地）+ 500ms 异步加载（RunOnUI 回 UI 线程）；点击"主题" chip 切换 Light/Dark（State → 全量 re-diff）。
 **验收**：60fps 动画不冻结 UI（无整树 re-diff，SetBounds 逃逸口；`go test -race` 全绿）；切换主题无闪烁（只 patch 变化颜色，未变子树零 mutation）；async 回调安全落地（D4 + `closed` 门，关机竞态防护复用 Phase 3.6）—— **已达成**：`go test ./...`（含 `-race`）全绿，`smoke.ps1 -Target phase5` PASS（按钮 0→1），主题 chip 点击 light→dark→light 经探针 marker 验证。
 > **验收结果（已接受限制）**：主题切换的**可见**验证于窗体背景（亮 F5F5F5 / 暗 121212）、文字
-> `FontColor` 与主题 chip（light/dark 文字色切换）；**按钮保持系统默认外观** —— win32 后端 TButton
+> `FontColor`、主题 chip（light/dark 文字色切换）与标题栏（`DarkTitleBar` → DWM 沉浸式暗色，
+> 亮/暗标题栏随主题切换）；**按钮保持系统默认外观** —— win32 后端 TButton
 > 由 OS 主题绘制，`Color`/`FontColor` 不渲染（探针实测内部状态正确、像素不变），此为后端能力限制而非
 > 框架缺陷。支持按钮主题色需 owner-draw 改造（design.md §14），本轮**接受限制**，不阻塞 Phase 5 验收。
 

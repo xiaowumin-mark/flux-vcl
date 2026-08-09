@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"unsafe"
 
 	"github.com/energye/lcl/api"
 	"github.com/energye/lcl/api/libname"
@@ -33,11 +34,12 @@ import (
 	"github.com/xiaowumin-mark/flux-vcl/internal/render"
 )
 
-// GetDpiForWindow / GetDeviceCaps 无 energye 封装，用 syscall 直调（项目零 CGO）。
-// 均为系统自带 DLL，进程内 lazy 加载一次。
+// GetDpiForWindow / GetDeviceCaps / DwmSetWindowAttribute 无 energye 封装，用
+// syscall 直调（项目零 CGO）。均为系统自带 DLL，进程内 lazy 加载一次。
 var (
-	procGetDpiForWindow = syscall.NewLazyDLL("user32.dll").NewProc("GetDpiForWindow")
-	procGetDeviceCaps   = syscall.NewLazyDLL("gdi32.dll").NewProc("GetDeviceCaps")
+	procGetDpiForWindow       = syscall.NewLazyDLL("user32.dll").NewProc("GetDpiForWindow")
+	procGetDeviceCaps         = syscall.NewLazyDLL("gdi32.dll").NewProc("GetDeviceCaps")
+	procDwmSetWindowAttribute = syscall.NewLazyDLL("dwmapi.dll").NewProc("DwmSetWindowAttribute")
 )
 
 // logPixelsX 是 GetDeviceCaps 的 LOGPIXELSX 索引（水平每英寸像素）。
@@ -196,6 +198,40 @@ func (r *Renderer) SetColor(h render.Handle, color render.Color) {
 func (r *Renderer) SetFontColor(h render.Handle, color render.Color) {
 	if f := r.controls[h].Font(); f != nil {
 		f.SetColor(colorToTColor(color))
+	}
+}
+
+// dwmwaUseImmersiveDarkMode 是 DWMWA_USE_IMMERSIVE_DARK_MODE 的属性号回退链：
+// Win10 1809+ 为 20，更早（1607–1709）为 19。先试 20，E_INVALIDARG 回退 19。
+const (
+	dwmwaUseImmersiveDarkMode20 = 20
+	dwmwaUseImmersiveDarkMode19 = 19
+)
+
+// SetTitleBarDark 设置窗体标题栏沉浸式暗色（win32 DWM，Phase 5.2 Theme）。
+// dark=true → 暗色标题栏（标题文字变浅、背景变深）。仅 Window（窗体）有标题栏，
+// h 恒为窗体句柄 —— 实现直接取 formRef.Handle()（与 currentDPI 同源）。
+//
+// DWM 属性即时生效（DWM 自动重绘标题栏），无需 Recreate/Redraw，属性仅值变化时
+// diff 才调用。老系统不支持沉浸式暗色（20 返回 E_INVALIDARG）→ 回退属性 19；
+// 仍失败则静默忽略（保持系统默认标题栏，属后端能力而非错误）。
+func (r *Renderer) SetTitleBarDark(h render.Handle, dark bool) {
+	if r.formRef == nil || !r.formRef.HandleAllocated() {
+		return
+	}
+	hwnd := r.formRef.Handle()
+	if hwnd == 0 {
+		return
+	}
+	v := int32(0)
+	if dark {
+		v = 1
+	}
+	for _, attr := range []uint32{dwmwaUseImmersiveDarkMode20, dwmwaUseImmersiveDarkMode19} {
+		hr, _, _ := procDwmSetWindowAttribute.Call(uintptr(hwnd), uintptr(attr), uintptr(unsafe.Pointer(&v)), 4)
+		if hr == 0 { // S_OK
+			return
+		}
 	}
 }
 
