@@ -52,17 +52,19 @@ func main() {
 	app.Mount(func() flux.Widget {
 		return flux.Window(
 			flux.Title("FluxVCL "+flux.Version+" - basic (Phase 2)"),
+			// 静态树（结构固定、不重排）零 Key：无 key 控件按位置匹配，测试/排查用
+			// App.FindByPath("Window/0/Column/1/Button") 定位 —— 寻址与身份解耦（D3）。
 			flux.Column(
-				flux.Text("Hello, FluxVCL! State 驱动的最小用例", flux.Key("label")),
+				flux.Text("Hello, FluxVCL! State 驱动的最小用例"),
 
-				flux.Text("1) counter：点按钮 +1，文本由 State 驱动刷新", flux.Key("c-hint")),
-				flux.Button(flux.Bind(count), flux.Key("btn"), flux.OnClick(func(_ flux.Event) {
+				flux.Text("1) counter：点按钮 +1，文本由 State 驱动刷新"),
+				flux.Button(flux.Bind(count), flux.OnClick(func(_ flux.Event) {
 					count.Set(count.Get() + 1) // 外部修改 State → 自动 re-render
 				})),
 
-				flux.Text("2) two-way：输入框 ↔ State ↔ 文本回显", flux.Key("t-hint")),
-				flux.Input(flux.Bind(name), flux.Key("input")),
-				flux.Text(flux.Bind(name), flux.Key("echo")),
+				flux.Text("2) two-way：输入框 ↔ State ↔ 文本回显"),
+				flux.Input(flux.Bind(name)),
+				flux.Text(flux.Bind(name)),
 			),
 		)
 	})

@@ -1,8 +1,10 @@
 // FluxVCL Phase 4 事件系统与生命周期演示应用：examples/events
 //
 // 统一事件（design.md §10 / D6）：
-//  1. 点击：OnClick(func(Event)) —— 事件参数携带 Type/Source（Type#Key 稳定
-//     身份，D3）；counter 按钮文本随 State 刷新（冒烟断言目标）。
+//  1. 点击：OnClick(func(Event)) —— 事件参数携带 Type/Source（带 Key 时
+//     "Type#Key" 稳定身份，无 Key 时回落为 "Type@树路径" 隐式寻址 —— 本 demo
+//     静态树零 Key，点击后状态栏展示 Button@Window/0/Column/1/Button）；counter
+//     按钮文本随 State 刷新（冒烟断言目标）。
 //  2. hover：OnMouseMove —— 坐标经 native 边界从物理像素归一为 DIP
 //     （D5 全坐标 DIP），相对控件客户区。
 //  3. 键盘：OnKeyDown —— 按钮聚焦后按任意键，状态栏显示虚拟键码 + 修饰键。
@@ -59,11 +61,13 @@ func main() {
 	app.Mount(func() flux.Widget {
 		return flux.Window(
 			flux.Title("FluxVCL "+flux.Version+" - events (Phase 4)"),
+			// 静态树零 Key（D3：寻址与身份解耦）。状态栏展示 e.Source 恰好演示
+			// 无 Key 时的隐式寻址回落："Button@Window/0/Column/1/Button"。
 			flux.Column(
-				flux.Text("统一事件：hover（坐标） / click（Source） / 聚焦后按键盘", flux.Key("hint")),
+				flux.Text("统一事件：hover（坐标） / click（Source） / 聚焦后按键盘"),
 
 				// 唯一按钮（smoke 约束）：OnClick / OnMouseMove / OnKeyDown / 生命周期钩子
-				flux.Button(flux.Bind(count), flux.Key("btn"),
+				flux.Button(flux.Bind(count),
 					flux.OnClick(func(e flux.Event) {
 						count.Set(count.Get() + 1)
 						status.Set(fmt.Sprintf("click: %s (%s)", e.Source, e.Type))
@@ -83,15 +87,15 @@ func main() {
 					flux.OnUnmount(func() { unmount++; life.Set(fmt.Sprintf("mount:%d update:%d unmount:%d", mount, update, unmount)) }),
 				),
 
-				flux.Text("中文输入（原生 IME）：在输入框打字，下面回显", flux.Key("ime-hint")),
-				flux.Input(flux.Bind(name), flux.Key("input"),
+				flux.Text("中文输入（原生 IME）：在输入框打字，下面回显"),
+				flux.Input(flux.Bind(name),
 					flux.OnKeyPress(func(e flux.Event) {
 						status.Set(fmt.Sprintf("keypress: %q", e.Text))
 					}),
 				),
-				flux.Text(flux.Bind(name), flux.Key("echo")),
-				flux.Text(flux.Bind(status), flux.Key("status")),
-				flux.Text(flux.Bind(life), flux.Key("life")),
+				flux.Text(flux.Bind(name)),
+				flux.Text(flux.Bind(status)),
+				flux.Text(flux.Bind(life)),
 			),
 		)
 	})

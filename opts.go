@@ -22,8 +22,18 @@ func Title(s string) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Text", s) })
 }
 
-// Key 设置稳定身份（D3）。列表/可变子节点必须用模型来源的稳定 key，
-// 绝不用数组 index、绝不每次 render 随机 —— 否则 VCL 焦点/caret/IME 会漂移。
+// Key 设置稳定身份（D3）—— 用于 reconciliation 的 identity，不是寻址。
+//
+// 只在以下场景必须：
+//   - 动态列表/可变子节点：key 必须来自模型（ID），绝不用数组 index、绝不每次
+//     render 随机 —— 否则重排时 VCL 焦点/caret/IME 会漂移（index key 会迁到错行）；
+//   - Component 身份（透明分组跨 render 复用子树）；
+//   - App.SetBounds 动画目标（跨 render 保持同一控件）；
+//   - 同类型多 handler 需用事件 e.Source 区分（无 key 时 Source 回落为树路径，
+//     结构变动会漂移 —— 需要稳定身份请用 Key）。
+//
+// 静态树（结构固定、不重排）可不写 Key：无 key 控件按位置匹配，且可用
+// App.FindByPath（隐式寻址）定位 —— 寻址与身份解耦（见 diff 包文档）。
 func Key(k string) Opt {
 	return optFn(func(n *Node) { n.Key = k })
 }

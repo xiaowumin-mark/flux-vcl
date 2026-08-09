@@ -8,11 +8,17 @@
 //   - canUpdate：旧控件类型==新类型 && 旧key==新key → 原地 patch；否则只重建该节点。
 //   - 属性级 patch：逐属性比较（widget.Props.Diff），只对变化者调 Set*。
 //   - 稳定 key：带 key 的列表按 key 匹配复用（重排不重建）；无 key 按位置匹配。
+//   - 隐式寻址（D3 补充）：每个 Element 维护树路径 Path（"Window/0/Column/1/Text"），
+//     供 FindByPath 定位与事件 Source 回落 —— 寻址与身份解耦：静态树零 Key 也可寻址，
+//     身份敏感的控件（列表行/动画目标/需 Source 区分的同型控件）仍用稳定 Key。
 //
 // 事件回调 / 逃逸口（函数值）无法比较相等性，每次 diff 重新绑定（D2 逃逸口行为）。
 package diff
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/xiaowumin-mark/flux-vcl/internal/render"
 	"github.com/xiaowumin-mark/flux-vcl/internal/widget"
 )
@@ -35,9 +41,15 @@ func transparentType(t string) bool {
 // 在控件存活期间复用同一 Element（Type+Key 匹配时），持有当前原生句柄
 // 与上一次的 Props（prevConfig，用于属性级 diff）。widget 树每次重建，
 // Element 树跨 render 存活 —— 二者通过 reconcile 对齐。
+//
+// Path 是该元素每次 render 时的树路径（"Window/0/Column/1/Text"，含自身类型），
+// 由 mount/reconcile 自顶向下维护 —— 隐式寻址（FindByPath）与无 Key 控件的事件
+// Source 回落的数据源。Path 是位置身份：结构重排后随之漂移（这正是静态树适用、
+// 身份敏感控件需用稳定 Key 的原因）。
 type Element struct {
 	Type     string
 	Key      string
+	Path     string
 	Props    *widget.Props // prevConfig：上一次成功 reconcile 的属性集
 	Handle   render.Handle // 原生句柄（透明容器 = 父容器句柄）
 	Parent   *Element
@@ -73,6 +85,9 @@ func IsTransparent(t string) bool { return transparentType(t) }
 //
 // Phase 5.1 动画的逃逸口支撑：App.SetBounds 用稳定 key 定位 Element 句柄，
 // 直接应用几何而不重跑 diff（D2 逃逸口）。未找到返回 nil。
+//
+// key 是稳定身份（D3）—— 动画目标、跨 render 需要保持同一控件的场景必须用 key
+// 定位（路径会随结构变动漂移）。静态树/一次性寻址用 FindByPath。
 func (rc *Reconciler) Lookup(key string) *Element {
 	if rc.root == nil || key == "" {
 		return nil
@@ -92,6 +107,41 @@ func (rc *Reconciler) Lookup(key string) *Element {
 	return find(rc.root)
 }
 
+// FindByPath 沿控件树定位 Element（隐式寻址，D3 补充：寻址与身份解耦）。
+//
+// 静态树（结构固定、不重排）可不写 Key，用路径定位测试/排查目标；身份敏感的
+// 控件（列表行/动画目标/需 Source 区分的同型控件）仍用 Key（D3）+ Lookup。
+//
+// path 格式为每次 render 维护的 Element.Path："Window/0/Column/1/Text"。
+// 首段为当前节点（通常为根）类型，必须匹配；其后交替 数字段=取子节点下标、
+// 类型段=校验该子节点类型。未命中（含空路径/nil 接收者）返回 nil。
+func (e *Element) FindByPath(path string) *Element {
+	if e == nil || path == "" {
+		return nil
+	}
+	segs := strings.Split(path, "/")
+	if segs[0] != e.Type {
+		return nil
+	}
+	cur := e
+	i := 1
+	for i < len(segs) {
+		idx, err := strconv.Atoi(segs[i])
+		if err != nil || idx < 0 || idx >= len(cur.Children) {
+			return nil
+		}
+		i++
+		cur = cur.Children[idx]
+		if i < len(segs) {
+			if segs[i] != cur.Type {
+				return nil
+			}
+			i++
+		}
+	}
+	return cur
+}
+
 // Render 对整棵树做一次 diff：首次调用挂载整棵树，后续按 D1/D2 增量 patch。
 //
 // 返回本次产生的 mutation op 列表（已直接应用到 renderer；副本返回供断言/日志）。
@@ -99,17 +149,18 @@ func (rc *Reconciler) Lookup(key string) *Element {
 func (rc *Reconciler) Render(root *widget.Node) []render.Op {
 	rc.lastOps = nil
 	if rc.root == nil {
-		rc.root = rc.mount(root, 0)
+		rc.root = rc.mount(root, 0, root.Type)
 	} else {
-		rc.root = rc.reconcile(rc.root, root)
+		rc.root = rc.reconcile(rc.root, root, root.Type)
 	}
 	return append([]render.Op(nil), rc.lastOps...)
 }
 
 // mount 挂载新子树：创建原生控件（透明容器除外）、应用全部属性、递归子节点。
+// path 为该节点的树路径（隐式寻址，自顶向下拼接），子节点路径 = 父路径+下标+类型。
 // 子树全部挂载完成后触发 OnMount（Phase 4.3：父钩子在子钩子之后，可访问完整子树）。
-func (rc *Reconciler) mount(node *widget.Node, parentHandle render.Handle) *Element {
-	e := &Element{Type: node.Type, Key: node.Key, Props: node.Props}
+func (rc *Reconciler) mount(node *widget.Node, parentHandle render.Handle, path string) *Element {
+	e := &Element{Type: node.Type, Key: node.Key, Path: path, Props: node.Props}
 
 	if transparentType(node.Type) {
 		e.Handle = parentHandle // 透明容器：无原生控件，继承父句柄
@@ -119,8 +170,8 @@ func (rc *Reconciler) mount(node *widget.Node, parentHandle render.Handle) *Elem
 		rc.applyProps(e, node.Props)
 	}
 
-	for _, c := range node.Children {
-		ce := rc.mount(c, e.Handle)
+	for i, c := range node.Children {
+		ce := rc.mount(c, e.Handle, path+"/"+strconv.Itoa(i)+"/"+c.Type)
 		ce.Parent = e
 		e.Children = append(e.Children, ce)
 		if !transparentType(c.Type) {
@@ -137,12 +188,13 @@ func (rc *Reconciler) mount(node *widget.Node, parentHandle render.Handle) *Elem
 // 子树对齐完成后，若节点存在"真实属性变化"（非事件重绑/生命周期钩子），触发
 // OnUpdate（Phase 4.3：Flutter didUpdateWidget 语义 —— 配置变化才回调，避免
 // 每次 render 都触发导致钩子里 Set State → 无限 re-render）。
-func (rc *Reconciler) reconcile(old *Element, node *widget.Node) *Element {
+func (rc *Reconciler) reconcile(old *Element, node *widget.Node, path string) *Element {
 	if !canUpdate(old, node) {
 		rc.destroySubtree(old)
-		return rc.mount(node, old.parentHandle())
+		return rc.mount(node, old.parentHandle(), path)
 	}
 
+	old.Path = path // 位置变更（重排/跨容器移动）时更新；事件 Source 回落据此取最新路径
 	changed := rc.patchProps(old, node)
 	rc.reconcileChildren(old, node)
 	if changed {
@@ -335,7 +387,11 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 			if ef, ok := v.(func(render.Event)); ok {
 				src := e.Type
 				if e.Key != "" {
-					src += "#" + e.Key
+					src += "#" + e.Key // 稳定身份（D3）：跨 render 不漂移
+				} else if e.Path != "" {
+					src += "@" + e.Path // 隐式寻址回落：无 key 时用树路径（含类型），
+					// 静态树可零 Key 区分同型控件；结构重排后路径随之漂移 —— 需要稳定
+					// 身份的同型多 handler 请用 Key（D3）。
 				}
 				rc.r.SetEvent(e.Handle, key, func(ev render.Event) {
 					render.Guard("event."+key, func() {
@@ -395,7 +451,8 @@ func (rc *Reconciler) reconcileChildren(oldP *Element, newP *widget.Node) {
 	used := make(map[*Element]bool)
 	newElems := make([]*Element, 0, len(newP.Children))
 	posIdx := 0
-	for _, nc := range newP.Children {
+	for i, nc := range newP.Children {
+		childPath := oldP.Path + "/" + strconv.Itoa(i) + "/" + nc.Type // 隐式寻址：子路径 = 父路径+下标+类型
 		var oe *Element
 		if nc.Key != "" {
 			if cand := oldByKey[nc.Key]; cand != nil && !used[cand] {
@@ -411,9 +468,9 @@ func (rc *Reconciler) reconcileChildren(oldP *Element, newP *widget.Node) {
 			if nc.Key == "" {
 				posIdx++ // 消耗一个无 key 旧槽位
 			}
-			ne = rc.reconcile(oe, nc)
+			ne = rc.reconcile(oe, nc, childPath)
 		} else {
-			ne = rc.mount(nc, oldP.Handle)
+			ne = rc.mount(nc, oldP.Handle, childPath)
 		}
 
 		// 仅当父关系实际变化（新建或跨容器移动）才发挂载 op；

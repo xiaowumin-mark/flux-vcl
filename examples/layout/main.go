@@ -32,12 +32,12 @@ import (
 )
 
 // scrollItems 左面板滚动列表内容：20 行文本（Phase 3.6 滚动容器 demo）。
-// 行高 20 + 间距 4 → 内容总高 476，超 viewport 触发原生滚动；行 key 稳定
-// （si0..si19）保证 diff 只 patch Bounds 不重建。
+// 行高 20 + 间距 4 → 内容总高 476，超 viewport 触发原生滚动。固定 20 行、不增删
+// 不重排 → 按位置匹配即可，静态列表无需逐行 key（D3：寻址与身份解耦）。
 func scrollItems() flux.Widget {
 	var kids []any
 	for i := range 20 {
-		kids = append(kids, flux.Text(fmt.Sprintf("scroll item %d", i), flux.Key(fmt.Sprintf("si%d", i))))
+		kids = append(kids, flux.Text(fmt.Sprintf("scroll item %d", i)))
 	}
 	return flux.Column(kids...)
 }
@@ -70,42 +70,42 @@ func main() {
 	app.Mount(func() flux.Widget {
 		return flux.Window(
 			flux.Title("FluxVCL "+flux.Version+" - layout (Phase 3)"),
+			// 静态树零 Key（D3：寻址与身份解耦）—— 布局/resize 全靠位置匹配复用，
+			// 测试定位用 App.FindByPath("Window/0/Column/1/Row/0/Column/0/Input") 等。
 			flux.Column(
 				// 顶栏：标题 + counter 按钮（冒烟断言目标）+ 操作提示
 				flux.Row(
-					flux.Text("Panel demo", flux.Key("title")),
-					flux.Button(flux.Bind(count), flux.Key("btn"), flux.OnClick(func(_ flux.Event) {
+					flux.Text("Panel demo"),
+					flux.Button(flux.Bind(count), flux.OnClick(func(_ flux.Event) {
 						count.Set(count.Get() + 1)
 					})),
-					flux.Text("拖动窗口边框，看左右面板即时重分割", flux.Key("hint")),
+					flux.Text("拖动窗口边框，看左右面板即时重分割"),
 				),
 
 				// 主区域：Expanded 拿满剩余高度，内部 1:2 左右分栏
 				// （右面板宽度是左面板 2 倍；resize 时按新宽度重算分配）
 				flux.Expanded(flux.Row(
 					flux.Expanded(flux.Column(
-						flux.Key("left"),
 						flux.CrossAxis(flux.CrossAxisStretch),
-						flux.Text("Left 1/3", flux.Key("lt")),
-						flux.Input(flux.Bind(leftName), flux.Key("li")),
-						flux.Text(flux.Bind(leftName), flux.Key("echo")),
+						flux.Text("Left 1/3"),
+						flux.Input(flux.Bind(leftName)),
+						flux.Text(flux.Bind(leftName)),
 						// Phase 3.6 滚动列表：Expanded 给 ScrollBox 有界高度，
 						// 内容 20 行超高 → 原生滚动条（滚动轴 unbounded 测量）。
 						flux.Expanded(flux.ScrollBox(scrollItems())),
 					), 1),
 					flux.Expanded(flux.Column(
-						flux.Key("right"),
 						flux.CrossAxis(flux.CrossAxisStretch),
-						flux.Text("Right 2/3", flux.Key("rt")),
+						flux.Text("Right 2/3"),
 						// §8 smoke 约束：窗口内 Button 必须唯一（左侧 counter 为冒烟断言目标），
 						// 右侧面板用静态 Text 占位。
-						flux.Text("Right panel", flux.Key("rb")),
+						flux.Text("Right panel"),
 					), 2),
 				)),
 
 				// 底栏：固定文案 + DPI 读数（Phase 3.5；跨 goroutine State.Set dogfood）
-				flux.Text("Bottom bar", flux.Key("bottom")),
-				flux.Text(flux.Bind(dpiLabel), flux.Key("dpi")),
+				flux.Text("Bottom bar"),
+				flux.Text(flux.Bind(dpiLabel)),
 			),
 		)
 	})

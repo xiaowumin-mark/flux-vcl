@@ -142,7 +142,10 @@ func main() {
 				// 注：win32 后端下 LCL TButton 由 OS 主题绘制，Color/FontColor 均不渲染
 				// （探针实测内部状态更新、屏幕像素不变）。故按钮不设背景/文字色 —— 主题
 				// 切换的可见信号来自窗体背景、文字 FontColor 与主题 chip。
-				flux.Button(flux.Bind(count), flux.Key("btn"),
+				// 静态树零 Key（D3：寻址与身份解耦）。保留两个 Key 供特殊场景：
+				// "box" = App.SetBounds 动画目标（跨 render 稳定身份）、
+				// "card" = Component 透明分组身份（下方）。其余静态控件按位置匹配。
+				flux.Button(flux.Bind(count),
 					flux.OnClick(func(e flux.Event) {
 						count.Set(count.Get() + 1)
 						slide()     // 5.1 动画（D2 逃逸口，不经 re-diff）
@@ -153,7 +156,7 @@ func main() {
 				// 主题切换（5.2）：可点击 Text chip（TLabel 无 HWND，非 Button，不扰冒烟）。
 				// Bind(themeName) 把 State 订阅到 App —— Set 才触发全量 re-diff（同 count/load 路径）。
 				flux.Row(
-					flux.Text(flux.Bind(themeName), flux.Key("theme-chip"),
+					flux.Text(flux.Bind(themeName),
 						flux.FontColor(th.Accent),
 						flux.OnClick(func(e flux.Event) {
 							if themeName.Get() == "light" {
@@ -172,7 +175,7 @@ func main() {
 					return flux.Column(
 						flux.Row(
 							flux.Text("Async: ", flux.FontColor(th.Text)),
-							flux.Text(flux.Bind(load), flux.Key("async-status"), flux.FontColor(th.Text)),
+							flux.Text(flux.Bind(load), flux.FontColor(th.Text)),
 						),
 						// 动画方块（滑动目标；5.1）
 						flux.Text("●", flux.Key("box"),

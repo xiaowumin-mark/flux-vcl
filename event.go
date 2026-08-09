@@ -6,7 +6,9 @@ import "github.com/xiaowumin-mark/flux-vcl/internal/render"
 //
 // Event 及事件类型/修饰键/鼠标按键定义在 internal/render（绑定层构造事件
 // 的依赖面，D6 隔离），此处 re-export 给用户。坐标 X/Y 为 DIP，相对事件源
-// 控件客户区；Source 为 "Type#Key"（稳定身份，D3），由 diff 引擎注入。
+// 控件客户区；Source 由 diff 引擎注入：带 Key 时 "Type#Key"（稳定身份，D3），
+// 无 Key 时回落为 "Type@树路径"（隐式寻址，如 "Button@Window/0/Column/1/Button"，
+// 结构重排后漂移 —— 需要稳定身份的同型多 handler 请用 Key）。
 //
 // 事件回调每次 render 重新绑定（函数值无法比较相等性，D2 逃逸口行为）。
 

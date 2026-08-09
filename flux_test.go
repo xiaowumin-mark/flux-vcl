@@ -183,3 +183,36 @@ func onClickOf(t *testing.T, n *flux.Node, typ string) func(flux.Event) {
 	}
 	return nil
 }
+
+// TestAppFindByPath 隐式寻址（App 层）：静态树零 Key，按树路径定位 Element。
+// 寻址与身份解耦（D3 补充）—— 测试/排查不再被迫给每个控件起 Key。
+func TestAppFindByPath(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+
+	app.Render(flux.Window(flux.Column(
+		flux.Text("a"),
+		flux.Button("b"),
+	)))
+
+	btn := app.FindByPath("Window/0/Column/1/Button")
+	if btn == nil || btn.Type != "Button" {
+		t.Fatalf("FindByPath(Button) = %+v，期望命中 Button", btn)
+	}
+	if btn.Path != "Window/0/Column/1/Button" {
+		t.Errorf("btn.Path = %q，期望 Window/0/Column/1/Button", btn.Path)
+	}
+	if got := app.FindByPath("Window/0/Column/0/Text"); got == nil || got.Type != "Text" {
+		t.Errorf("FindByPath(Text) = %+v，期望命中 Text", got)
+	}
+	// 越界 / 根类型不符 → nil
+	if got := app.FindByPath("Window/0/Column/9/Button"); got != nil {
+		t.Errorf("越界路径应返回 nil，实际命中 %s", got.Type)
+	}
+	if got := app.FindByPath("Row/0"); got != nil {
+		t.Errorf("根类型不符应返回 nil，实际命中 %s", got.Type)
+	}
+	if got := app.FindByPath(""); got != nil {
+		t.Errorf("空路径应返回 nil，实际 %+v", got)
+	}
+}

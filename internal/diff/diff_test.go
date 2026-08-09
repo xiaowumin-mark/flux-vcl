@@ -420,3 +420,101 @@ func TestPanicInLifecycleIsCaught(t *testing.T) {
 		rc.Render(windowTree(colWith(btn)))
 	}()
 }
+
+// TestFindByPath 隐式寻址：每个 Element 维护树路径（"类型/下标/类型..."），
+// 静态树零 Key 也可定位（寻址与身份解耦，D3 补充）。验证类型校验/越界/空路径，
+// 以及带 key 控件重排后 Path 跟随新位置（身份复用，位置漂移）。
+func TestFindByPath(t *testing.T) {
+	m := render.NewMock()
+	rc := diff.New(m)
+
+	// Window
+	// ├─ Column(0)
+	// │  ├─ Text "a"(0)
+	// │  └─ Button "b"(1)
+	// └─ Row(1)
+	//    └─ Text "c"(0)
+	w := widget.NewNode("Window")
+	col := colWith(textNode("a", ""), btnNode("b", ""))
+	row := widget.NewNode("Row")
+	row.Add(textNode("c", ""))
+	w.Add(col)
+	w.Add(row)
+
+	rc.Render(w)
+	root := rc.Root()
+
+	// 路径值由 mount 自顶向下维护。
+	if got := root.Path; got != "Window" {
+		t.Errorf("root.Path = %q，期望 Window", got)
+	}
+	colEl := root.Children[0]
+	if got := colEl.Path; got != "Window/0/Column" {
+		t.Errorf("col.Path = %q，期望 Window/0/Column", got)
+	}
+	btnEl := root.Children[0].Children[1]
+	if got := btnEl.Path; got != "Window/0/Column/1/Button" {
+		t.Errorf("btn.Path = %q，期望 Window/0/Column/1/Button", got)
+	}
+
+	// 按路径定位：类型段校验 + 下标段选子。
+	cases := []struct {
+		path string
+		typ  string
+	}{
+		{"Window", "Window"},
+		{"Window/0/Column", "Column"},
+		{"Window/0/Column/0/Text", "Text"},
+		{"Window/0/Column/1/Button", "Button"},
+		{"Window/1/Row/0/Text", "Text"},
+		{"Window/0/Column/1/Button/", ""}, // 尾部空段：Atoi 失败 → nil
+	}
+	for _, c := range cases {
+		got := root.FindByPath(c.path)
+		if c.typ == "" {
+			if got != nil {
+				t.Errorf("FindByPath(%q) 应返回 nil，实际命中 %s", c.path, got.Type)
+			}
+			continue
+		}
+		if got == nil {
+			t.Errorf("FindByPath(%q) = nil，期望命中 %s", c.path, c.typ)
+			continue
+		}
+		if got.Type != c.typ {
+			t.Errorf("FindByPath(%q).Type = %s，期望 %s", c.path, got.Type, c.typ)
+		}
+	}
+
+	// 类型不符 / 越界 / 根类型不符 / 空路径 / nil 接收者 → nil。
+	for _, path := range []string{"Window/0/Row", "Window/5/Column", "Column/0/Text", "", "Window/0/Column/0/Button"} {
+		if got := root.FindByPath(path); got != nil {
+			t.Errorf("FindByPath(%q) 应返回 nil，实际命中 %s", path, got.Type)
+		}
+	}
+	var nilEl *diff.Element
+	if got := nilEl.FindByPath("Window"); got != nil {
+		t.Errorf("nil 接收者 FindByPath 应返回 nil，实际 %+v", got)
+	}
+
+	// 带 key 控件重排：按 key 复用同一 Element（句柄不变），Path 跟随新位置。
+	keyed := colWith(textNode("a", ""), btnNode("b", "b"))
+	rc.Render(windowTree(keyed))
+	bEl := rc.Root().FindByPath("Window/0/Column/1/Button")
+	if bEl == nil {
+		t.Fatal("keyed 首次 render 未命中 Button")
+	}
+	bHandle := bEl.Handle
+
+	rc.Render(windowTree(colWith(textNode("a", ""), textNode("x", ""), btnNode("b", "b")))) // b 移到下标 2
+	bEl2 := rc.Root().FindByPath("Window/0/Column/2/Button")
+	if bEl2 == nil {
+		t.Fatalf("重排后按新路径未命中 Button（应原地复用）")
+	}
+	if bEl2.Handle != bHandle {
+		t.Errorf("keyed 重排应复用同一句柄：%v != %v（位置身份需配合稳定 key）", bEl2.Handle, bHandle)
+	}
+	if got := bEl2.Path; got != "Window/0/Column/2/Button" {
+		t.Errorf("重排后 Path = %q，期望 Window/0/Column/2/Button（路径跟随新位置）", got)
+	}
+}

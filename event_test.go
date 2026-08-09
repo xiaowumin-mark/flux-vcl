@@ -234,6 +234,38 @@ func TestStateSetInsideLifecycleNoDeadlock(t *testing.T) {
 	}
 }
 
+// TestSourceFallbackToPath 无 key 控件的事件 Source 回落为 "Type@树路径"
+// （隐式寻址）—— 静态树同型多 handler 可零 Key 区分来源。路径是位置身份：
+// 结构重排后漂移，需要跨 render 稳定身份请用 Key（D3）。
+func TestSourceFallbackToPath(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+
+	var got flux.Event
+	app.Render(flux.Window(flux.Column(
+		flux.Button("A", flux.OnClick(func(e flux.Event) { got = e })),
+		flux.Button("B", flux.OnClick(func(e flux.Event) { got = e })),
+	)))
+
+	btnA := app.FindByPath("Window/0/Column/0/Button")
+	btnB := app.FindByPath("Window/0/Column/1/Button")
+	if btnA == nil || btnB == nil {
+		t.Fatal("FindByPath 未命中两个无 key 按钮")
+	}
+	if btnA.Handle == btnB.Handle {
+		t.Fatal("两个按钮不应共享句柄")
+	}
+
+	m.EventHandler(btnA.Handle, "OnClick").(func(flux.Event))(flux.Event{Type: flux.EventClick})
+	if got.Source != "Button@Window/0/Column/0/Button" {
+		t.Errorf("btnA Source = %q，期望 Button@Window/0/Column/0/Button（无 key 回落为路径）", got.Source)
+	}
+	m.EventHandler(btnB.Handle, "OnClick").(func(flux.Event))(flux.Event{Type: flux.EventClick})
+	if got.Source != "Button@Window/0/Column/1/Button" {
+		t.Errorf("btnB Source = %q，期望 Button@Window/0/Column/1/Button", got.Source)
+	}
+}
+
 // TestModifierComposition 修饰键按位组合可组合断言（ModCtrl|ModShift）。
 func TestModifierComposition(t *testing.T) {
 	if flux.ModShift|flux.ModCtrl == 0 {

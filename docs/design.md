@@ -622,16 +622,37 @@ WM_PAINT，无额外开销）。另见 §14 win32 颜色不渲染限制。
 
 # 17. Key 系统
 
-用于节点身份：
+`Key` 用于**节点身份**（reconciliation 的 identity），与**寻址**（如何定位一个控件）解耦。
+
+## 身份（identity，跨 render 稳定）
+
+用于 List / Tree / Table 等**动态/可变子节点**，保证重排不重建、焦点/caret/IME 不漂移：
 
 ```go
 Text(
     user.Name,
-    Key(user.ID),
+    Key(user.ID),   // 必须来自模型，绝不 index、绝不每次 render 随机
 )
 ```
 
-用于：List / Tree / Table。
+只在以下场景必须写 Key：
+
+- **动态列表/可变子节点**：key 必须来自模型（ID）；index key 会让 VCL 焦点/caret/IME 迁到错行（正确性 bug，不只是性能）。
+- **Component 身份**：透明分组跨 render 复用子树，身份靠外部 Key 稳定。
+- **`App.SetBounds` 动画目标**：跨 render 保持同一控件。
+- **同类型多 handler 需用事件 `e.Source` 区分**。
+
+## 寻址（addressing，静态树定位）
+
+静态树（结构固定、不重排）**可不写 Key**：无 key 控件按位置匹配，且框架为每个
+Element 维护树路径 `Path`（如 `"Window/0/Column/1/Text"`），提供隐式寻址：
+
+- `App.FindByPath("Window/0/Column/1/Text")` / `diff.Element.FindByPath` —— 定位 Element
+  （测试/排查用），未命中返回 nil。
+- 事件 `Event.Source` 无 Key 时回落为 `"Type@路径"`（如 `"Button@Window/0/Column/1/Button"`）。
+
+路径是**位置身份**：结构重排后随之漂移 —— 这正是它只适用于静态树、身份敏感控件
+仍须用稳定 Key 的原因。路径格式：首段为根类型（校验），其后交替 `下标/类型`。
 
 ---
 

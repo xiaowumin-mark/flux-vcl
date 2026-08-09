@@ -84,10 +84,28 @@ func (a *App) Animate(duration time.Duration, curve Curve, onStep func(v float64
 // 目标必须是带稳定 key 的真实控件（透明容器/Window 跳过 —— 无独立原生句柄）。
 // 与布局的关系：本方法不改 Element 的 Bounds 属性，布局在下次 render 会按
 // 布局结果决定是否 patch 回 —— 布局槽位不变时 diff 不发 SetBounds，动画位置保持。
+//
+// key 必须是稳定身份（D3）：动画目标是跨 render 保持同一控件的场景，路径会随
+// 结构变动漂移，故不能用 FindByPath 定位（静态树/一次性寻址用 FindByPath）。
 func (a *App) SetBounds(key string, r render.Rect) {
 	if e := a.rc.Lookup(key); e != nil && !diff.IsTransparent(e.Type) && e.Type != "Window" {
 		a.r.SetBounds(e.Handle, r)
 	}
+}
+
+// FindByPath 按控件树路径定位 Element（隐式寻址，D3 补充：寻址与身份解耦）。
+//
+// 静态树（结构固定、不重排）可不写 Key，用路径定位测试/排查目标。path 格式
+// 见 diff.Element.FindByPath："Window/0/Column/1/Text" —— 首段为根类型，其后
+// 交替 数字=子节点下标、类型=该校验子节点类型。未挂载或路径不符返回 nil。
+//
+// 身份敏感的控件（列表行/动画目标/需 Source 区分的同型控件）请用 Key + SetBounds/
+// Root 定位 —— 路径是位置身份，结构重排后漂移。
+func (a *App) FindByPath(path string) *diff.Element {
+	if r := a.rc.Root(); r != nil {
+		return r.FindByPath(path)
+	}
+	return nil
 }
 
 // Async 在后台 goroutine 执行 load；完成后经 renderer.RunOnUI marshal 到 UI 线程

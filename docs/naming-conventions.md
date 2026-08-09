@@ -130,7 +130,7 @@ examples/<name>/
 `Event{ Type, X, Y, Key, Text, Button, Mods, Source }`
 
 - 字段：短名，几何用 DIP 的 `X/Y`，键盘 `Key`，IME 结果 `Text`，鼠标 `Button`，修饰键 `Mods`，控件标识 `Source`。
-- `Source` 格式：`"<Type>#<Key>"`（如 `"Button#btn"`），未设 Key 时 `"Button#"`。
+- `Source` 格式：带 Key 时 `"<Type>#<Key>"`（如 `"Button#btn"`，稳定身份 D3）；未设 Key 时回落为 `"<Type>@<树路径>"`（隐式寻址，如 `"Button@Window/0/Column/1/Button"`，结构重排后漂移）。
 
 ### 4.6 内部类型（internal/）
 

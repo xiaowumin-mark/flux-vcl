@@ -66,35 +66,38 @@ func main() {
 		return flux.Window(
 			flux.Title("FluxVCL "+flux.Version+" - phase6 (虚拟列表/多窗口)"),
 			flux.Color(th.Background),
+			// 静态树零 Key（D3：寻址与身份解耦）—— 头/控制行固定不重排，位置匹配即可；
+			// 虚拟列表行身份由 ListView 内部控制池 slot key（row-N）提供，builder 产物
+			// 不写 key（否则滚动换内容时重建，破坏控件池）。
 			flux.Column(
 				// 头部：标题 + 唯一按钮（smoke 目标）+ 滚动位置读数
 				flux.Row(
 					flux.Text("10 万行虚拟列表", flux.FontColor(th.Text), flux.Width(140)),
-					flux.Button(flux.Bind(count), flux.Key("counter"),
+					flux.Button(flux.Bind(count),
 						flux.OnClick(func(e flux.Event) { count.Set(count.Get() + 1) })),
 					flux.Expanded(flux.Text("滚动: ", flux.FontColor(th.Text))),
-					flux.Text(flux.Bind(scroll), flux.Key("scroll-pos"), flux.FontColor(th.Accent)),
+					flux.Text(flux.Bind(scroll), flux.FontColor(th.Accent)),
 					flux.Text(" DIP", flux.FontColor(th.Text)),
 					// 选中行读数：把 sel 绑出来 = 订阅 App（design §9）。行 builder 里
 					// 的 sel.Get() 只是普通读、不订阅；未 Bind 的 State 其 Set 只改内存
 					// 值、不触发 re-render（phase5 主题 chip 同坑）—— 点击行标记后
 					// 必须有这次 render 才看得到 ○→●。
 					flux.Text("  | 已选中: ", flux.FontColor(th.Text)),
-					flux.Text(flux.Bind(sel), flux.Key("sel-pos"), flux.FontColor(th.Accent)),
+					flux.Text(flux.Bind(sel), flux.FontColor(th.Accent)),
 					flux.Text(" 行", flux.FontColor(th.Text)),
 				),
 				// 控制行：滚动/选中操作（可点击 Text，非 Button 类，不扰冒烟）
 				flux.Row(
-					flux.Text("⬆ 滚到顶", flux.Key("to-top"), flux.FontColor(th.Accent),
+					flux.Text("⬆ 滚到顶", flux.FontColor(th.Accent),
 						flux.OnClick(func(flux.Event) { scroll.Set(0) })),
-					flux.Text("⬇ 滚到底", flux.Key("to-bottom"), flux.FontColor(th.Accent),
+					flux.Text("⬇ 滚到底", flux.FontColor(th.Accent),
 						flux.OnClick(func(flux.Event) { scroll.Set(maxOffset) })),
-					flux.Text("选中第 50000 行", flux.Key("sel-50k"), flux.FontColor(th.Accent),
+					flux.Text("选中第 50000 行", flux.FontColor(th.Accent),
 						flux.OnClick(func(flux.Event) {
 							sel.Set(50000)
 							scroll.Set(50000 * rowH) // 滚动到目标行（可见区中部）
 						})),
-					flux.Text("清除选中", flux.Key("sel-clear"), flux.FontColor(th.Text),
+					flux.Text("清除选中", flux.FontColor(th.Text),
 						flux.OnClick(func(flux.Event) { sel.Set(-1) })),
 				),
 				// 虚拟列表：占满剩余高度（Expanded → 有界约束）
