@@ -55,9 +55,9 @@ func main() {
 	r := native.NewRenderer()
 	app := flux.NewApp(r)
 
-	count := flux.NewState(0)          // counter（smoke 断言按钮文本变数字）
+	count := flux.NewState(0)           // counter（smoke 断言按钮文本变数字）
 	themeName := flux.NewState("light") // 主题名 light/dark（5.2）；Bind 到 chip 文字以订阅 re-render
-	load := flux.NewState("idle")      // Async 加载状态（5.3）
+	load := flux.NewState("idle")       // Async 加载状态（5.3）
 
 	// 当前动画的停止函数：连续点击时先停上一段（每帧 SetBounds 是幂等的覆盖，
 	// 但停止可省 60fps pump 的 CPU）。

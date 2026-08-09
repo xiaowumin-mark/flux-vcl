@@ -12,11 +12,11 @@ func TestPropsDiff(t *testing.T) {
 	oldP.Set("OnClick", func() {}) // 函数值
 
 	newP := NewProps()
-	newP.Set("Text", "hello")              // 未变
-	newP.Set("Visible", false)             // 变化
+	newP.Set("Text", "hello")                                // 未变
+	newP.Set("Visible", false)                               // 变化
 	newP.Set("Bounds", struct{ X, Y, W, H int }{1, 2, 3, 4}) // 未变
-	newP.Set("OnClick", func() {})         // 新闭包 → 恒变化
-	newP.Set("Enabled", true)              // 新增
+	newP.Set("OnClick", func() {})                           // 新闭包 → 恒变化
+	newP.Set("Enabled", true)                                // 新增
 
 	changed := newP.Diff(oldP)
 	want := []string{"Visible", "OnClick", "Enabled"}

@@ -20,9 +20,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/energye/lcl/lcl"
 	flux "github.com/xiaowumin-mark/flux-vcl"
 	"github.com/xiaowumin-mark/flux-vcl/internal/native"
-	"github.com/energye/lcl/lcl"
 )
 
 func main() {
@@ -46,7 +46,7 @@ func main() {
 	app := flux.NewApp(r)
 
 	// State 原语：Set 可跨 goroutine，re-render 自动 marshal 到 UI 线程。
-	count := flux.NewState(0)       // counter 计数（单向绑定 → Button 文本）
+	count := flux.NewState(0)        // counter 计数（单向绑定 → Button 文本）
 	name := flux.NewState("FluxVCL") // two-way 绑定目标（Input ↔ Text 回显）
 
 	app.Mount(func() flux.Widget {

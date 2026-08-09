@@ -11,10 +11,10 @@ import (
 // TestConstructorsBuildNode 各构造器生成正确的节点：类型、文本属性、key。
 func TestConstructorsBuildNode(t *testing.T) {
 	cases := []struct {
-		name  string
-		w     flux.Widget
-		typ   string
-		text  string
+		name string
+		w    flux.Widget
+		typ  string
+		text string
 	}{
 		{"Button", flux.Button("OK"), "Button", "OK"},
 		{"Text", flux.Text("hi"), "Text", "hi"},

@@ -48,8 +48,8 @@ func main() {
 	r := native.NewRenderer()
 	app := flux.NewApp(r)
 
-	count := flux.NewState(0)      // counter（smoke 断言按钮文本变数字）
-	name := flux.NewState("中文")    // two-way 绑定：Input ↔ Text 回显（原生 IME）
+	count := flux.NewState(0)   // counter（smoke 断言按钮文本变数字）
+	name := flux.NewState("中文") // two-way 绑定：Input ↔ Text 回显（原生 IME）
 	status := flux.NewState("hover / click / press keys / type Chinese")
 	life := flux.NewState("mount:0 update:0 unmount:0") // 生命周期读数
 

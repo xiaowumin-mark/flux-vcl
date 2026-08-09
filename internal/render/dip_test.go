@@ -6,10 +6,10 @@ import "testing"
 // 基准 96 DPI，四舍五入：dip*dpi/96。
 func TestDIPToPX(t *testing.T) {
 	cases := []struct {
-		name   string
-		dip    int
-		dpi    int
-		want   int
+		name string
+		dip  int
+		dpi  int
+		want int
 	}{
 		{"96 DPI 恒等", 42, 96, 42},
 		{"144 DPI 1.5x 整数", 10, 144, 15},

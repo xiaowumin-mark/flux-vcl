@@ -19,15 +19,15 @@ import (
 //
 // 绑定层 renderer 必须由 internal/native 的适配器创建（D6 隔离）。
 type App struct {
-	r          render.Renderer
-	rc         *diff.Reconciler
-	build      func() Widget
-	mu         sync.Mutex
-	renderMu   sync.Mutex // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
-	pending    bool       // 脏标志：有待处理的失效（D4 合并）
-	inRender   bool       // 重入防护：当前已有 renderWidget 在栈上（生命周期钩子等 render 中触发 State.Set）
-	lastDiags  []LayoutDiag // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
-	lastInspect []NodeDiag // 最近一次 render 的全节点布局诊断（Phase 3.7 inspector）
+	r           render.Renderer
+	rc          *diff.Reconciler
+	build       func() Widget
+	mu          sync.Mutex
+	renderMu    sync.Mutex   // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
+	pending     bool         // 脏标志：有待处理的失效（D4 合并）
+	inRender    bool         // 重入防护：当前已有 renderWidget 在栈上（生命周期钩子等 render 中触发 State.Set）
+	lastDiags   []LayoutDiag // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
+	lastInspect []NodeDiag   // 最近一次 render 的全节点布局诊断（Phase 3.7 inspector）
 }
 
 // NewApp 创建 App。r 为绑定层 renderer（默认 LCL 适配见 internal/native）。

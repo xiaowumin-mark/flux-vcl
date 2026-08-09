@@ -149,4 +149,3 @@ func Input(opts ...Opt) Widget {
 	applyOpts(n, opts)
 	return widgetNode{n}
 }
-
