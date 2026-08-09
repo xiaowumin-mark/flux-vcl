@@ -40,7 +40,7 @@
 # 全量无头测试（不依赖 DLL，任意平台可跑）
 go test ./...
 
-# 构建并冒烟某个示例（basic / layout / events / phase5）
+# 构建并冒烟某个示例（basic / layout / events / phase5 / virtual-list）
 .\scripts\build.ps1 -Target <name>
 .\scripts\smoke.ps1 -Target <name>
 ```
@@ -85,7 +85,7 @@ issue（报告/提议） → 分支 → 开发（提交规范见 §4） → 本�
 
 - `phaseN`：阶段主推进（如 `phase0` `phase1` `phase4`）。
 - `example`：示例改动。
-- 子系统名：`theme` / `animation` / `state` / `layout` / `event` / `diff` / `native` / `render` / `widget` / `docs` / `ci` / `scripts`。
+- 子系统名：`theme` / `animation` / `state` / `layout` / `list` / `event` / `diff` / `native` / `render` / `widget` / `docs` / `ci` / `scripts`。
 
 ### 4.3 subject 规则
 
@@ -136,7 +136,7 @@ chore/ci-windows-smoke
 - **标题** = 一条提交信息（`type(scope): subject`）。
 - **正文**：动机（为什么）、影响面（改了哪些包 / 是否动 API）、测试（新增了哪些无头测试、是否手动冒烟）。
 - 关联 issue：`Closes #123`。
-- 触发 CI：`go test ./...` + `go vet ./...` + 构建冒烟（basic/events/phase5）。
+- 触发 CI：`go test ./...` + `go vet ./...` + 构建冒烟（basic/events/phase5/virtual-list）。
 - 触及 API 或行为：必须同步更新 `design.md` / `README.md`。
 
 ---

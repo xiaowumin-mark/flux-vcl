@@ -20,10 +20,11 @@ import (
 // transparentType 返回类型是否为透明容器：Column/Row/Expanded/Flexible 是纯
 // 逻辑分组，不创建原生控件，Element 的 handle 继承父容器，children 直接挂到祖父。
 // Component（Phase 5.4）同样是透明分组：子树 = build() 结果，身份靠外部 Key
-// （D3），不产生原生控件。
+// （D3），不产生原生控件。ListViewRow（Phase 6）是虚拟列表行：也是透明包装
+// （不建原生控件、子挂祖父），身份靠 slot key（控件池槽位，跨 render 复用）。
 func transparentType(t string) bool {
 	switch t {
-	case "Column", "Row", "Expanded", "Flexible", "Component":
+	case "Column", "Row", "Expanded", "Flexible", "Component", "ListViewRow":
 		return true
 	}
 	return false
@@ -233,6 +234,31 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 		if fn, ok := v.(func(any)); ok {
 			rc.r.ApplyNative(e.Handle, fn)
 			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Native", Value: "fn"})
+		}
+	case "ItemCount", "ItemHeight", "Builder":
+		// ListView 虚拟列表配置（Phase 6）：布局引擎据此重建可见区 slot 子树，
+		// 无对应原生属性 —— 静默忽略（Builder 是 func，漏过 default 会误走 SetEvent
+		// 触发 native panic）。
+	case "ScrollConfig": // ListView 滚动配置（内容总高/滚轮步长，DIP）→ Scrollable
+		if cfg, ok := v.(render.ScrollConfig); ok {
+			if s, ok := rc.r.(render.Scrollable); ok {
+				s.SetScrollConfig(e.Handle, cfg)
+				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "ScrollConfig", Value: cfg})
+			}
+		}
+	case "ScrollPos": // ListView 滚动位置（DIP）→ Scrollable
+		if v, ok := v.(int); ok {
+			if s, ok := rc.r.(render.Scrollable); ok {
+				s.SetScrollPos(e.Handle, v)
+				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "ScrollPos", Value: v})
+			}
+		}
+	case "Scroll": // ListView 滚动目标（ScrollTarget，可比值类型）→ 绑 OnScroll
+		if st, ok := v.(render.ScrollTarget); ok {
+			if s, ok := rc.r.(render.Scrollable); ok {
+				s.OnScroll(e.Handle, func(pos int) { st.Apply(pos) })
+				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: "Scroll", Value: st})
+			}
 		}
 	case "OnMount", "OnUpdate", "OnUnmount":
 		// 生命周期钩子（Phase 4.3）：由 mount/reconcile/destroySubtree 显式触发，

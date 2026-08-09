@@ -36,9 +36,11 @@
 | `examples/layout` | 布局引擎 demo（flex 分栏、滚动、DPI 读数） |
 | `examples/events` | 事件与生命周期 demo |
 | `examples/phase5` | **历史遗留**：阶段推进期的多特性合屏（动画/主题/Async/组件） |
+| `examples/virtual-list` | 大数据：10 万行虚拟列表（控件池虚拟化 + 滚动双向绑定 + 多窗口） |
 
 - **新增示例不再用 `phaseN`**；若需多特性合屏，按主特性命名。
 - 推荐名（按能力）：`animation` / `theme` / `async` / `component` / `scroll` / `dpi` / `inspector` / `virtual-list` / `multi-backend`…
+- `virtual-list` 为 `list` 子系统的主示例（控件池虚拟化、滚动双向绑定、多窗口三合一）。
 - **不随意重命名 / 删除既有目录**：`scripts/*.ps1 -Target` 与 CI 的引用会失效；确需改名须同步改脚本与文档。
 
 ### 2.2 目录结构（自包含）
@@ -155,7 +157,7 @@ examples/<name>/
 
 **type**：`feat` / `fix` / `docs` / `test` / `refactor` / `perf` / `build` / `ci` / `chore` / `revert`
 
-**scope**：`phaseN`（阶段主推进）、`example`、以及子系统名 —— `theme` / `animation` / `state` / `layout` / `event` / `diff` / `native` / `render` / `widget` / `docs` / `ci` / `scripts`
+**scope**：`phaseN`（阶段主推进）、`example`、以及子系统名 —— `theme` / `animation` / `state` / `layout` / `list`（Phase 6 虚拟列表） / `event` / `diff` / `native` / `render` / `widget` / `docs` / `ci` / `scripts`
 
 ---
 

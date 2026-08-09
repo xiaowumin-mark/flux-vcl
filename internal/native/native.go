@@ -65,18 +65,33 @@ func Init(dllPath string) error {
 
 // Renderer 是 energye/lcl 后端的 Renderer 实现：把窄接口调用映射到 LCL 控件。
 type Renderer struct {
-	controls     map[render.Handle]lcl.IControl
-	next         render.Handle
-	form         lcl.IControl
-	formRef      *engForm
-	measureBmp   lcl.IBitmap        // 共享测量画布（布局在 diff 前，控件未创建）
-	measureCache map[string][2]int32 // 文本测量缓存（字体随 DPI 变化时失效）
-	dpi          int32               // 当前显示器 DPI（0=未查询，invalidateDPI 清零强制重查）
-	canvasDpi    int32               // 测量 bitmap DC 的 DPI（进程内固定，缓存一次；0=未查询）
-	resizeFn       func(w, h int) // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
-	closeFn        func()         // OnClose 回调（demo 停止后台轮询）
-	closed         atomic.Bool    // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
-	pendingDestroy []lcl.IControl // D4 延后销毁队列：render 完成时 DrainDestroy 统一 Free
+	controls       map[render.Handle]lcl.IControl
+	next           render.Handle
+	form           lcl.IControl
+	formRef        *engForm
+	measureBmp     lcl.IBitmap                   // 共享测量画布（布局在 diff 前，控件未创建）
+	measureCache   map[string][2]int32           // 文本测量缓存（字体随 DPI 变化时失效）
+	dpi            int32                         // 当前显示器 DPI（0=未查询，invalidateDPI 清零强制重查）
+	canvasDpi      int32                         // 测量 bitmap DC 的 DPI（进程内固定，缓存一次；0=未查询）
+	resizeFn       func(w, h int)                // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
+	closeFn        func()                        // OnClose 回调（demo 停止后台轮询）
+	closed         atomic.Bool                   // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
+	pendingDestroy []lcl.IControl                // D4 延后销毁队列：render 完成时 DrainDestroy 统一 Free
+	scrolls        map[render.Handle]*listScroll // Phase 6 ListView 滚动状态（Scrollable 实现）
+}
+
+// listScroll 是 ListView 的原生滚动状态（Phase 6，design.md §16）：
+// TScrollBox 视口（AutoScroll=false、隐藏内建滚动条、DoubleBuffered）＋ 独立
+// TScrollBar（可视垂直滚动输入）。滚动位置由框架拥有（DIP），本层只把滚动条
+// 范围/位置与滚轮/拖动事件换算成 DIP 回调（D6：滚动输入设备，不含业务逻辑）。
+type listScroll struct {
+	viewport lcl.IScrollBox // 视口容器：行控件池的宿主（diff 挂载/复用/延后销毁）
+	bar      lcl.IScrollBar // 可视垂直滚动条（随视口右缘定位）
+	content  int            // ScrollConfig.Content：内容总高（DIP）
+	step     int            // ScrollConfig.Step：滚轮每档步长（DIP）
+	pos      int            // 当前滚动位置（DIP，读入滚动条，防止事件回环）
+	viewH    int            // 视口可见高（DIP，SetBounds 更新；滚动范围 = content-viewH）
+	onScroll func(int)      // OnScroll 回调：滚动位置变化 → 回写 State → re-render
 }
 
 // NewRenderer 创建 LCL 渲染器并注册主窗体（须在 Init 之后调用）。
@@ -99,6 +114,7 @@ func NewRenderer() *Renderer {
 
 func (r *Renderer) Create(widgetType string) render.Handle {
 	var c lcl.IControl
+	var ls *listScroll // ListView 的滚动状态（switch 内构建，h 分配后登记）
 	switch widgetType {
 	case "Window":
 		c = r.form
@@ -116,12 +132,98 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 		sb.SetAutoScroll(true)
 		sb.SetDoubleBuffered(true)
 		c = sb
+	case "ListView":
+		// 虚拟滚动列表（Phase 6，design.md §16）：TScrollBox 作视口（控件池宿主），
+		// 隐藏内建双滚动条（滚动范围/位置由框架以 DIP 驱动），用独立 TScrollBar 作
+		// 可视垂直滚动输入。可见区外的行不建控件 —— 虚拟化的原生侧不感知。
+		view := lcl.NewScrollBox(r.form)
+		view.SetAutoScroll(false) // 内容由布局引擎虚拟化定位，不用 LCL 自动滚动
+		view.SetDoubleBuffered(true)
+		view.HorzScrollBar().SetVisible(false)
+		view.VertScrollBar().SetVisible(false)
+		bar := lcl.NewScrollBar(view)
+		bar.SetParent(view)
+		bar.SetKind(types.SbVertical)
+		c = view
+		ls = &listScroll{viewport: view, bar: bar}
+		wireScroll(ls)
 	default:
 		panic(fmt.Sprintf("native: 未知控件类型 %q", widgetType))
 	}
 	h := r.alloc()
 	r.controls[h] = c
+	if ls != nil {
+		if r.scrolls == nil {
+			r.scrolls = make(map[render.Handle]*listScroll)
+		}
+		r.scrolls[h] = ls
+	}
 	return h
+}
+
+// wireScroll 接线 ListView 滚动输入设备（滚轮 + 滚动条拖动 → DIP 回调）。
+// 滚轮步长与滚动范围来自 layoutListView 写入的 ScrollConfig（内容总高/步长，DIP）。
+func wireScroll(ls *listScroll) {
+	view, bar := ls.viewport, ls.bar
+
+	// 滚轮：向上滚（delta>0）内容上移 → 位置减小。步长按比例换算（120 = 一格 ×
+	// step），高精度滚轮（<120 的细分 delta）也按比例滚动而非截断为零。
+	view.SetOnMouseWheel(func(_ lcl.IObject, _ types.TShiftState, wheelDelta int32, _ types.TPoint, handled *bool) {
+		if handled != nil {
+			*handled = true
+		}
+		ls.applyScroll(ls.pos - int(wheelDelta)*ls.step/120)
+	})
+	// 滚动条拖动/翻页：LCL 直接给绝对位置（scrollPos *int32，DIP 单位）。
+	bar.SetOnScroll(func(_ lcl.IObject, _ types.TScrollCode, scrollPos *int32) {
+		if scrollPos == nil {
+			return
+		}
+		ls.applyScroll(int(*scrollPos))
+	})
+}
+
+// applyScroll 统一处理滚动输入：钳制到 [0, content-viewH]，写回自身状态并回调。
+// 事件回调同源（State.Set → re-render → SetScrollPos 把 pos 写回滚动条）时，
+// 滚动条 Position 已是目标值，LCL 不再触发事件（无回环）。
+func (ls *listScroll) applyScroll(pos int) {
+	if ls.onScroll == nil {
+		ls.pos = pos
+		return
+	}
+	max := ls.content - ls.viewH
+	if max < 0 {
+		max = 0
+	}
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > max {
+		pos = max
+	}
+	if ls.pos == pos {
+		return
+	}
+	ls.pos = pos
+	ls.onScroll(pos)
+}
+
+// applyBarRange 把内容总高/视口高/当前位置同步到原生滚动条（范围 = 内容−视口，
+// 页尺寸 = 视口高）。内容或视口未就绪时跳过 —— SetScrollConfig/SetBounds 任一
+// 到达且两者齐备后即生效（挂载时 diff 属性应用顺序不定，见 diff.applyProps）。
+func (r *Renderer) applyBarRange(ls *listScroll) {
+	if ls.content <= 0 || ls.viewH <= 0 {
+		return
+	}
+	max := ls.content - ls.viewH
+	if max < 0 {
+		max = 0
+	}
+	page := ls.viewH
+	if page < 1 {
+		page = 1
+	}
+	ls.bar.SetParamsWithIntX4(int32(ls.pos), 0, int32(max), int32(page))
 }
 
 // Destroy 销毁控件。销毁入队延后（D4：绝不在事件回调内同步 Free，
@@ -134,6 +236,7 @@ func (r *Renderer) Destroy(h render.Handle) {
 		return // 主窗体不显式 Free
 	}
 	delete(r.controls, h)
+	delete(r.scrolls, h) // ListView 滚动状态随控件销毁；滚动条由视口 owner 级联 Free
 	r.pendingDestroy = append(r.pendingDestroy, c)
 }
 
@@ -167,6 +270,19 @@ func (r *Renderer) SetBounds(h render.Handle, b render.Rect) {
 		int32(render.DIPToPX(b.W, dpi)),
 		int32(render.DIPToPX(b.H, dpi)),
 	)
+	// ListView 视口：内建滚动条贴视口右缘（宽 17 DIP = listScrollbarStrip，随视口
+	// 大小/位置走）；并记 viewH 供滚动范围重算（内容−视口）。
+	if ls := r.scrolls[h]; ls != nil {
+		ls.viewH = b.H
+		r.applyBarRange(ls)
+		w := int32(render.DIPToPX(17, dpi))
+		ls.bar.SetBounds(
+			int32(render.DIPToPX(b.W, dpi))-w,
+			0,
+			w,
+			int32(render.DIPToPX(b.H, dpi)),
+		)
+	}
 }
 
 func (r *Renderer) SetVisible(h render.Handle, visible bool) {
@@ -183,6 +299,11 @@ func (r *Renderer) SetText(h render.Handle, text string) {
 		ed.SetText(text)
 	} else {
 		c.SetCaption(text)
+		// 重绘保险：TLabel 无 HWND（自绘在父表面），caption 变化在 DoubleBuffered
+		// 容器（ListView 视口）内不保证触发父容器重绘 —— 仅改文字不改尺寸时画面
+		// 滞留旧文本，直到 resize 强制整窗重绘（Phase 6 实测）。显式 Invalidate
+		// 强制下一帧把新文字画上（无效化会合并进同一次 WM_PAINT，无额外开销）。
+		c.Invalidate()
 	}
 }
 
@@ -529,6 +650,55 @@ func (r *Renderer) OnClose(fn func()) {
 func (r *Renderer) HandleAllocated(h render.Handle) bool {
 	_, ok := r.controls[h]
 	return ok
+}
+
+// —— Phase 6 滚动（Scrollable 实现）与多窗口 ——
+
+// SetScrollConfig 配置 ListView 滚动（DIP）：内容总高 + 滚轮步长。
+// 更新滚动条范围（内容−视口），内容 <= 视口时范围为 0（滚动条到顶，无可滚）。
+func (r *Renderer) SetScrollConfig(h render.Handle, cfg render.ScrollConfig) {
+	ls := r.scrolls[h]
+	if ls == nil {
+		return
+	}
+	ls.content = cfg.Content
+	ls.step = cfg.Step
+	r.applyBarRange(ls)
+}
+
+// SetScrollPos 设置滚动位置（DIP）。滚动条 Position 更新；pos 回写自身状态
+// （applyScroll 事件同源不触发二次回调 —— LCL 相同 Position 不派发事件）。
+func (r *Renderer) SetScrollPos(h render.Handle, pos int) {
+	ls := r.scrolls[h]
+	if ls == nil {
+		return
+	}
+	if pos < 0 {
+		pos = 0
+	}
+	ls.pos = pos
+	if ls.bar != nil {
+		ls.bar.SetPosition(int32(pos))
+	}
+}
+
+// OnScroll 绑定滚动位置变化回调（DIP，UI 线程）。覆盖式注册（单回调）。
+func (r *Renderer) OnScroll(h render.Handle, fn func(int)) {
+	ls := r.scrolls[h]
+	if ls == nil {
+		return
+	}
+	ls.onScroll = fn
+}
+
+// Show 显示窗体（多窗口，Phase 6.3）。主窗体由 Application.Run() 自动显示；
+// 次要窗体（第二个 NewRenderer → 第二个 Application.NewForms）须显式 Show 才出现。
+// 幂等：已可见时 LCL 忽略；窗体进入关闭流程后丢弃。
+func (r *Renderer) Show() {
+	if r.closed.Load() || r.formRef == nil {
+		return
+	}
+	r.formRef.Show()
 }
 
 func (r *Renderer) alloc() render.Handle {

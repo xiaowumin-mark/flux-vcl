@@ -16,9 +16,19 @@ type Mock struct {
 	next     Handle
 	clientW  int // 模拟窗体客户区尺寸（缺省 400x300）
 	clientH  int
-	resizeFn func(w, h int) // 已注册的 resize 回调
+	resizeFn func(w, h int)            // 已注册的 resize 回调
 	handlers map[Handle]map[string]any // 已注册事件回调（Phase 4 触发测试用）
-	timerFn  func()          // NewTimer 注册的回调（nil=未注册/已停止；FireTimer 驱动）
+	timerFn  func()                    // NewTimer 注册的回调（nil=未注册/已停止；FireTimer 驱动）
+	scrolls  map[Handle]*mockScroll    // Phase 6 ListView 滚动状态（Scrollable 测试面）
+}
+
+// mockScroll 记录 ListView 滚动配置/位置（Phase 6）。与真实滚动条不同，mock 不
+// 呈现滚动 UI —— 只保存状态供断言，并保存 OnScroll 回调供 FireScroll 手动驱动。
+type mockScroll struct {
+	content  int // ScrollConfig.Content
+	step     int // ScrollConfig.Step
+	pos      int // 当前滚动位置（DIP）
+	onScroll func(int)
 }
 
 // NewMock 创建空的 Mock。
@@ -200,6 +210,81 @@ func (m *Mock) TriggerResize(w, h int) {
 	m.mu.Unlock()
 	if fn != nil {
 		fn(w, h)
+	}
+}
+
+// —— Phase 6 滚动（Scrollable 实现）——
+
+// ensureScroll 取回（必要时创建）控件 h 的滚动状态。调用方须持有 m.mu。
+func (m *Mock) ensureScroll(h Handle) *mockScroll {
+	if m.scrolls == nil {
+		m.scrolls = make(map[Handle]*mockScroll)
+	}
+	if m.scrolls[h] == nil {
+		m.scrolls[h] = &mockScroll{}
+	}
+	return m.scrolls[h]
+}
+
+// SetScrollConfig 记录滚动配置（diff 只在值变化时调用，零 mutation 兼容）。
+func (m *Mock) SetScrollConfig(h Handle, cfg ScrollConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.ensureScroll(h)
+	s.content = cfg.Content
+	s.step = cfg.Step
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "ScrollConfig", Value: cfg})
+}
+
+// SetScrollPos 记录滚动位置（DIP）。
+func (m *Mock) SetScrollPos(h Handle, pos int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.ensureScroll(h)
+	s.pos = pos
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "ScrollPos", Value: pos})
+}
+
+// OnScroll 保存滚动回调供 FireScroll 驱动（mock 无原生滚动条/消息循环）。
+func (m *Mock) OnScroll(h Handle, fn func(int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.ensureScroll(h)
+	s.onScroll = fn
+	m.ops = append(m.ops, Op{Type: OpSetEvent, Handle: h, Key: "Scroll", Value: fn})
+}
+
+// ScrollPos 返回控件 h 的当前滚动位置（DIP，测试断言用；未配置返回 0）。
+func (m *Mock) ScrollPos(h Handle) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s := m.scrolls[h]; s != nil {
+		return s.pos
+	}
+	return 0
+}
+
+// ScrollContent 返回控件 h 的滚动内容总高（DIP，测试断言用；未配置返回 0）。
+func (m *Mock) ScrollContent(h Handle) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s := m.scrolls[h]; s != nil {
+		return s.content
+	}
+	return 0
+}
+
+// FireScroll 模拟滚动事件（Phase 6 测试驱动）：以 pos 调用已绑定的 OnScroll 回调
+// （未绑定/未配置时为 no-op）。模拟用户滚轮/拖动滚动条 → 框架回写 State → re-render。
+func (m *Mock) FireScroll(h Handle, pos int) {
+	m.mu.Lock()
+	var fn func(int)
+	if s := m.scrolls[h]; s != nil {
+		fn = s.onScroll
+	}
+	m.mu.Unlock()
+	if fn != nil {
+		fn(pos)
 	}
 }
 

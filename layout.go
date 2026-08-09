@@ -1,6 +1,11 @@
 package flux
 
-import "github.com/xiaowumin-mark/flux-vcl/internal/render"
+import (
+	"fmt"
+
+	"github.com/xiaowumin-mark/flux-vcl/internal/render"
+	"github.com/xiaowumin-mark/flux-vcl/internal/widget"
+)
 
 // 布局引擎（Phase 3.1/3.3/3.4：design.md §6.2 / D5 / research.md §5.1）。
 //
@@ -14,6 +19,10 @@ import "github.com/xiaowumin-mark/flux-vcl/internal/render"
 
 // layoutGap 是 flex 容器子控件间的基础间距（DIP）。
 const layoutGap = 4
+
+// listScrollbarStrip 是 ListView 为可视滚动条预留的占位宽度（DIP）。
+// 行内容宽度 = 视口宽 − 该占位，避免内容落到滚动条之下（Phase 6）。
+const listScrollbarStrip = 17
 
 // LayoutDiag 是一次 render 布局的溢出诊断（Phase 3.7 inspector 数据源之一）。
 // OverflowW/H 为容器尺寸超出约束的量（0 表示该轴未溢出）。
@@ -139,6 +148,17 @@ func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 		setBounds(n, pos, sz)
 	case "ScrollBox":
 		sz = layoutScrollBox(n, r, c, pos, d)
+	case "ListView":
+		sz = layoutListView(n, r, c, pos, d)
+	case "ListViewRow":
+		// 虚拟列表行（Phase 6）：透明包装（diff 不建句柄、子挂祖父），身份靠
+		// slot key（控件池槽位）；约束/位置原样传给唯一子（builder 产物）。
+		if len(n.Children) > 0 {
+			sz = layoutTree(n.Children[0], r, c, pos, d)
+		} else {
+			sz = leafSize(0, 0, n, c)
+		}
+		setBounds(n, pos, sz)
 	default: // 未知类型（含第三方控件）：默认尺寸
 		sz = leafSize(100, 32, n, c)
 		setBounds(n, pos, sz)
@@ -175,7 +195,7 @@ func setPos(n *Node, pos Point) {
 	}
 	br := b.(render.Rect)
 	switch n.Type {
-	case "Column", "Row", "Expanded", "Flexible", "Component":
+	case "Column", "Row", "Expanded", "Flexible", "Component", "ListViewRow":
 		offsetSubtree(n, pos.X-br.X, pos.Y-br.Y)
 	default:
 		br.X, br.Y = pos.X, pos.Y
@@ -185,9 +205,10 @@ func setPos(n *Node, pos Point) {
 
 // realContainer 报告类型是否为真实容器（拥有原生句柄）：其子树坐标相对自身
 // 客户区（局部坐标空间），平移子树时在边界停止下钻（diff 层子控件 SetParent 挂
-// 自身，SetBounds 需相对自身）。
+// 自身，SetBounds 需相对自身）。ListView（Phase 6）同为真实容器：行 slot 在
+// 局部坐标空间布局（0..vh），父级定位只平移 ListView 自身 Bounds。
 func realContainer(t string) bool {
-	return t == "Window" || t == "ScrollBox"
+	return t == "Window" || t == "ScrollBox" || t == "ListView"
 }
 
 // offsetSubtree 平移节点及其子树的 Bounds（dx/dy）。遇真实容器边界停止 ——
@@ -289,6 +310,107 @@ func layoutScrollBox(n *Node, r render.Renderer, c BoxConstraints, pos Point, d 
 	}
 	d.overflow(n, ow, 0) // 滚动轴（垂直）永不记溢出
 	return sz
+}
+
+// layoutListView 布局虚拟滚动列表（Phase 6 / design.md §16）。
+//
+// 虚拟化核心：只把"可见区 ± overscan"的数据行构建为 slot 子节点（控件池），
+// diff 按 slot key（row-0..row-N）复用原生控件、属性级 patch 内容 —— 滚动时
+// 已存在的 slot 原地更新（SetText/SetBounds），不创建/销毁控件（内存有界、
+// 焦点/IME 不漂移）。行内容（builder 产物）挂在 slot 下，随 slot 一起 diff。
+//
+// 滚动位置：读取 ScrollTarget.Current()（DIP）→ 钳制到 [0, maxOffset] → 由
+// 可见范围反推 slot 集合。写 ScrollConfig（内容总高/滚轮步长）与 ScrollPos
+// 供 diff 应用（原生滚动条范围/位置）。
+func layoutListView(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags) Size {
+	if c.IsUnboundedW() || c.IsUnboundedH() {
+		panic("flux.ListView: 需要有界的宽高约束（虚拟列表必须有 viewport，请放在 Expanded/固定尺寸容器内）")
+	}
+	vw, vh := c.MaxW, c.MaxH
+	if vw < 0 {
+		vw = 0
+	}
+	if vh < 0 {
+		vh = 0
+	}
+	count := n.Props.Int("ItemCount")
+	itemH := n.Props.Int("ItemHeight")
+	if count < 0 {
+		count = 0
+	}
+	if itemH <= 0 {
+		itemH = 24
+	}
+	contentH := count * itemH
+
+	// 滚动位置（DIP）：读 ScrollTarget，钳制到 [0, maxOffset]。
+	// 钳制结果回写 State（st.Apply，仅实际变化时）→ 触发一次 re-render 收敛：
+	// State 始终与有效滚动位置一致（scroll.Get() 与原生滚动条读数不漂移）。
+	// 值已合法时零 Apply → 无额外 render（D7c 兼容）。inRender 重入防护把该
+	// 回写引发的 re-render 排队到当前 render 结束后 flush（无递归）。
+	offset := 0
+	maxOffset := contentH - vh
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if v, ok := n.Props.Get("Scroll"); ok {
+		if st, ok := v.(render.ScrollTarget); ok {
+			offset = st.Current()
+			if offset < 0 {
+				offset = 0
+			}
+			if offset > maxOffset {
+				offset = maxOffset
+			}
+			if offset != st.Current() {
+				st.Apply(offset)
+			}
+		}
+	}
+
+	// 可见范围（含 overscan 缓冲）：滚动时内容不立即换槽，仅平移/局部 patch
+	const overscan = 3
+	first, last := 0, -1
+	if count > 0 {
+		first = offset/itemH - overscan
+		if first < 0 {
+			first = 0
+		}
+		last = (offset+vh+itemH-1)/itemH - 1 + overscan
+		if last >= count {
+			last = count - 1
+		}
+	}
+
+	// 构建可见区 slot 子节点（控件池：slot key = row-i，i 为槽位，非数据下标）。
+	// 槽位稳定 → 滚动复用同一批原生控件，内容随槽位内 builder(index) 更新。
+	bv, _ := n.Props.Get("Builder")
+	builder := bv.(func(int) Widget)
+	kids := make([]*Node, 0, last-first+1)
+	for i, idx := 0, first; idx <= last; i, idx = i+1, idx+1 {
+		slot := widget.NewNode("ListViewRow")
+		slot.Key = fmt.Sprintf("row-%d", i) // 控件池槽位身份（D3）
+		slot.Add(builder(idx).Create())
+		kids = append(kids, slot)
+	}
+	n.Children = kids
+
+	// 行宽 = 视口宽 − 滚动条占位；每行 tight (contentW, itemH)，局部坐标布局
+	contentW := vw - listScrollbarStrip
+	if contentW < 0 {
+		contentW = 0
+	}
+	for i, idx := 0, first; idx <= last; i, idx = i+1, idx+1 {
+		cc := BoxConstraints{MinW: contentW, MaxW: contentW, MinH: itemH, MaxH: itemH}
+		layoutTree(kids[i], r, cc, Point{X: 0, Y: idx*itemH - offset}, d)
+	}
+
+	// 写滚动信息属性（diff 按值变化 patch；renderer 未实现 Scrollable 时忽略）
+	n.Props.Set("ScrollConfig", render.ScrollConfig{Content: contentH, Step: 3 * itemH})
+	n.Props.Set("ScrollPos", offset)
+
+	setBounds(n, pos, Size{W: vw, H: vh})
+	return Size{W: vw, H: vh}
 }
 
 // layoutFlex 实现 RenderFlex 算法（research.md §5.1）。isRow 时主轴为宽。

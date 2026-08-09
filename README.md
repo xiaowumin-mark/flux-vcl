@@ -103,6 +103,17 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 | 5.4 Component（`Build() Widget` 透明分组；组件身份靠外部 Key（D3），不在 Build 内生成 key/嵌套类型） | ✅ `flux.Component` + diff/layout Component 分支 |
 | 5.5 无头测试（曲线端点、Tween、Controller 状态机、Animate pump 驱动、SetBounds 命中/跳过、主题零 mutation、组件 key 复用、Async 成败两径、ARGB→TColor 换算） | ✅ `flux/phase5_test.go` + `internal/native/mapping_test.go` |
 
+**Phase 6（列表与虚拟化）✅ 完成**：`ListView(count, itemHeight, builder, ScrollOffset(scroll))` 虚拟滚动列表 —— **控件池虚拟化**（10 万行只建可见区±overscan 的 ~20 个原生控件，内存有界；滚动 = 行内容属性 patch 不重建，行内控件焦点/IME 不漂移）+ 稳定 slot key（`row-i` 槽位身份，D3）+ 滚动双向绑定（`scrollTarget` 值类型，D7c 零 mutation；滚轮/滚动条拖动 → State → re-render）+ 多窗口（第二个 `NewRenderer`/`NewApp` + `Show()`，独立 State 作用域）。
+
+| 子任务 | 状态 |
+|---|---|
+| 6.1 ListView + 稳定 key（`ListView(count, itemH, builder)` + slot key=`row-i` 控件池复用；行内容不带数据 key） | ✅ `flux.ListView` + diff/layout `ListViewRow` 透明分支 |
+| 6.2 虚拟化（10 万行：可见区±overscan 控件池；滚动=属性 patch；`render.Scrollable` D6 窄接口 + native TScrollBox 视口 + 内部 TScrollBar） | ✅ `layoutListView` + `internal/native` ListView 分支 + `internal/render/scroll.go` |
+| 6.3 多窗口（第二个 Window；独立 State 作用域；`r2.Show()` 次要窗体显式显示） | ✅ `native.Renderer.Show()` + `examples/virtual-list` |
+| 6.4 无头测试（虚拟化控件数有界、滚动零重建、滚动事件回写、钳制、D7c 零 mutation、无界约束 panic、行局部坐标） | ✅ `flux/list_test.go` |
+
+> **已知限制**：ListView 必须有界约束（放 `Expanded` 或固定高度容器内；直接放 `Column` 未给高度会 panic，勿静默退化）；行内容不得带数据依赖 key（否则滚动换内容时重建，破坏控件池）；行 builder 里读取的 State（如选中标记）必须 `Bind` 出来才响应 `Set`（State 须订阅才触发 re-render，[design §9](docs/design.md)）；`TLabel` caption 变化在 DoubleBuffered 视口内可能滞留旧文本，native 已加 `Invalidate()` 保险（[design §16](docs/design.md)）。
+
 ## 快速开始
 
 **前提**：Go 1.22+；`libenergy-amd64.dll`（获取方式见 [E2 文档](docs/phase0-e2-libenergy-mapping.md)，
@@ -145,6 +156,7 @@ app.Mount(func() flux.Widget {
 - `examples/layout` —— 布局引擎 demo（flex 分配、1:2 分栏、resize 即时重分割、DPI 读数）
 - `examples/events` —— 事件与生命周期 demo（hover 坐标 / click Source / 键盘 / 中文 IME / 生命周期计数）
 - `examples/phase5` —— 高级特性 demo（点击按钮：计数 + 方块滑动动画 + 异步加载；点击"主题"切换 Light/Dark）
+- `examples/virtual-list` —— 大数据 demo（10 万行虚拟滚动列表：控件池 + 稳定 key + 滚动双向绑定 + 第二窗体多窗口）
 
 ```powershell
 # 构建并冒烟 basic（State）
@@ -158,6 +170,9 @@ app.Mount(func() flux.Widget {
 
 # 构建并冒烟 phase5（动画/主题/Async/组件）
 .\scripts\build.ps1 -Target phase5; .\scripts\smoke.ps1 -Target phase5
+
+# 构建并冒烟 virtual-list（10 万行虚拟列表 + 多窗口）
+.\scripts\build.ps1 -Target virtual-list; .\scripts\smoke.ps1 -Target virtual-list
 ```
 
 ## 目录结构
@@ -170,9 +185,10 @@ flux-vcl/
 ├── event_opts.go          # 事件/生命周期 Opt：OnClick/OnMouse*/OnKey*/OnMount/OnUpdate/OnUnmount
 ├── animation.go           # Curve/Tween/AnimationController 动画状态机（Phase 5.1）
 ├── theme.go               # Theme 调色板 + Color/FontColor Opt（Phase 5.2）
+├── list.go                # ListView 虚拟滚动列表 + ScrollOffset（Phase 6）
 ├── box.go                 # 布局协议：BoxConstraints/Size/Point/对齐枚举（Phase 3.1）
-├── layout.go              # 单遍 RenderFlex 布局 + ScrollBox 滚动 + NodeDiag 诊断（Phase 3）
-├── controls.go            # 控件构造器：Window/Column/Row/ScrollBox/Component/Text/Button/Input
+├── layout.go              # 单遍 RenderFlex 布局 + ScrollBox 滚动 + 虚拟列表布局 + NodeDiag（Phase 3/6）
+├── controls.go            # 控件构造器：Window/Column/Row/ScrollBox/ListView/Component/Text/Button/Input
 ├── internal/
 │   ├── widget/            # Widget 接口 + Node + Props（有序属性集，D2 diff）
 │   ├── diff/              # Element 树 + diff/reconciliation 引擎（Phase 1.4）
@@ -185,7 +201,9 @@ flux-vcl/
 │   │   └── winres/
 │   ├── events/            # 事件与生命周期 demo（hover/click/键盘/中文 IME/生命周期计数）
 │   │   └── winres/
-│   └── phase5/            # 高级特性 demo（动画/主题/Async/组件）
+│   ├── phase5/            # 高级特性 demo（动画/主题/Async/组件）
+│   │   └── winres/
+│   └── virtual-list/      # 大数据 demo（10 万行虚拟列表 + 多窗口）
 │       └── winres/
 ├── scripts/
 │   ├── build.ps1          # 构建脚手架

@@ -365,15 +365,46 @@
 
 ## Phase 6 — 列表与虚拟化 · 目标：大数据
 
-| # | 子任务 | 要点 / 参考 |
-|---|---|---|
-| 6.1 | ListView + key | `ListView(Items, Builder)` + 稳定 key（D3）；控件池按 key 复用，重排不重建。 |
-| 6.2 | **虚拟化** | 10 万行：a) FluxVCL 控件池虚拟化（可见区 N 个控件复用）；b) 或嵌入 `TListView.OwnerData=true` + `OnData/OnDataHint`（**绝不用 `Items.Add()`**）。 |
-| 6.3 | 多窗口 | 第二个 Window；独立 State 作用域。 |
+> **进展（2026-08-09）：全部完成。** `ListView` 虚拟滚动列表（控件池虚拟化 +
+> 稳定 slot key）+ 滚动双向绑定 + 第二个窗体落地。工程发现：
+>
+> - **控件池 = slot key，不是数据 index**：布局只把"可见区 ± overscan"的行构建为
+>   slot 子节点，key = `row-0..row-N`（**槽位**身份，D3）—— 滚动时同一批槽位跨
+>   render 复用（原生控件不重建、焦点/IME 不漂移），内容随槽内 `builder(index)`
+>   原地 patch（SetText/SetBounds）。10 万行也只建 ~20 个原生控件（内存有界）。
+>   行内容（builder 产物）**不得**带数据依赖 key（否则滚动换内容时重建，破坏池）。
+> - **`Builder` func 不可比**：每次 render 新函数 → Props 恒判不等 → diff 需显式
+>   ignore `"ItemCount"/"ItemHeight"/"Builder"`（漏过 default 会误走 SetEvent panic）。
+>   相同树仍零 mutation（Builder 不计入 changed，不触发 OnUpdate）。
+> - **D7c 与 OnScroll 重绑的解法 = 值类型 scrollTarget**：`scrollTarget{s *State[int]}`
+>   是值类型 → Props 值可比（reflect.DeepEqual 对同一 State 指针为真）→ `Scroll`
+>   属性跨 render 不产生 diff → OnScroll 只绑一次，零 mutation。
+> - **滚动位置钳制回写 State**：布局读 `ScrollTarget.Current()` → 钳到
+>   `[0, 内容−视口]` → 实际变化时 `Apply` 回写（触发一次 re-render 收敛）——
+>   `scroll.Get()` 与原生滚动条读数永不漂移；值已合法时零 Apply（无额外 render）。
+> - **D6 滚动窄接口**：`render.Scrollable`（SetScrollConfig/SetScrollPos/OnScroll）为
+>   diff 层与绑定层间唯一知识点；native 以 TScrollBox 视口（AutoScroll=false、隐藏
+>   内建双滚动条、DoubleBuffered）+ 内部 TScrollBar 实现（滚动条范围 = 内容−视口，
+>   页尺寸 = 视口高，全 DIP）；Mock 无头实现供测试 FireScroll 驱动。
+> - **6.3 多窗口 = 第二个 Renderer/App**：`NewRenderer()` 再注册一个
+>   `Application.NewForms`（首个=主窗体），次要窗体须显式 `Show()`（native.Renderer 新
+>   增 `Show()` 方法）；第二窗体独立 `flux.NewApp` + 独立 State → 各自触发各自
+>   re-render。主窗体关闭 → `Application.Run` 退出（含第二窗体打开时），进程干净退出。
 
-**交付物**：10 万条数据流畅滚动 demo。
-**验收**：滚动流畅、行内控件焦点/IME 不漂移、内存有界。
-**风险**：窗口句柄上限 —— 虚拟化是硬要求，非可选优化。
+| # | 子任务 | 要点 / 参考 | 状态 |
+|---|---|---|---|
+| 6.1 | ListView + key | `ListView(Items, Builder)` + 稳定 key（D3）；控件池按 key 复用，重排不重建。 | ✅ 完成（`flux.ListView(count, itemH, builder, ScrollOffset(scroll))`；slot key=`row-i` 控件池；`list_test.go` 验证槽位复用 + D7c 零 mutation） |
+| 6.2 | **虚拟化** | 10 万行：a) FluxVCL 控件池虚拟化（可见区 N 个控件复用）；b) 或嵌入 `TListView.OwnerData=true` + `OnData/OnDataHint`（**绝不用 `Items.Add()`**）。 | ✅ 完成（控件池方案；`layoutListView` 只建可见区±overscan 槽位；滚轮/滚动条拖动 → OnScroll → State → re-render，属性 patch 不重建） |
+| 6.3 | 多窗口 | 第二个 Window；独立 State 作用域。 | ✅ 完成（第二个 `NewRenderer`/`NewApp` + `r2.Show()`；`examples/virtual-list` 启动即开第二窗体，计数互不相干） |
+
+**交付物**：`examples/virtual-list` —— 10 万行虚拟列表（行号 + 内容 + 可点击选中标记），
+头部实时滚动位置读数（Bind(scroll)），"滚到顶/底/选中第 50000 行" 编程滚动（点击 Text，
+非 Button 类，不扰冒烟），启动即开第二窗体。
+**验收**：滚动流畅（滚动 = 属性 patch，控件池复用，内存有界）、行内控件焦点/IME 不漂移
+（D3 槽位身份，D7b）、内存有界（10 万行只建 ~20 控件）—— **已达成**：`go test ./...`
+（含 `-race`）全绿；`smoke.ps1 -Target virtual-list` PASS（按钮 0→1、双窗体干净退出）；
+`bin/virtual-list-smoke.png` 截图 506 色（内容非空）。
+**风险**：窗口句柄上限 —— 虚拟化是硬要求，非可选优化（本轮以控件池虚拟化落实）。
 
 ---
 

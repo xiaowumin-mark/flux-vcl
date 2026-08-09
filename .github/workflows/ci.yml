@@ -51,6 +51,11 @@ jobs:
         run: |
           .\scripts\build.ps1 -Target phase5
           .\scripts\smoke.ps1 -Target phase5 -Screenshot "$env:GITHUB_WORKSPACE\bin\phase5-smoke.png"
+      - name: Build & Smoke (virtual-list, Phase 6: 10万行虚拟化 + 多窗口)
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -Target virtual-list
+          .\scripts\smoke.ps1 -Target virtual-list -Screenshot "$env:GITHUB_WORKSPACE\bin\virtual-list-smoke.png"
       - name: Upload smoke screenshot
         if: always()
         uses: actions/upload-artifact@v4

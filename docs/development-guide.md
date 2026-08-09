@@ -96,7 +96,7 @@
 - **文件**：`<被测文件>_test.go`（如 `state_test.go`），跨特性收尾测试用功能域名（如 `phase5_test.go`、`scroll_inspect_test.go`）。
 - **并发**：涉及 goroutine / 跨线程 marshalling 的测试必须用 `go test -race` 通过（如 Phase 2 的 5 goroutine 并发 Set）。
 - **覆盖**：新功能必须带测试；修 bug 先加复现测试再修。
-- **CI 红线**：`go test ./...` + `go vet ./...` 全绿；冒烟示例（basic/events/phase5）由 CI 构建 + 截图验证。
+- **CI 红线**：`go test ./...` + `go vet ./...` 全绿；冒烟示例（basic/events/phase5/virtual-list）由 CI 构建 + 截图验证。
 
 ---
 

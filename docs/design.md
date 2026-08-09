@@ -395,6 +395,15 @@ Text(Bind(user.Name))
 Input(Bind(user.Name))
 ```
 
+**订阅即响应（核心规则）**：re-render 只由**被订阅的** State 触发 —— `State.Set` 只通知
+`App.collectBindings` 在 render 时登记过的 App（`state.go`）。State 须经 `Bind(s)`
+（或 `ScrollOffset(s)`，§16）出现在当前树里才算订阅；只被**读取**（如 `ListView` 行
+builder 里的 `sel.Get()`）或只在事件回调里 **Set** 而未渲染的 State，其 `Set` 只更新
+内存值、不触发 re-render —— 下一次无关 render（如 resize）才会读到新值。这是"只观察
+声明了的绑定"的刻意设计（D6 窄绑定）；要观察一个 State，把它 `Bind` 出来渲染（哪怕
+只是展示读数）。Phase 5 主题 chip 与 Phase 6 选中标记（点击行标记后须 resize 才见
+反应）都踩过此坑。
+
 ---
 
 # 10. Event 系统
@@ -560,16 +569,54 @@ Async(
 
 # 16. Virtual List
 
-解决大量数据（如 100000 条），只创建可见区域控件。
+解决大量数据（如 100000 条），只创建可见区域控件 —— **控件池虚拟化**
+（Phase 6，实现见 `flux.ListView` / `flux/layout.go layoutListView` /
+`internal/render/scroll.go` / `internal/native` ListView 分支）。
 
-API：
+## API（已落地）
 
 ```go
-ListView(
-    Items(data),
-    Builder(func(item) {}),
+ListView(count int, itemHeight int, builder func(index int) Widget,
+    ScrollOffset(scroll *State[int]),  // 可选：滚动位置双向绑定
 )
 ```
+
+## 语义
+
+- **控件池 + 稳定 slot key（D3）**：布局引擎只把"可见区 ± overscan"的数据行构建为
+  slot 子节点（`ListViewRow` 透明包装），key = `row-0..row-N`（**槽位**身份，非数据
+  下标）。滚动时同一批槽位跨 render 复用：原生控件不创建/不销毁，行内容随槽内
+  `builder(index)` 原地属性 patch（`SetText`/`SetBounds`）—— 内存有界（10 万行只建
+  ~20 个原生控件）、行内控件焦点/IME 不漂移（D7b）。**约束**：行内容（builder 产物）
+  不得带数据依赖 key（否则滚动换内容时重建，破坏控件池）。
+- **滚动位置由框架拥有**：`scrollTarget{s *State[int]}` 值类型实现
+  `render.ScrollTarget`（`Current()`/`Apply()`），可比值 → `Scroll` 属性跨 render 零
+  mutation（D7c，OnScroll 只绑一次）。滚动输入（滚轮 / 滚动条拖动）→ 原生 `OnScroll`
+  回写 State → re-render → 布局重算可见区。布局读偏移并**钳制回写** State（值变化时
+  才 Apply，触发一次 re-render 收敛；`scroll.Get()` 与滚动条读数不漂移）。
+- **等行高是前提**：`itemHeight`（DIP）固定；行高不等需自行保证（或按行分组定高）。
+- **必须有界约束**：虚拟列表必须知道 viewport —— 请放 `Expanded` 或固定高度容器内；
+  直接放 `Column` 且未给高度会 panic（明确提示，勿静默退化）。
+
+## 绑定层（D6 窄接口）
+
+`render.Scrollable`（`SetScrollConfig`/`SetScrollPos`/`OnScroll`，全 DIP）是 diff 层
+与绑定层间唯一知识点。native 实现 = `TScrollBox` 视口（`AutoScroll=false`、隐藏内建
+双滚动条、`DoubleBuffered` 防闪烁）+ 内部 `TScrollBar`（`SetKind(SbVertical)`，范围 =
+内容−视口，页尺寸 = 视口高）；未实现该接口时 ListView 布局照常、仅无原生滚动条
+（退化，不 panic）。
+
+**已知限制（win32，实测）**：`TLabel`（无 HWND，自绘在父表面）的 caption 变化在
+`DoubleBuffered` 容器（ListView 视口）内**不保证触发父容器重绘** —— 仅改文字、不改
+尺寸时画面会滞留旧文本，直到 resize 强制整窗重绘（Phase 6 实测：点行标记无反应、缩放
+窗口才见 ○→●）。native `SetText` 已加显式 `Invalidate()` 保险（无效化合并进同一次
+WM_PAINT，无额外开销）。另见 §14 win32 颜色不渲染限制。
+
+## 多窗口（6.3）
+
+第二个窗体 = 第二个 `NewRenderer`/`NewApp`（`Application.NewForms` 首个=主窗体），
+次要窗体显式 `native.Renderer.Show()`；独立 State 作用域（各自触发各自 re-render）。
+主窗体关闭 → `Application.Run` 退出（含第二窗体打开时）。
 
 ---
 
