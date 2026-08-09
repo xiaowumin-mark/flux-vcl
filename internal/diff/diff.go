@@ -166,6 +166,13 @@ func (rc *Reconciler) patchProps(e *Element, node *widget.Node) bool {
 		return false
 	}
 	changed := false
+	// 移除的属性（新树不再声明）→ 回落到挂载默认值（D2 对称：删除的配置不残留
+	// 在原生控件上）。框架管理键/透明容器在 applyRemoved 内天然跳过。
+	for _, key := range e.Props.Removed(node.Props) {
+		if rc.applyRemoved(e, key) {
+			changed = true
+		}
+	}
 	for _, key := range node.Props.Diff(e.Props) {
 		v, _ := node.Props.Get(key)
 		// "_bind" 是 flux 隐藏的绑定依赖键（state.go，diff 不 import flux 防循环）。
@@ -186,9 +193,61 @@ func (rc *Reconciler) applyProps(e *Element, props *widget.Props) {
 	}
 }
 
+// applyRemoved 处理被移除的属性（新树不再声明）→ 回落到挂载默认值（D2 对称）。
+//
+// 只重置"用户声明、框架不写"的属性；框架写入/管理的键（Bounds/Scroll*、
+// Flex/对齐/绑定/生命周期/逃逸口）绝不在此重置 —— 布局与滚动引擎每次 render
+// 重新写入，生命周期与绑定语义天然以"新 props 为准"。透明容器无独立原生句柄，
+// 任何重置都会命中继承的父句柄 → 直接跳过。
+//
+// 返回是否构成真实配置变化（OnUpdate 触发判定）：事件/框架键的移除不算
+// （与 patchProps 的 func 排除一致）。
+func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
+	if transparentType(e.Type) {
+		return false
+	}
+	v, _ := e.Props.Get(key)
+	switch key {
+	case "Visible":
+		rc.applyProp(e, key, true) // 挂载默认：可见
+		return true
+	case "Enabled":
+		rc.applyProp(e, key, true) // 挂载默认：启用
+		return true
+	case "Color":
+		rc.applyProp(e, key, render.Color(0)) // 挂载默认：无背景
+		return true
+	case "FontColor":
+		rc.applyProp(e, key, render.Color(0)) // 挂载默认：无文字色
+		return true
+	case "TitleBarDark":
+		rc.applyProp(e, key, false)
+		return true
+	case "Text":
+		rc.applyProp(e, key, "") // 挂载默认：空文本
+		return true
+	default:
+		switch v.(type) {
+		case func(render.Event), func(string): // 事件移除：解绑（native SetEvent nil 分支）
+			rc.r.SetEvent(e.Handle, key, nil)
+			rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+		}
+		return false
+	}
+}
+
 // applyProp 按属性名分发到 Renderer 具体方法并记录 op。
 // "Native"/"Ref" 为逃逸口；函数值为事件（SetEvent）。
 func (rc *Reconciler) applyProp(e *Element, key string, v any) {
+	// 透明容器（Column/Row/Expanded/Flexible/Component/ListViewRow）没有独立原生
+	// 控件：Element.Handle 继承父容器句柄。挂载路径从不走进这里（mount 对透明
+	// 容器跳过 applyProps），但 reconcile 路径会 —— 属性 patch 落到继承的父句柄
+	// （如整个 Window）上：Visible(false) 会藏掉整窗、Color 会改父控件底色、事件
+	// 会注册到父控件。统一守卫：透明容器不应用任何原生属性（Bounds 分支原有的
+	// 透明判断因此冗余，保留作防御纵深）。
+	if transparentType(e.Type) {
+		return
+	}
 	switch key {
 	case "Text":
 		if s, ok := v.(string); ok {
@@ -206,8 +265,8 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Enabled", Value: b})
 		}
 	case "Bounds":
-		// 透明容器无原生控件（Handle 继承父），Window 是窗体本身：它们的
-		// Bounds 只用于布局定位/诊断，应用到原生控件会把父控件搬走/把窗体外框收缩。
+		// Window 是窗体本身：Bounds 只用于布局定位/诊断，应用到原生控件会把窗体外框收缩。
+		// 透明容器已由 applyProp 顶部统一守卫截断（此判断冗余，防御纵深）。
 		if transparentType(e.Type) || e.Type == "Window" {
 			break
 		}
@@ -256,7 +315,9 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 	case "Scroll": // ListView 滚动目标（ScrollTarget，可比值类型）→ 绑 OnScroll
 		if st, ok := v.(render.ScrollTarget); ok {
 			if s, ok := rc.r.(render.Scrollable); ok {
-				s.OnScroll(e.Handle, func(pos int) { st.Apply(pos) })
+				s.OnScroll(e.Handle, func(pos int) {
+					render.Guard("event.OnScroll", func() { st.Apply(pos) })
+				})
 				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: "Scroll", Value: st})
 			}
 		}
@@ -277,8 +338,15 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 					src += "#" + e.Key
 				}
 				rc.r.SetEvent(e.Handle, key, func(ev render.Event) {
-					ev.Source = src
-					ef(ev)
+					render.Guard("event."+key, func() {
+						ev.Source = src
+						ef(ev)
+					})
+				})
+			} else if cf, ok := v.(func(string)); ok {
+				// func(string)（如 Input 双向绑定 OnChange）：同样包错误边界。
+				rc.r.SetEvent(e.Handle, key, func(s string) {
+					render.Guard("event."+key, func() { cf(s) })
 				})
 			} else {
 				rc.r.SetEvent(e.Handle, key, v)
@@ -295,7 +363,7 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 func (rc *Reconciler) fireLifecycle(props *widget.Props, name string) {
 	if v, ok := props.Get(name); ok {
 		if fn, ok := v.(func()); ok {
-			fn()
+			render.Guard("lifecycle."+name, fn)
 		}
 	}
 }
@@ -303,31 +371,46 @@ func (rc *Reconciler) fireLifecycle(props *widget.Props, name string) {
 // reconcileChildren 对齐子节点列表（D3 稳定 key / 无 key 按位置）。
 //
 // 匹配策略：带 key 的子节点按 key 精确匹配旧 element（复用，重排不重建）；
-// 无 key 按位置匹配。匹配者 reconcile（原地 patch），未匹配者挂载；
-// 未复用的旧 element 整棵销毁。透明容器子节点直接挂到祖父句柄。
+// 无 key 按位置匹配，且位置匹配只在"无 key 的旧子节点"之间进行 —— keyed 旧
+// 元素是 key 匹配的专属资源（D3），绝不参与位置匹配，否则会被无 key 子抢占：
+// canUpdate 因 Key 不同而失败 → keyed 旧元素被销毁、其句柄进入延后销毁，但
+// oldByKey 索引仍持有它 → 同一 render 内后续 keyed 新节点按 key 匹配到"已销毁"
+// 的 Element → 死句柄复活（对已 Free 控件二次 patch/二次 Destroy，native 崩溃）。
+//
+// 匹配者 reconcile（原地 patch），未匹配者挂载；未复用的旧 element 整棵销毁。
+// 透明容器子节点直接挂到祖父句柄。
 func (rc *Reconciler) reconcileChildren(oldP *Element, newP *widget.Node) {
 	oldKids := oldP.Children
 
 	oldByKey := make(map[string]*Element) // D3：带 key 的旧子节点索引
+	var nonKeyedOlds []*Element           // 无 key 旧子节点（按顺序，位置匹配池）
 	for _, e := range oldKids {
 		if e.Key != "" {
 			oldByKey[e.Key] = e
+		} else {
+			nonKeyedOlds = append(nonKeyedOlds, e)
 		}
 	}
 
 	used := make(map[*Element]bool)
 	newElems := make([]*Element, 0, len(newP.Children))
-	for i, nc := range newP.Children {
+	posIdx := 0
+	for _, nc := range newP.Children {
 		var oe *Element
 		if nc.Key != "" {
-			oe = oldByKey[nc.Key]
-		} else if i < len(oldKids) && !used[oldKids[i]] {
-			oe = oldKids[i]
+			if cand := oldByKey[nc.Key]; cand != nil && !used[cand] {
+				oe = cand
+			}
+		} else if posIdx < len(nonKeyedOlds) {
+			oe = nonKeyedOlds[posIdx]
 		}
 
 		var ne *Element
 		if oe != nil {
 			used[oe] = true
+			if nc.Key == "" {
+				posIdx++ // 消耗一个无 key 旧槽位
+			}
 			ne = rc.reconcile(oe, nc)
 		} else {
 			ne = rc.mount(nc, oldP.Handle)

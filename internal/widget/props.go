@@ -56,6 +56,18 @@ func (p *Props) Diff(o *Props) []string {
 	return out
 }
 
+// Removed 返回 p 相对 o 被移除的属性名：p 有而 o 无（新树不再声明）。
+// 供 diff 引擎在属性移除时回落到挂载默认值（D2 对称，见 internal/diff）。
+func (p *Props) Removed(o *Props) []string {
+	var out []string
+	for _, k := range p.keys {
+		if _, ok := o.Get(k); !ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // Equal 报告两个属性集是否完全一致（含顺序）。
 func (p *Props) Equal(o *Props) bool {
 	if p == nil || o == nil {

@@ -205,7 +205,7 @@ func (ls *listScroll) applyScroll(pos int) {
 		return
 	}
 	ls.pos = pos
-	ls.onScroll(pos)
+	render.Guard("event.OnScroll", func() { ls.onScroll(pos) })
 }
 
 // applyBarRange 把内容总高/视口高/当前位置同步到原生滚动条（范围 = 内容−视口，
@@ -370,7 +370,7 @@ func (r *Renderer) NewTimer(intervalMs int, fn func()) (stop func()) {
 		if r.closed.Load() || fn == nil {
 			return
 		}
-		fn()
+		render.Guard("timer", fn)
 	})
 	var once sync.Once
 	return func() {
@@ -454,7 +454,7 @@ func (r *Renderer) emitResize() {
 		return
 	}
 	w, h := r.ClientSize()
-	r.resizeFn(w, h)
+	render.Guard("resize", func() { r.resizeFn(w, h) })
 }
 
 // mouseEvents / keyEvents 是 LCL 鼠标/键盘事件的结构化接口。energye/lcl 的
@@ -482,12 +482,45 @@ type keyEvents interface {
 // 坐标经 DIP 归一：LCL 鼠标回调的 X/Y 是物理像素（相对控件客户区），
 // 用 render.PXToDIP 换算为 DIP（D5 全坐标 DIP）。Source 由 diff 引擎包装注入，
 // 这里只组装事件负载。OnChange 保持 func(string)（Input 双向绑定路径）。
+//
+// fn 为 nil 时清除该事件绑定（D2 对称：diff 在属性移除时解绑，见 applyRemoved）。
+// 所有用户回调包 D4 错误边界（render.Guard），回调 panic 不崩进程。
 func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 	c := r.controls[h]
+	if fn == nil {
+		// 清除事件绑定（D2 对称：diff 在属性移除时解绑，见 internal/diff applyRemoved）。
+		switch event {
+		case "OnClick":
+			c.SetOnClick(nil)
+		case "OnMouseDown":
+			c.(mouseEvents).SetOnMouseDown(nil)
+		case "OnMouseUp":
+			c.(mouseEvents).SetOnMouseUp(nil)
+		case "OnMouseMove":
+			c.(mouseEvents).SetOnMouseMove(nil)
+		case "OnMouseEnter":
+			c.(mouseEvents).SetOnMouseEnter(nil)
+		case "OnMouseLeave":
+			c.(mouseEvents).SetOnMouseLeave(nil)
+		case "OnKeyDown":
+			c.(keyEvents).SetOnKeyDown(nil)
+		case "OnKeyUp":
+			c.(keyEvents).SetOnKeyUp(nil)
+		case "OnKeyPress":
+			c.(keyEvents).SetOnUTF8KeyPress(nil)
+		case "OnChange":
+			c.(lcl.ICustomEdit).SetOnChange(nil)
+		default:
+			panic(fmt.Sprintf("native: 未知事件 %q", event))
+		}
+		return
+	}
 	switch event {
 	case "OnClick":
 		c.SetOnClick(func(_ lcl.IObject) {
-			fn.(func(render.Event))(render.Event{Type: render.EventClick})
+			render.Guard("event.OnClick", func() {
+				fn.(func(render.Event))(render.Event{Type: render.EventClick})
+			})
 		})
 	case "OnMouseDown", "OnMouseUp":
 		m, ok := c.(mouseEvents)
@@ -498,20 +531,29 @@ func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 		if event == "OnMouseUp" {
 			et = render.EventMouseUp
 		}
-		m.SetOnMouseDown(func(_ lcl.IObject, button types.TMouseButton, shift types.TShiftState, x, y int32) {
-			fn.(func(render.Event))(mouseEvent(et, button, shift, int(x), int(y), r.dpiAt()))
-		})
+		cb := func(_ lcl.IObject, button types.TMouseButton, shift types.TShiftState, x, y int32) {
+			render.Guard("event."+event, func() {
+				fn.(func(render.Event))(mouseEvent(et, button, shift, int(x), int(y), r.dpiAt()))
+			})
+		}
+		if event == "OnMouseUp" {
+			m.SetOnMouseUp(cb)
+		} else {
+			m.SetOnMouseDown(cb)
+		}
 	case "OnMouseMove":
 		m, ok := c.(mouseEvents)
 		if !ok {
 			panic(fmt.Sprintf("native: 控件 %d 不支持鼠标事件 %q", h, event))
 		}
 		m.SetOnMouseMove(func(_ lcl.IObject, shift types.TShiftState, x, y int32) {
-			fn.(func(render.Event))(render.Event{
-				Type: render.EventMouseMove,
-				X:    render.PXToDIP(int(x), r.dpiAt()),
-				Y:    render.PXToDIP(int(y), r.dpiAt()),
-				Mods: mapShift(shift),
+			render.Guard("event.OnMouseMove", func() {
+				fn.(func(render.Event))(render.Event{
+					Type: render.EventMouseMove,
+					X:    render.PXToDIP(int(x), r.dpiAt()),
+					Y:    render.PXToDIP(int(y), r.dpiAt()),
+					Mods: mapShift(shift),
+				})
 			})
 		})
 	case "OnMouseEnter", "OnMouseLeave":
@@ -523,9 +565,16 @@ func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 		if event == "OnMouseLeave" {
 			et = render.EventMouseLeave
 		}
-		m.SetOnMouseEnter(func(_ lcl.IObject) {
-			fn.(func(render.Event))(render.Event{Type: et})
-		})
+		cb := func(_ lcl.IObject) {
+			render.Guard("event."+event, func() {
+				fn.(func(render.Event))(render.Event{Type: et})
+			})
+		}
+		if event == "OnMouseLeave" {
+			m.SetOnMouseLeave(cb)
+		} else {
+			m.SetOnMouseEnter(cb)
+		}
 	case "OnKeyDown", "OnKeyUp":
 		k, ok := c.(keyEvents)
 		if !ok {
@@ -535,9 +584,16 @@ func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 		if event == "OnKeyUp" {
 			et = render.EventKeyUp
 		}
-		k.SetOnKeyDown(func(_ lcl.IObject, key *uint16, shift types.TShiftState) {
-			fn.(func(render.Event))(render.Event{Type: et, Key: *key, Mods: mapShift(shift)})
-		})
+		cb := func(_ lcl.IObject, key *uint16, shift types.TShiftState) {
+			render.Guard("event."+event, func() {
+				fn.(func(render.Event))(render.Event{Type: et, Key: *key, Mods: mapShift(shift)})
+			})
+		}
+		if event == "OnKeyUp" {
+			k.SetOnKeyUp(cb)
+		} else {
+			k.SetOnKeyDown(cb)
+		}
 	case "OnKeyPress":
 		// 4.4 IME/中文输入：走 SetOnUTF8KeyPress（energye/lcl v1.0.3 在
 		// TWinControl 上可用，含 IME 组合结果；不依赖计划的"仅 TForm"担忧）。
@@ -546,14 +602,18 @@ func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 			panic(fmt.Sprintf("native: 控件 %d 不支持 OnKeyPress", h))
 		}
 		k.SetOnUTF8KeyPress(func(_ lcl.IObject, s *string) {
-			fn.(func(render.Event))(render.Event{Type: render.EventKeyPress, Text: *s})
+			render.Guard("event.OnKeyPress", func() {
+				fn.(func(render.Event))(render.Event{Type: render.EventKeyPress, Text: *s})
+			})
 		})
 	case "OnChange":
 		ed, ok := c.(lcl.ICustomEdit)
 		if !ok {
 			panic(fmt.Sprintf("native: 控件 %d 不支持 OnChange", h))
 		}
-		ed.SetOnChange(func(_ lcl.IObject) { fn.(func(string))(ed.Text()) })
+		ed.SetOnChange(func(_ lcl.IObject) {
+			render.Guard("event.OnChange", func() { fn.(func(string))(ed.Text()) })
+		})
 	default:
 		panic(fmt.Sprintf("native: 未知事件 %q", event))
 	}
@@ -629,10 +689,10 @@ func (r *Renderer) RunOnUI(fn func()) {
 		return
 	}
 	if api.CurrentThreadId() == api.MainThreadId() {
-		fn()
+		render.Guard("RunOnUI", fn)
 		return
 	}
-	lcl.RunOnMainThreadSync(fn)
+	lcl.RunOnMainThreadSync(func() { render.Guard("RunOnUI", fn) })
 }
 
 // OnClose 注册窗体关闭回调，并置 closed 门（此后 RunOnUI/invalidate 一律丢弃）。
@@ -642,7 +702,7 @@ func (r *Renderer) OnClose(fn func()) {
 	r.formRef.SetOnClose(func(_ lcl.IObject, _ *types.TCloseAction) {
 		r.closed.Store(true)
 		if fn != nil {
-			fn()
+			render.Guard("OnClose", fn)
 		}
 	})
 }

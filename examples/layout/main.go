@@ -63,8 +63,8 @@ func main() {
 	app := flux.NewApp(r)
 
 	// State 原语：Set 可跨 goroutine，re-render 自动 marshal 到 UI 线程。
-	count := flux.NewState(0)        // 顶部 counter（冒烟信号：点击后按钮文本为数字）
-	leftName := flux.NewState("左面板") // 左面板输入框（two-way → 文本回显）
+	count := flux.NewState(0)                                  // 顶部 counter（冒烟信号：点击后按钮文本为数字）
+	leftName := flux.NewState("左面板")                           // 左面板输入框（two-way → 文本回显）
 	dpiLabel := flux.NewState(fmt.Sprintf("DPI: %d", r.DPI())) // 底部 DPI 读数（Phase 3.5）
 
 	app.Mount(func() flux.Widget {
@@ -97,7 +97,9 @@ func main() {
 						flux.Key("right"),
 						flux.CrossAxis(flux.CrossAxisStretch),
 						flux.Text("Right 2/3", flux.Key("rt")),
-						flux.Button("Action", flux.Key("rb")),
+						// §8 smoke 约束：窗口内 Button 必须唯一（左侧 counter 为冒烟断言目标），
+						// 右侧面板用静态 Text 占位。
+						flux.Text("Right panel", flux.Key("rb")),
 					), 2),
 				)),
 

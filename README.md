@@ -98,7 +98,7 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 | 子任务 | 状态 |
 |---|---|
 | 5.1 动画（Curve/EaseIn/Out/InOut/ElasticOut、Tween、Controller.Step、App.Animate pump、App.SetBounds D2 逃逸口） | ✅ `flux/animation.go` + `App.Animate/SetBounds` |
-| 5.2 主题（`Theme{Font,Color,Radius,Animation}`、Light/Dark、`Color`/`FontColor` Opt + `DarkTitleBar` 标题栏暗色 + diff 属性级 patch） | ✅ `flux/theme.go`；FontSize/Radius 为文档字段（native 未接入） |
+| 5.2 主题（`Theme{Primary,Background,Surface,Text,Accent,DarkTitleBar,FontSize,Radius}`、Light/Dark、`Color`/`FontColor` Opt + `DarkTitleBar` 标题栏暗色 + diff 属性级 patch） | ✅ `flux/theme.go`；FontSize/Radius 为文档字段（native 未接入） |
 | 5.3 Async（`Async[T](app, load, onSuccess, onError…)`：后台 goroutine + RunOnUI marshal，D4） | ✅ 包级泛型函数（Go 方法不支持泛型） |
 | 5.4 Component（`Build() Widget` 透明分组；组件身份靠外部 Key（D3），不在 Build 内生成 key/嵌套类型） | ✅ `flux.Component` + diff/layout Component 分支 |
 | 5.5 无头测试（曲线端点、Tween、Controller 状态机、Animate pump 驱动、SetBounds 命中/跳过、主题零 mutation、组件 key 复用、Async 成败两径、ARGB→TColor 换算） | ✅ `flux/phase5_test.go` + `internal/native/mapping_test.go` |
