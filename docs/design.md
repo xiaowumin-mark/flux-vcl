@@ -520,6 +520,22 @@ Theme{
 * Dark
 * Windows Fluent
 
+实现取舍（Phase 5.2）：主题是**数据**不是运行时对象 —— 构建函数按当前 `Theme` 显式传颜色
+（`Color`/`FontColor` Opt），切换 = 换一个 Theme 值 → State 触发全量 re-diff → diff 引擎按属性级
+patch 只改变化的颜色属性（未变子树零 mutation）。`FontSize/Radius` 为文档字段（native 未接入字体
+大小/圆角），诚实标注。
+
+**已知限制（win32 后端，探针实测）**：LCL `TButton` 由 OS 主题绘制（原生 Win32 按钮控件），其
+`Color`/`FontColor` 均为空操作 —— LCL 内部状态（`SetColor`/`GetColorResolvingParent`）正确更新、
+屏幕像素不变；`TSpeedButton`/`TBitBtn` 背景色同样不渲染（含显式 `Invalidate`/`Repaint`）；`TLabel`
+背景 `Color` 也不渲染。主题切换的可见信号实际来自窗体背景（`Window(Color(...))`）与文字 `FontColor`
+（Text 的 `FontColor` 经字体对象渲染 ✓）。
+
+**升级路径（可选，暂未实现）**：让按钮支持主题色需 **owner-draw** 改造 —— 用 `TWinControl.Handle()`
+取得按钮 HWND 设 `BS_OWNERDRAW` 样式，经窗体 `SetOnWndProc` 钩子处理 `WM_DRAWITEM`，用 GDI 按
+Theme 绘制背景/文字。代价：失去系统 hover/按下原生观感，需自行处理 DPI/禁用态，工作量与回归风险
+不小，故本轮保持系统默认外观，主题以窗体背景/文字色落地。
+
 ---
 
 # 15. 异步系统

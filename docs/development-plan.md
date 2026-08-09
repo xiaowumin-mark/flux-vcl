@@ -331,6 +331,12 @@
 > - **主题=数据不是运行时对象**：构建函数按当前 Theme 显式传颜色（Color/FontColor Opt）；
 >   切换 = State 变 → 全量 re-diff → diff 只 patch 变化的颜色属性（未变子树零 mutation，D7c）。
 >   `FontSize/Radius` 为文档字段（native 未接入字体大小/圆角），诚实标注。
+> - **win32 渲染限制（探针实测）**：LCL `TButton` 由 OS 主题绘制（原生 Win32 按钮），`Color`/
+>   `FontColor` 均为空操作 —— LCL 内部状态正确更新、屏幕像素不变；`TSpeedButton`/`TBitBtn` 背景
+>   同样不渲染（含显式 Invalidate/Repaint）；`TLabel` 背景 `Color` 也不渲染。主题切换的可见信号
+>   实际来自窗体背景（`Window(Color)`）与文字 `FontColor`。按钮支持主题色需 owner-draw 改造
+>   （设计路径见 design.md §14），本轮**接受限制**暂不实现 —— 按钮保持系统默认外观（demo 中已移除
+>   按钮上的无效颜色属性，避免误导）。
 > - **Component 透明化**：与 Column/Row/Expanded 同为透明分组节点（无原生控件、Element 句柄继承
 >   父、子挂祖父），diff/layout 各加 "Component" 分支。身份靠**外部** `Key`（D3）：Component 接受
 >   `opts ...Opt`（典型仅 `Key("card")`），子控件按 key 跨 render 原地 patch 不重建。
@@ -343,7 +349,11 @@
 | 5.4 | Component | `Build() Widget`（design.md §4.1）；组件身份（**不在 Build 内定义嵌套类型/生成 key** —— React 教训，Key 由外部经 opts 传入）。 | ✅ 完成（`flux.Component` 透明分组 + diff/layout "Component" 分支） |
 
 **交付物**：`examples/phase5` —— 点击按钮：计数（冒烟目标）+ ElasticOut 方块滑动（App.SetBounds 逐帧直接落地）+ 500ms 异步加载（RunOnUI 回 UI 线程）；点击"主题" chip 切换 Light/Dark（State → 全量 re-diff）。
-**验收**：60fps 动画不冻结 UI（无整树 re-diff，SetBounds 逃逸口；`go test -race` 全绿）；切换主题无闪烁（只 patch 变化颜色，未变子树零 mutation）；async 回调安全落地（D4 + `closed` 门，关机竞态防护复用 Phase 3.6）。
+**验收**：60fps 动画不冻结 UI（无整树 re-diff，SetBounds 逃逸口；`go test -race` 全绿）；切换主题无闪烁（只 patch 变化颜色，未变子树零 mutation）；async 回调安全落地（D4 + `closed` 门，关机竞态防护复用 Phase 3.6）—— **已达成**：`go test ./...`（含 `-race`）全绿，`smoke.ps1 -Target phase5` PASS（按钮 0→1），主题 chip 点击 light→dark→light 经探针 marker 验证。
+> **验收结果（已接受限制）**：主题切换的**可见**验证于窗体背景（亮 F5F5F5 / 暗 121212）、文字
+> `FontColor` 与主题 chip（light/dark 文字色切换）；**按钮保持系统默认外观** —— win32 后端 TButton
+> 由 OS 主题绘制，`Color`/`FontColor` 不渲染（探针实测内部状态正确、像素不变），此为后端能力限制而非
+> 框架缺陷。支持按钮主题色需 owner-draw 改造（design.md §14），本轮**接受限制**，不阻塞 Phase 5 验收。
 
 ---
 
