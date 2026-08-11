@@ -29,8 +29,9 @@ $dllCandidates = @(
     $env:FVCL_LIBENERGY_DLL,
     (Join-Path $root "ref\e1-smoke\libenergy-amd64.dll"),
     (Join-Path $root "ref\designer-lib\libenergy-amd64.dll")
-) | Where-Object { $_ -and (Test-Path $_) }
-if (-not $dllCandidates) {
+)
+$dllCandidates = @($dllCandidates | Where-Object { $_ -and (Test-Path $_) })
+if ($dllCandidates.Count -eq 0) {
     Write-Error "libenergy-amd64.dll 未找到。请设置环境变量 FVCL_LIBENERGY_DLL，"
     Write-Error "或从 energye/designer 内嵌 zip 解压到 ref/ 下（见 docs/phase0-e2-libenergy-mapping.md）。"
     exit 2
