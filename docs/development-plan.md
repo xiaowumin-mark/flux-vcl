@@ -408,19 +408,245 @@
 
 ---
 
+## 控件扩充批次 1 — 常用表单基线 · 目标：补齐最小可用表单能力
+
+> **状态（2026-08-11）：`Memo`、`CheckBox`、`ComboBox`、`ProgressBar` 与 `RadioButton` 已完成公开 API、D6 窄能力、属性对称 diff、布局、Mock/LCL 适配和无头测试；`examples/form-controls` 提供聚合人工验证与唯一数字 Button smoke 信号。`ComboBox` 采用 `[]string` Items、受控 `SelectedIndex` 与 `OnSelectionChange(func(int))`，不扩张 `Bind`；`ProgressBar` 固定为 `Minimum/Maximum/Value` 范围模型；`RadioButton` 由 native Renderer 按 resolved native parent + `GroupIndex` 维护逻辑互斥，并以逐控件内部 host 隔离 LCL 原生互斥范围。** 本批次位于 P6 与 P7 之间，
+> 是 P7.3 全控件 D7 覆盖和 P7.5 7GUIs 示例的前置准备，不构成无限制的控件库扩张。
+> 实现严格按下列顺序推进，并在整批完成后新增一个聚合 example 供人工验证；在此之前不以
+> “已有 LCL 原生控件”宣称 FluxVCL 已支持对应控件。
+>
+> **自动验收（2026-08-11）**：`gofmt`、`git diff --check`、`go vet ./...`、
+> `go test -count=1 ./...`、`go test -race -count=1 ./...`、
+> `scripts/build.ps1 -Target form-controls` 与 `scripts/smoke.ps1 -Target form-controls`
+> 均通过；smoke 验证唯一 Button `0 → 1` 且进程干净退出。剩余项仅为使用者对
+> Memo/IME、CheckBox、ComboBox、ProgressBar 与 RadioButton 的人工交互确认。
+
+### 范围与裁剪规则
+
+| 顺序 | 控件 | 最小目标 | 优先级 |
+|---|---|---|---|
+| 1 | `Memo` | 多行可编辑文本、文本属性与 `OnChange`；明确默认 intrinsic 尺寸，不承诺自动换行/富文本布局。 | 核心 |
+| 2 | `CheckBox` | Caption、`Checked` 值属性与 `OnCheckedChange(func(bool))`；不扩张 `Bind` 的布尔双向绑定语义。 | 核心 |
+| 3 | `ComboBox` | `[]string` Items、选中索引、选择变更与值类型 State 绑定；不引入富数据源。 | 核心 |
+| 4 | `ProgressBar` | 最小 `Minimum/Maximum/Value` 范围模型与确定性进度显示。 | 已完成 |
+| 5 | `RadioButton` | Caption、`Checked` 与最小组语义（`GroupIndex`）。 | 已完成 |
+
+- 时间或验证成本不足时，允许在文档中明确裁掉 **ProgressBar / RadioButton**；不得裁掉
+  `Memo / CheckBox / ComboBox` 后仍把本批标记为完成。
+- `TabControl/PageControl`（真实容器与每页子树语义）、`Canvas/PaintBox`（Painter/自绘机制）、
+  `StringGrid`（native `TStringGrid`，单元格编辑/数据模型）、`Slider`（范围/拖拽交互模型）留到 P7 的插件、
+  组件或 7GUIs 专项设计阶段，不能借本批次顺带实现。
+
+### 统一实现与验收矩阵
+
+每一个纳入本批次的控件必须同时完成以下项目；只完成 native `Create` 不算支持该控件：
+
+1. **公开 API**：在 `controls.go` 增加构造器，在 `opts.go` 增加最小、类型明确的 Opt；仅当
+   现有统一事件无法表达时，才在 `event_opts.go` 增加对应事件 API。
+2. **D6 隔离**：控件专属属性不得持续膨胀 `render.Renderer` 主接口；参照
+   `render.Scrollable` 建立可选能力接口，由 native 与 Mock 共同实现，diff 通过类型断言调用。
+3. **属性对称性**：在 `internal/diff/diff.go` 同时实现 `applyProp` 与 `applyRemoved`；撤掉
+   `Checked`、Items、选择索引、范围或进度等 Opt 后，原生状态必须回到文档化的默认值，不能残留。
+4. **布局**：在 `layout.go` 为每个叶子控件定义 intrinsic 尺寸与 `Width/Height` 覆盖规则；
+   `Memo` 采用明确的多行默认尺寸策略，而非伪造已支持的富文本或自动高度测量。
+5. **无头测试**：扩展 Mock 的能力状态/操作记录；覆盖首次挂载、纯属性 patch 不重建、属性移除重置、
+   相同值树零 mutation（D7c）、状态回写及不支持能力的安全降级。
+6. **LCL 适配与 Windows 验证**：在 `internal/native` 完成构造、属性、事件和解除事件绑定；
+   以真实 `energye/lcl` API 编译验证，并跑 build/smoke。OS 主题不渲染的颜色或字体色限制须如实记录。
+7. **文档与示例**：同步 `design.md`、README 的控件清单/限制；整批结束后新增聚合 example，
+   让使用者手工验证输入、切换、选择、进度与单选组行为。
+
+### API 与数据模型边界
+
+- `ComboBox` 的 Items 固定为 `[]string`，选择状态固定为索引值；本批不做对象 Items、显示字段、
+  异步数据源、可编辑 ComboBox 或插件级 adapter。空 Items 的选中索引为 `-1`；非空时索引钳制到
+  `[-1, len(Items)-1]`，其中 `-1` 明确表示未选择。传入 Items 时须防御性复制，避免调用方后续修改
+  slice 绕开 diff。
+- `ProgressBar` 使用后台无关的范围不变量：`Minimum <= Maximum`，`Value` 钳制在该闭区间；默认值为
+  `Minimum=0`、`Maximum=100`、`Value=0`。实现应在 Flux/diff 层统一规范化，不把后端差异暴露给用户。
+- 新的绑定目标必须使用稳定的值类型包装，遵守 P2/P6 的 `reflect.DeepEqual` 语义；不得因每次
+  render 新建 slice、闭包或临时对象而破坏 D7c。本批**不扩张既有 `Bind` 的隐式语义**：布尔勾选与
+  选择索引由 `Checked`/`SelectedIndex` 和类型化回调配合 `State.Set` 显式维护；若后续需要双向绑定，
+  必须另行设计 `BindChecked`/`BindSelection` 等专用 API，不能临时重载。
+- `OnChange(func(string))` 保持文本专用，仅用于 `Input`/`Memo`；`CheckBox` 与 `RadioButton` 使用
+  `OnCheckedChange(func(bool))`，`ComboBox` 使用 `OnSelectionChange(func(int))`。这些回调均须有
+  diff 包装、native 接线及移除时的 nil 解绑，不得让未知函数类型落入通用 `SetEvent` 分支。
+- D6 可选能力接口为 `Checkable`（`SetChecked`/`OnCheckedChange`）、`Selectable`
+  （`SetItems`/`SetSelectedIndex`/`OnSelectionChange`）、`Progressable`
+  （`SetMinimum`/`SetMaximum`/`SetValue`）及 `RadioGroupable`（`SetGroupIndex`）；基础
+  `Renderer` 保持不变，Mock 与 native 必须同时实现。
+- `ComboBox` 不能直接复用当前仅断言 `lcl.ICustomEdit` 的 `OnChange` 接线；必须使用经编译核实的
+  ComboBox 专用接口/事件分支，并测试 nil 回调解除绑定，避免运行时 panic。
+- `RadioButton` 的组行为以同一 resolved native parent 与 `GroupIndex` 为边界；跨透明包装器不改变该逻辑父级关系。energye/lcl v1.0.3 没有分组 setter，native Renderer 必须自行维护逻辑互斥，并确保内部隔离 host 不进入公开 Element 树。
+
+### 聚合 example 与人工验收
+
+整批实现完成后新增专门 example（名称在实现时确定），展示五项控件的最小联动：Memo 文本回显、
+CheckBox 状态、ComboBox 选项、ProgressBar 数值、RadioButton 组。现有 smoke 脚本通过
+`class=Button` 定位并点击唯一原生 Button，因此该 example 的窗口中必须**恰好一个** `Button`；
+其余可交互入口使用控件自身交互或可点击 `Text`，并让该唯一 Button 的 Caption/可观测状态作为
+smoke 信号。人工验收还应确认：多行编辑与 IME、勾选/取消、下拉选择、进度范围、单选互斥、
+State 驱动更新，以及窗口关闭后无异常。
+
+**完成条件**：范围内每个未裁剪控件均满足上述七项矩阵；`go test ./...`、`go test -race ./...`、`go vet ./...`、Windows build/smoke 通过；文档与 `examples/form-controls` 聚合 example 已提交到工作区供人工验证。完成后再进入 P7，不把结构性控件的欠账隐含在“基础控件已补齐”的表述中。
+
+---
+
 ## Phase 7 — 工程化与生态 · 目标：可用、可信、可发布
 
-| # | 子任务 | 要点 / 参考 |
-|---|---|---|
-| 7.1 | Inspector | Widget 树/属性/布局调试/事件查看（design.md §18）；在 mutation 层挂钩统计每次提交的 create/update/destroy/patch 数，**高亮任何重建**（重建=焦点丢失信号）。 |
-| 7.2 | 插件系统 | `RegisterWidget("Chart", ChartWidget)`（design.md §19）。 |
-| 7.3 | 测试与 CI 强化 | 无头逻辑测试（D7 覆盖全量控件）；Windows 冒烟 + 截图 artifact；性能基准（控件创建/更新耗时）。 |
-| 7.4 | 打包 | 安装器（NSIS/WiX `File` 放 DLL）；DPI manifest/版本信息（go-winres）；单 EXE 方案评估。 |
-| 7.5 | **产品化** | 中英双语文档；`examples/*` 全量示例；**首发带截图**；7GUIs 完整性演示；公开维护政策（回应弃坑担忧）；明确的"比 Fyne/Wails 多了什么"对比页。 |
-| 7.6 | Accessibility / i18n | 高对比度、键盘导航、UIA（VCL 部分能力）；国际化资源。 |
+> **状态：未开始。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
+> 指为 Inspector、插件验证与 7GUIs 首发示例补齐必要的内建控件和机制，不等于包装
+> energye/lcl 的全部控件。菜单、对话框、TreeView、图像/媒体、托盘等不属于 v0.1.0
+> 发布阻塞项，后续按真实用例或插件生态增量加入。
 
-**交付物**：Inspector 可用的完整框架 + 打包产物 + 文档站。
-**验收**：全新用户按 README 5 分钟跑通示例；CI 全绿；发布 v0.1.0。
+### P7 总体任务与状态
+
+| # | 子任务 | 要点 / 参考 | 状态 |
+|---|---|---|---|
+| 7.1 | Inspector | Widget/Element 树、属性、布局、事件和 mutation 查看（design.md §18）；高亮任何原生控件重建。 | ⬜ 未开始 |
+| 7.2 | 插件系统 | `RegisterWidget` 注册、生命周期、布局与可选 Renderer 能力（design.md §19）；内建控件与第三方 builder 双轨隔离。 | ⬜ 未开始 |
+| 7.2c | 控件扩充批次 2 | 插件模型定案后实现 `TabControl/PageControl` 结构性容器，验证每页子树与 native parent 模型。 | ⬜ 未开始 |
+| 7.3 | 测试与 CI 强化 | 分 7.3a 基线门和 7.3b 发布门；D7 覆盖全量已发布控件、Windows 冒烟/截图、性能基准。 | ⬜ 未开始 |
+| 7.4 | 打包 | 安装器、DPI manifest/版本资源、DLL 版本校验、单 EXE 方案评估。 | ⬜ 未开始 |
+| 7.5 | 产品化与控件扩充批次 3 | 中英双语文档、全量示例、7GUIs；按示例机制逐项实现 `Slider`、`StringGrid`（native `TStringGrid`）、`Canvas/PaintBox`。 | ⬜ 未开始 |
+| 7.6 | Accessibility / i18n | 高对比度、键盘导航、焦点顺序、可访问名称/UIA 能力清单、国际化资源。 | ⬜ 未开始 |
+
+### 固定执行顺序与门禁
+
+单维护者按下列顺序推进；未通过前一门禁不得把后续项标记完成：
+
+1. **7.1 Inspector**：先让重建、属性 patch、布局和事件流可观察，作为后续结构性控件的排错工具。
+2. **7.2 插件系统**：冻结注册、builder、生命周期和布局接口；内建 `native.Create` switch 与第三方注册表保持正交。
+3. **控件批次 2（7.2c）**：实现 `TabControl/PageControl`，用真实多页子树验证容器与插件边界。
+4. **7.3a 基线门**：对批次 1、批次 2 和既有控件完成统一 D7/CI 覆盖；未通过不得进入产品示例扩张。
+5. **7.4 打包**：可与 7.3a 后半并行，但必须在 7.5 发布文档冻结前产出可安装测试包。
+6. **7.5 产品化 + 控件批次 3**：按 7GUIs 示例需要逐项实现机制型控件，不单独开启“无限补控件”支线。
+7. **7.6 Accessibility/i18n**：在公开控件/API 稳定后做全量键盘、高对比度、可访问名称和文案资源验收。
+8. **7.3b 发布门**：批次 3 和 7.6 结果纳入全量 D7、Windows 冒烟、截图和性能基准，形成最终发布矩阵。
+9. **v0.1.0 发布**：全新环境安装、README 5 分钟路径、全部 7GUIs、文档站和维护政策同时通过。
+
+```text
+控件批次 1（已完成）
+        ├──► 7.1 Inspector ───────────────┐
+        └──► 7.2 插件系统 ─► 批次 2 ─► 7.3a
+                                          ├──► 7.4 打包
+                                          └──► 7.5 + 批次 3 ─► 7.6 ─► 7.3b ─► v0.1.0
+```
+
+### P7 控件补齐范围
+
+#### 控件扩充批次 2（7.2 插件模型定案后）
+
+批次 2 只处理结构性容器，不混入自绘或表格数据模型。公开 API 在实现前先通过
+energye/lcl 探针确认 `TPageControl/TTabSheet` 能力，再决定暴露一个统一 `PageControl`
+抽象还是同时保留 `TabControl` 名称；不得先承诺两个重复概念。
+
+| 目标 | 最小语义 | 必须验证 |
+|---|---|---|
+| `PageControl/TabControl` | 受控 `SelectedIndex`、选择回调、带稳定 Key 的页面列表、每页标题与唯一子树。 | 切页只 patch 选择状态，不重建页面或子控件；焦点/IME 不迁移到错误页面。 |
+| 页面子树 | 每页拥有独立 native parent；inactive 页面保留 Element/native 子树，仅隐藏而不卸载。 | 页面重排按 Key 复用；增删只影响目标页；透明容器不改变页面归属。 |
+| 布局 | PageControl 参与普通 constraints；活动页内容填充扣除 tab header 后的客户区。 | resize/DPI/显式 Width/Height 下 bounds 正确，无重叠、负尺寸或坐标越界。 |
+| 插件边界 | 内建容器继续走 native switch；插件注册表只负责第三方类型及 builder。 | 注册同名、未知类型、插件卸载/失败有确定错误；内建控件不依赖插件初始化顺序。 |
+
+**批次 2 完成条件**：公开 API、页面 identity/native parent 设计、diff 对称性、布局、Mock、
+LCL 适配、无头测试、Windows 多页 smoke 和专门 example 全部完成；Inspector 能显示页面层级，
+连续切页与 keyed 重排均为零 create/destroy。
+
+#### 控件扩充批次 3（7.5 各 7GUIs 任务内）
+
+批次 3 不是一个先做完再写示例的独立阶段；每个控件与使用它的 7GUIs 任务一起设计、实现和验收，
+避免脱离真实用例提前固化错误 API。建议按机制风险从低到高推进：`Slider` → `StringGrid` →
+`Canvas/PaintBox`。
+
+| 控件/机制 | 对应 7GUIs | v0.1.0 最小范围 | 明确不做 |
+|---|---|---|---|
+| `Slider` | Timer | `Minimum/Maximum/Value/Step`、受控 Value、`OnValueChange(func(int))`、水平布局与键盘步进。 | 刻度标签、垂直方向、范围双滑块、富绑定。 |
+| `StringGrid`（native `TStringGrid`） | CRUD、Cells | 行列数、字符串 Cells 防御性复制、受控选中行/单元格、选择/编辑回调、表头与基本列宽。 | 通用 ORM、无限数据源、复杂单元格 renderer、Excel 兼容层。 |
+| `Canvas/PaintBox` | Circle Drawer | 自绘 surface、DIP 坐标、paint/invalidate 生命周期、鼠标命中；支持圆形新增/选择/半径更新。 | 通用矢量引擎、GPU 后端、场景图、任意富媒体。 |
+
+`Canvas/PaintBox` 的绘制回调不能直接当作普通可比 Props 参与 D7c；实现前必须先选定稳定命令值、
+Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 记录。`StringGrid` 的二维 slice
+必须深复制，调用方修改源数据不能绕开 diff；`Slider` 沿用显式受控模式，不临时扩张 `Bind`。
+
+### P7 新控件统一实现矩阵
+
+批次 2/3 的每个控件必须逐项满足；任何一项缺失都只能标记为实验性，不能进入 v0.1.0 控件清单：
+
+1. **设计记录**：先在 design.md 写清 Widget/Node/Element/native 对应关系、受控状态、默认值、移除语义和已知限制。
+2. **公开 API**：构造器、Opt、类型化事件与中文 doc comment；非法参数有确定 panic/error，不接受 `map[string]any` 式逃逸 API。
+3. **结构与身份**：容器/重复项必须定义稳定 Key 和 native parent；切换、重排、增删不得迁移焦点、caret 或 IME。
+4. **D6 隔离**：专属能力走可选窄接口；native 与 Mock 同时实现；第三方插件不迫使基础 `Renderer` 膨胀。
+5. **diff 对称性**：mount、属性 patch、属性移除默认、事件 nil 解绑、同值零 mutation 全覆盖；范围属性按确定顺序下发。
+6. **布局与 DPI**：intrinsic/constraints、显式尺寸、resize、DPI、容器客户区和溢出诊断均有测试；禁止原生 Align 接管。
+7. **原生与事件**：真实 energye/lcl API 编译探针、主线程约束、Guard/recover、延后销毁、键盘/鼠标/IME 行为明确。
+8. **测试与示例**：D7a/b/c、State 回写、能力缺失安全退化、Windows build/smoke/截图、专门 example 和 README/design 同步。
+
+### 7GUIs 完整性映射
+
+7GUIs 用于证明控件与机制形成闭环，不允许用静态截图或 native escape hatch 绕开缺失能力：
+
+| 7GUIs 任务 | 主要 FluxVCL 能力 | 控件状态/依赖 |
+|---|---|---|
+| Counter | State、Text、Button | 既有能力；纳入最终回归。 |
+| Temperature Converter | Input 双向绑定、数值转换 | 既有能力；补非法输入与焦点测试。 |
+| Flight Booker | ComboBox、Input、受控 Enabled | 批次 1 已满足控件前置。 |
+| Timer | Animation/Timer、ProgressBar、Slider | Slider 在该任务内实现。 |
+| CRUD | Input、Button、StringGrid、稳定选择 | StringGrid 在该任务内先实现最小行选择/编辑模型。 |
+| Circle Drawer | Canvas/PaintBox、鼠标命中、undo/redo 状态 | 自绘机制在该任务内实现，不用预生成图片替代。 |
+| Cells | StringGrid、公式依赖图、增量更新 | 复用 StringGrid；公式解析/依赖图属于示例业务层，不塞入控件 API。 |
+
+每个示例必须独立可运行、带说明和截图；共享 smoke 脚本仍遵守“每窗口唯一 Button”约束，
+若任务天然需要多个按钮，则为该示例增加按 Key/AutomationId 定位的专用 smoke，不能削弱业务 UI。
+
+### 7.1–7.6 分项完成条件
+
+#### 7.1 Inspector
+
+- mutation 层提供只读 observer，记录 create/destroy/reparent/property/event/bounds，Inspector 不反向修改 diff 状态。
+- 展示 Widget/Element/native 三层对应关系、Key/Path、Props、Bounds/constraints/诊断和最近一次提交统计。
+- 重建节点醒目标记，能定位“哪次 render、哪个 canUpdate 失败条件”导致焦点风险。
+- Inspector 自身关闭/刷新不得触发被检查应用重建；提供无头 observer 测试和 `examples/inspector`。
+
+#### 7.2 插件系统
+
+- 冻结注册 API、唯一类型名、builder 输入/输出、生命周期、布局测量和可选能力获取方式。
+- 注册表并发安全；重复注册、未知类型、插件 panic、初始化失败和关闭顺序有确定错误边界。
+- 至少提供一个不修改 `internal/native` switch 的第三方 Chart/Badge 示例，验证插件确实走注册路径。
+- 插件不能 import 不稳定 internal 包；需要的扩展点必须从公开、最小接口暴露并写兼容政策。
+
+#### 7.3 测试与 CI 强化
+
+- **7.3a**：批次 1/2 + 既有控件统一跑 mount、patch 不重建、移除重置、事件解绑、同树零 mutation、State 回写。
+- **7.3b**：批次 3、7.6 与全部 7GUIs 纳入同一矩阵；容器额外测 keyed 重排/native parent，绘制额外测 invalidate 不重建，并复跑键盘/高对比度/i18n smoke。
+- Windows CI 构建全部公开 examples，执行 smoke 并上传非空截图；native 探针在 DLL 可用且非 race 时运行。
+- 增加控件创建、纯属性 patch、Page 切换、Grid 更新、Paint invalidate 基准，并记录发布基线而非设置脆弱绝对阈值。
+
+#### 7.4 打包
+
+- NSIS/WiX 至少选定一个主方案，安装/卸载包含 exe、严格匹配版本的 DLL、许可证和示例入口。
+- 构建时校验 Go module 的 energye/lcl 版本与打包 DLL 来源；不允许静默拿“最新 DLL”。
+- 保留 perMonitorV2 manifest、版本信息和 common controls v6；干净 Windows VM 安装、启动、卸载通过。
+- 单 EXE 仅做可行性与许可证评估；若不能可靠落地，v0.1.0 明确采用 exe + DLL，不阻塞发布。
+
+#### 7.5 产品化
+
+- README、快速开始、API/设计/限制、迁移和维护政策提供中英双语入口；所有公开 API 有可检索示例。
+- 完成上表 7GUIs，并为批次 2/3 各提供聚合或专门 example；首发截图来自真实运行窗口。
+- 发布对比页只陈述可验证能力：原生控件、声明式 diff、IME、DPI、虚拟化、多窗口、Inspector/插件。
+- 冻结 v0.1.0 公开 API 清单和 breaking-change 政策，生成 changelog 与 release checklist。
+
+#### 7.6 Accessibility / i18n
+
+- 全控件键盘可达，Tab 顺序、方向键、Space/Enter、Esc 行为有 Windows smoke；焦点指示不可被主题隐藏。
+- 高对比度下不以自定义颜色覆盖系统可读性；Canvas/Grid 补可访问名称或明确记录后端限制。
+- 示例文案和框架诊断从可替换资源读取；至少验证中英文切换不重建有状态控件、不破坏布局。
+- 形成 UIA/屏幕阅读器能力表：原生继承能力、框架补充能力、energye/lcl 限制分别列出。
+
+**P7 最终交付物**：Inspector、插件 SDK、批次 2/3 控件、7GUIs、全量 D7/CI、Windows 安装包、
+中英双语文档站、Accessibility/i18n 能力表。
+
+**P7 最终验收**：全新 Windows 环境从安装到运行示例不超过 5 分钟；全部公开 examples 与
+7GUIs 可交互运行；CI/race/vet/native smoke 全绿；Inspector 未发现非预期重建；发布 v0.1.0。
 
 ---
 

@@ -40,7 +40,7 @@
 # 全量无头测试（不依赖 DLL，任意平台可跑）
 go test ./...
 
-# 构建并冒烟某个示例（basic / layout / events / phase5 / virtual-list）
+# 构建并冒烟某个示例（basic / layout / events / phase5 / form-controls / virtual-list）
 .\scripts\build.ps1 -Target <name>
 .\scripts\smoke.ps1 -Target <name>
 ```
@@ -136,7 +136,7 @@ chore/ci-windows-smoke
 - **标题** = 一条提交信息（`type(scope): subject`）。
 - **正文**：动机（为什么）、影响面（改了哪些包 / 是否动 API）、测试（新增了哪些无头测试、是否手动冒烟）。
 - 关联 issue：`Closes #123`。
-- 触发 CI：`go test ./...` + `go vet ./...` + 构建冒烟（basic/events/phase5/virtual-list）。
+- 触发 CI：`go test ./...` + `go vet ./...` + 构建冒烟（basic/events/phase5/form-controls/virtual-list）。
 - 触及 API 或行为：必须同步更新 `design.md` / `README.md`。
 
 ---

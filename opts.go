@@ -70,6 +70,47 @@ func Enabled(v bool) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Enabled", v) })
 }
 
+// Checked 设置 CheckBox 等可选控件的选中状态（缺省 false）。
+func Checked(v bool) Opt {
+	return optFn(func(n *Node) { n.Props.Set("Checked", v) })
+}
+
+// Items 设置 ComboBox 的字符串选项。输入 slice 会被防御性复制；nil 与空 slice
+// 统一为语义等价的空列表，避免调用方后续修改绕过 diff。
+func Items(items []string) Opt {
+	values := canonicalItems(items)
+	return optFn(func(n *Node) { n.Props.Set("Items", values) })
+}
+
+// SelectedIndex 设置 ComboBox 的受控选中索引。-1 表示未选择；最终值会按 Items
+// 规范化到 [-1, len(Items)-1]（空 Items 恒为 -1）。
+func SelectedIndex(index int) Opt {
+	return optFn(func(n *Node) { n.Props.Set("SelectedIndex", index) })
+}
+
+// Minimum 设置 ProgressBar 的最小值（缺省 0）。最终范围与 Value 在 ProgressBar
+// 构造时统一规范化，因此多个 Opt 的声明顺序不影响结果。
+func Minimum(value int) Opt {
+	return optFn(func(n *Node) { n.Props.Set("Minimum", value) })
+}
+
+// Maximum 设置 ProgressBar 的最大值（缺省 100）。小于 Minimum 时回落为 Minimum。
+func Maximum(value int) Opt {
+	return optFn(func(n *Node) { n.Props.Set("Maximum", value) })
+}
+
+// Value 设置 ProgressBar 的当前值；最终值被钳制到 [Minimum, Maximum]。
+func Value(value int) Opt {
+	return optFn(func(n *Node) { n.Props.Set("Value", value) })
+}
+
+// GroupIndex 设置 RadioButton 的逻辑单选组编号，缺省为 0。支持
+// RadioGroupable 的 Renderer 会让同一 resolved native parent 内的同组控件互斥，
+// 不同组保持独立；它不是对某个绑定库属性 setter 的直接转发。
+func GroupIndex(index int) Opt {
+	return optFn(func(n *Node) { n.Props.Set("GroupIndex", index) })
+}
+
 // DarkTitleBar 设置窗体标题栏沉浸式暗色（Window 用；内部走 "TitleBarDark" 属性 →
 // 绑定层 DwmSetWindowAttribute）。dark=true → 暗色标题栏，false → 系统默认亮色。
 // Phase 5.2 Theme：主题切换时随 Theme.DarkTitleBar 传入，让标题栏与客户区一起变暗。

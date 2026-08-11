@@ -19,6 +19,11 @@ func TestConstructorsBuildNode(t *testing.T) {
 		{"Button", flux.Button("OK"), "Button", "OK"},
 		{"Text", flux.Text("hi"), "Text", "hi"},
 		{"Input", flux.Input(), "Input", ""},
+		{"Memo", flux.Memo("line 1\nline 2"), "Memo", "line 1\nline 2"},
+		{"CheckBox", flux.CheckBox("accept"), "CheckBox", "accept"},
+		{"ComboBox", flux.ComboBox(), "ComboBox", ""},
+		{"ProgressBar", flux.ProgressBar(), "ProgressBar", ""},
+		{"RadioButton", flux.RadioButton("choice"), "RadioButton", "choice"},
 		{"Column", flux.Column(), "Column", ""},
 		{"Row", flux.Row(), "Row", ""},
 		{"Window", flux.Window(), "Window", ""},
@@ -60,8 +65,99 @@ func TestOptionsApply(t *testing.T) {
 	}
 }
 
-// TestLayoutColumnStacks 占位布局：Column 内 children 自上而下堆叠，
-// Bounds 位置正确写入 Props，供 diff 引擎 SetBounds。
+// TestCheckBoxOptions Checked 与 OnCheckedChange 写入独立的布尔状态属性，
+// 不与 Input/Memo 的文本 OnChange 混用。
+func TestCheckBoxOptions(t *testing.T) {
+	var got bool
+	n := flux.CheckBox("accept", flux.Checked(true), flux.OnCheckedChange(func(checked bool) {
+		got = checked
+	})).Create()
+
+	if !n.Props.Bool("Checked") {
+		t.Error("Checked(true) 未写入 Checked 属性")
+	}
+	v, ok := n.Props.Get("OnCheckedChange")
+	if !ok {
+		t.Fatal("OnCheckedChange 属性缺失")
+	}
+	v.(func(bool))(true)
+	if !got {
+		t.Error("OnCheckedChange 回调未接收 true")
+	}
+}
+
+// TestComboBoxOptions 选择控件使用最小字符串列表和显式受控索引；输入 slice
+// 在构造时复制，Items/SelectedIndex 的 Opt 顺序不影响规范化结果。
+func TestComboBoxOptions(t *testing.T) {
+	input := []string{"one", "two"}
+	var got int
+	n := flux.ComboBox(
+		flux.SelectedIndex(9),
+		flux.Items(input),
+		flux.OnSelectionChange(func(index int) { got = index }),
+	).Create()
+	input[0] = "mutated"
+
+	items, _ := n.Props.Get("Items")
+	values := items.([]string)
+	if values[0] != "one" {
+		t.Errorf("Items 未防御性复制，实际 %v", values)
+	}
+	if index := n.Props.Int("SelectedIndex"); index != 1 {
+		t.Errorf("越界 SelectedIndex = %d，期望 1", index)
+	}
+	v, ok := n.Props.Get("OnSelectionChange")
+	if !ok {
+		t.Fatal("OnSelectionChange 属性缺失")
+	}
+	v.(func(int))(0)
+	if got != 0 {
+		t.Errorf("OnSelectionChange 回调收到 %d，期望 0", got)
+	}
+
+	empty := flux.ComboBox(flux.Items(nil), flux.SelectedIndex(0)).Create()
+	items, _ = empty.Props.Get("Items")
+	if got := items.([]string); got == nil || len(got) != 0 {
+		t.Errorf("nil Items 应规范为空非 nil slice，实际 %#v", got)
+	}
+	if index := empty.Props.Int("SelectedIndex"); index != -1 {
+		t.Errorf("空 Items 的 SelectedIndex = %d，期望 -1", index)
+	}
+}
+
+func TestProgressBarAndRadioButtonOptions(t *testing.T) {
+	progress := flux.ProgressBar(flux.Value(180), flux.Maximum(120), flux.Minimum(40)).Create()
+	if got := progress.Props.Int("Minimum"); got != 40 {
+		t.Errorf("Minimum = %d，期望 40", got)
+	}
+	if got := progress.Props.Int("Maximum"); got != 120 {
+		t.Errorf("Maximum = %d，期望 120", got)
+	}
+	if got := progress.Props.Int("Value"); got != 120 {
+		t.Errorf("Value = %d，期望钳制到 120", got)
+	}
+	defaults := flux.ProgressBar().Create()
+	if defaults.Props.Int("Minimum") != 0 || defaults.Props.Int("Maximum") != 100 || defaults.Props.Int("Value") != 0 {
+		t.Errorf("ProgressBar 默认值 = %d/%d/%d，期望 0/100/0", defaults.Props.Int("Minimum"), defaults.Props.Int("Maximum"), defaults.Props.Int("Value"))
+	}
+
+	var checked bool
+	radio := flux.RadioButton("one", flux.Checked(true), flux.GroupIndex(3), flux.OnCheckedChange(func(value bool) {
+		checked = value
+	})).Create()
+	if !radio.Props.Bool("Checked") || radio.Props.Int("GroupIndex") != 3 {
+		t.Errorf("RadioButton 属性 = Checked(%v), GroupIndex(%d)", radio.Props.Bool("Checked"), radio.Props.Int("GroupIndex"))
+	}
+	callback, ok := radio.Props.Get("OnCheckedChange")
+	if !ok {
+		t.Fatal("RadioButton OnCheckedChange 属性缺失")
+	}
+	callback.(func(bool))(true)
+	if !checked {
+		t.Error("RadioButton OnCheckedChange 未接收 true")
+	}
+}
+
 func TestLayoutColumnStacks(t *testing.T) {
 	m := render.NewMock()
 	app := flux.NewApp(m)

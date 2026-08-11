@@ -81,3 +81,14 @@ func OnUnmount(fn func()) Opt {
 func OnChange(fn func(text string)) Opt {
 	return optFn(func(n *Node) { n.Props.Set("OnChange", fn) })
 }
+
+// OnCheckedChange 绑定选中状态变化事件（CheckBox 等可选控件）。fn 接收变化后的状态。
+func OnCheckedChange(fn func(checked bool)) Opt {
+	return optFn(func(n *Node) { n.Props.Set("OnCheckedChange", fn) })
+}
+
+// OnSelectionChange 绑定 ComboBox 选择变化事件。fn 接收用户选择后的索引；-1 表示
+// 当前未选择。该事件不复用文本控件的 OnChange。
+func OnSelectionChange(fn func(index int)) Opt {
+	return optFn(func(n *Node) { n.Props.Set("OnSelectionChange", fn) })
+}

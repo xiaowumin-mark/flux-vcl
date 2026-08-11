@@ -30,7 +30,114 @@ func TestBoxConstraintsConstrain(t *testing.T) {
 	}
 }
 
-// TestFlexExpandedFillsFreeSpace Expanded（tight）拿满 flex 容器剩余主轴空间。
+// TestTextIntrinsicSizeHandlesExplicitLines 回归多行 Text 只按单行高度布局、导致
+// 后续控件与第二行文字重叠的问题；CRLF/LF 均按显式行逐行测量。
+func TestTextIntrinsicSizeHandlesExplicitLines(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	app.Render(flux.Window(flux.Column(
+		flux.Text("first\r\nsecond", flux.Key("multiline")),
+		flux.CheckBox("next", flux.Key("next")),
+	)))
+
+	textBounds := boundsOf(findByKey(t, app.Root(), "multiline"))
+	nextBounds := boundsOf(findByKey(t, app.Root(), "next"))
+	if textBounds.W != 48 || textBounds.H != 40 {
+		t.Errorf("多行 Text Bounds = %+v，期望 W=48 H=40", textBounds)
+	}
+	if nextBounds.Y != textBounds.Y+textBounds.H+4 {
+		t.Errorf("后续 CheckBox Y=%d，期望 %d（多行 Text 底部 + gap）", nextBounds.Y, textBounds.Y+textBounds.H+4)
+	}
+}
+
+// TestMemoIntrinsicSize Memo 按显式换行逐行测量，保持最小编辑区，并允许尺寸 Opt 覆盖。
+func TestMemoIntrinsicSize(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	app.Render(flux.Window(flux.Column(
+		flux.Memo("123456789012345678901234567890\nline 2\nline 3\nline 4\nline 5", flux.Key("memo")),
+		flux.Memo("", flux.Key("sized"), flux.Width(240), flux.Height(120)),
+	)))
+
+	if got := boundsOf(findByKey(t, app.Root(), "memo")); got.W != 240 || got.H != 100 {
+		t.Errorf("多行 Memo Bounds = %+v，期望 W=240 H=100", got)
+	}
+	if got := boundsOf(findByKey(t, app.Root(), "sized")); got.W != 240 || got.H != 120 {
+		t.Errorf("显式尺寸 Memo Bounds = %+v，期望 W=240 H=120", got)
+	}
+}
+
+// TestCheckBoxIntrinsicSize CheckBox 按标签量取尺寸，选中状态不改变布局，
+// 显式 Width/Height 仍优先于 intrinsic 尺寸。
+func TestCheckBoxIntrinsicSize(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	app.Render(flux.Window(flux.Column(
+		flux.CheckBox("abc", flux.Key("unchecked")),
+		flux.CheckBox("abc", flux.Key("checked"), flux.Checked(true)),
+		flux.CheckBox("", flux.Key("sized"), flux.Width(140), flux.Height(36)),
+	)))
+
+	unchecked := boundsOf(findByKey(t, app.Root(), "unchecked"))
+	checked := boundsOf(findByKey(t, app.Root(), "checked"))
+	if unchecked.W != checked.W || unchecked.H != checked.H {
+		t.Errorf("选中状态不应影响 CheckBox 尺寸：unchecked=%+v checked=%+v", unchecked, checked)
+	}
+	if unchecked.W != 52 || unchecked.H != 24 {
+		t.Errorf("CheckBox intrinsic Bounds = %+v，期望 W=52 H=24", unchecked)
+	}
+	if got := boundsOf(findByKey(t, app.Root(), "sized")); got.W != 140 || got.H != 36 {
+		t.Errorf("显式尺寸 CheckBox Bounds = %+v，期望 W=140 H=36", got)
+	}
+}
+
+// TestComboBoxIntrinsicSize ComboBox 按全部选项的最长文本测量；受控索引不影响宽度，
+// 且显式尺寸仍优先。
+func TestComboBoxIntrinsicSize(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	app.Render(flux.Window(flux.Column(
+		flux.ComboBox(flux.Key("first"), flux.Items([]string{"a", "longest"}), flux.SelectedIndex(0)),
+		flux.ComboBox(flux.Key("second"), flux.Items([]string{"a", "longest"}), flux.SelectedIndex(1)),
+		flux.ComboBox(flux.Key("sized"), flux.Items(nil), flux.Width(180), flux.Height(36)),
+	)))
+
+	first := boundsOf(findByKey(t, app.Root(), "first"))
+	second := boundsOf(findByKey(t, app.Root(), "second"))
+	if first.W != second.W || first.H != second.H {
+		t.Errorf("SelectedIndex 不应影响 ComboBox 尺寸：first=%+v second=%+v", first, second)
+	}
+	if first.W != 100 || first.H != 28 {
+		t.Errorf("ComboBox intrinsic Bounds = %+v，期望 W=100 H=28", first)
+	}
+	if got := boundsOf(findByKey(t, app.Root(), "sized")); got.W != 180 || got.H != 36 {
+		t.Errorf("显式尺寸 ComboBox Bounds = %+v，期望 W=180 H=36", got)
+	}
+}
+
+func TestProgressBarAndRadioButtonIntrinsicSize(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	app.Render(flux.Window(flux.Column(
+		flux.ProgressBar(flux.Key("progress"), flux.Minimum(20), flux.Maximum(80), flux.Value(60)),
+		flux.ProgressBar(flux.Key("sized-progress"), flux.Width(240), flux.Height(32)),
+		flux.CheckBox("choice", flux.Key("check")),
+		flux.RadioButton("choice", flux.Key("radio"), flux.Checked(true), flux.GroupIndex(2)),
+	)))
+
+	if got := boundsOf(findByKey(t, app.Root(), "progress")); got.W != 180 || got.H != 20 {
+		t.Errorf("ProgressBar intrinsic Bounds = %+v，期望 W=180 H=20", got)
+	}
+	if got := boundsOf(findByKey(t, app.Root(), "sized-progress")); got.W != 240 || got.H != 32 {
+		t.Errorf("显式尺寸 ProgressBar Bounds = %+v，期望 W=240 H=32", got)
+	}
+	check := boundsOf(findByKey(t, app.Root(), "check"))
+	radio := boundsOf(findByKey(t, app.Root(), "radio"))
+	if check.W != radio.W || check.H != radio.H {
+		t.Errorf("RadioButton 应复用 CheckBox intrinsic 尺寸：check=%+v radio=%+v", check, radio)
+	}
+}
+
 // Window client 400x300：Column 内 B 非 flex 高 20，Expanded A 分到 300-20-gap4=276。
 func TestFlexExpandedFillsFreeSpace(t *testing.T) {
 	m := render.NewMock()

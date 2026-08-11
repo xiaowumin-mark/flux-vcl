@@ -105,6 +105,8 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 
 **Phase 6（列表与虚拟化）✅ 完成**：`ListView(count, itemHeight, builder, ScrollOffset(scroll))` 虚拟滚动列表 —— **控件池虚拟化**（10 万行只建可见区±overscan 的 ~20 个原生控件，内存有界；滚动 = 行内容属性 patch 不重建，行内控件焦点/IME 不漂移）+ 稳定 slot key（`row-i` 槽位身份，D3）+ 滚动双向绑定（`scrollTarget` 值类型，D7c 零 mutation；滚轮/滚动条拖动 → State → re-render）+ 多窗口（第二个 `NewRenderer`/`NewApp` + `Show()`，独立 State 作用域）。
 
+**控件扩充批次 1（常用表单基线）✅ 完成**：`Memo`、`CheckBox`、`ComboBox`、`ProgressBar`、`RadioButton` 均已完成公开 API、布局、diff 属性对称性、Mock、LCL 适配及聚合示例。`ComboBox` 采用 `[]string` + 显式受控 `SelectedIndex`；`ProgressBar` 规范化 `Minimum ≤ Maximum` 并把 `Value` 钳制到该范围；`RadioButton` 由 native Renderer 按 resolved native parent + `GroupIndex` 维护逻辑互斥，规避 energye/lcl v1.0.3 缺少分组 setter 的限制。
+
 | 子任务 | 状态 |
 |---|---|
 | 6.1 ListView + 稳定 key（`ListView(count, itemH, builder)` + slot key=`row-i` 控件池复用；行内容不带数据 key） | ✅ `flux.ListView` + diff/layout `ListViewRow` 透明分支 |
@@ -156,6 +158,7 @@ app.Mount(func() flux.Widget {
 - `examples/layout` —— 布局引擎 demo（flex 分配、1:2 分栏、resize 即时重分割、DPI 读数）
 - `examples/events` —— 事件与生命周期 demo（hover 坐标 / click Source / 键盘 / 中文 IME / 生命周期计数）
 - `examples/phase5` —— 高级特性 demo（点击按钮：计数 + 方块滑动动画 + 异步加载；点击"主题"切换 Light/Dark）
+- `examples/form-controls` —— 常用表单控件 demo（Memo/CheckBox/ComboBox/ProgressBar/RadioButton；唯一数字 Button 供 smoke）
 - `examples/virtual-list` —— 大数据 demo（10 万行虚拟滚动列表：控件池 + 稳定 key + 滚动双向绑定 + 第二窗体多窗口）
 
 ```powershell
@@ -170,6 +173,9 @@ app.Mount(func() flux.Widget {
 
 # 构建并冒烟 phase5（动画/主题/Async/组件）
 .\scripts\build.ps1 -Target phase5; .\scripts\smoke.ps1 -Target phase5
+
+# 构建并冒烟 form-controls（Memo / CheckBox / ComboBox / ProgressBar / RadioButton）
+.\scripts\build.ps1 -Target form-controls; .\scripts\smoke.ps1 -Target form-controls
 
 # 构建并冒烟 virtual-list（10 万行虚拟列表 + 多窗口）
 .\scripts\build.ps1 -Target virtual-list; .\scripts\smoke.ps1 -Target virtual-list
@@ -202,6 +208,8 @@ flux-vcl/
 │   ├── events/            # 事件与生命周期 demo（hover/click/键盘/中文 IME/生命周期计数）
 │   │   └── winres/
 │   ├── phase5/            # 高级特性 demo（动画/主题/Async/组件）
+│   │   └── winres/
+│   ├── form-controls/     # 常用表单控件 demo（批次 1）
 │   │   └── winres/
 │   └── virtual-list/      # 大数据 demo（10 万行虚拟列表 + 多窗口）
 │       └── winres/

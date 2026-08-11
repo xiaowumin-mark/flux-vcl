@@ -78,6 +78,34 @@ type Renderer struct {
 	closed         atomic.Bool                   // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
 	pendingDestroy []lcl.IControl                // D4 延后销毁队列：render 完成时 DrainDestroy 统一 Free
 	scrolls        map[render.Handle]*listScroll // Phase 6 ListView 滚动状态（Scrollable 实现）
+	radios         map[render.Handle]*radioState // RadioButton 的逻辑分组元数据（不依赖缺失的 LCL setter）
+	radioHosts     map[radioHostKey]*radioHost   // (原生父句柄, RadioButton 句柄) → 隔离用 TPanel
+	pendingHosts   []*radioHost                  // 已脱离逻辑父级、待普通控件释放后销毁的内部 Panel
+}
+
+// radioState 保存 RadioButton 的 Flux 逻辑父级、坐标和受控属性。TRadioButton 在
+// energye/lcl v1.0.3 中没有 GroupIndex setter，因此每个控件使用一个内部 TPanel
+// 隔离 LCL 的同 parent 互斥；逻辑组由 Renderer 元数据维护，Panel 句柄绝不暴露给
+// diff 或公开 API。
+type radioState struct {
+	parent   render.Handle
+	group    int
+	bounds   render.Rect
+	visible  bool
+	checked  bool
+	applying bool // 抑制 SetChecked 触发的同步 OnChange 重入
+	host     *radioHost
+}
+
+type radioHostKey struct {
+	parent render.Handle
+	handle render.Handle
+}
+
+type radioHost struct {
+	key     radioHostKey
+	panel   lcl.IPanel
+	members map[render.Handle]struct{}
 }
 
 // listScroll 是 ListView 的原生滚动状态（Phase 6，design.md §16）：
@@ -124,6 +152,16 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 		c = lcl.NewLabel(r.form)
 	case "Input":
 		c = lcl.NewEdit(r.form)
+	case "Memo":
+		c = lcl.NewMemo(r.form)
+	case "CheckBox":
+		c = lcl.NewCheckBox(r.form)
+	case "ComboBox":
+		c = lcl.NewComboBox(r.form)
+	case "RadioButton":
+		c = lcl.NewRadioButton(r.form)
+	case "ProgressBar":
+		c = lcl.NewProgressBar(r.form)
 	case "ScrollBox":
 		// 垂直滚动容器（Phase 3.6）：AutoScroll=true 让 LCL 自动按子控件包围盒
 		// 计算滚动范围、滚动条自动出现；DoubleBuffered 防闪烁（WM_SETREDRAW 批量
@@ -152,6 +190,12 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 	}
 	h := r.alloc()
 	r.controls[h] = c
+	if widgetType == "RadioButton" {
+		if r.radios == nil {
+			r.radios = make(map[render.Handle]*radioState)
+		}
+		r.radios[h] = &radioState{visible: true}
+	}
 	if ls != nil {
 		if r.scrolls == nil {
 			r.scrolls = make(map[render.Handle]*listScroll)
@@ -231,6 +275,10 @@ func (r *Renderer) applyBarRange(ls *listScroll) {
 // 物理 Free 由 DrainDestroy 在 render 完成后统一执行（App 每次 render 后调用；
 // 也是"事件回调内触发 render → 移除控件"的安全边界）。
 func (r *Renderer) Destroy(h render.Handle) {
+	if radio := r.radios[h]; radio != nil {
+		r.removeRadioFromHost(h, radio)
+		delete(r.radios, h)
+	}
 	c := r.controls[h]
 	if c == nil || c == r.form {
 		return // 主窗体不显式 Free
@@ -248,9 +296,21 @@ func (r *Renderer) DrainDestroy() {
 		c.Free()
 	}
 	r.pendingDestroy = nil
+	for _, host := range r.pendingHosts {
+		host.panel.Free()
+	}
+	r.pendingHosts = nil
 }
 
 func (r *Renderer) SetParent(child, parent render.Handle) {
+	if radio := r.radios[child]; radio != nil {
+		if parent == 0 {
+			return // 顶层 Window；RadioButton 必须有实际 native parent。
+		}
+		radio.parent = parent
+		r.attachRadioToHost(child, radio)
+		return
+	}
 	if parent == 0 {
 		return // 顶层（窗体）无父
 	}
@@ -262,7 +322,115 @@ func (r *Renderer) SetParent(child, parent render.Handle) {
 	cc.SetParent(pc)
 }
 
+// radioHostFor 返回指定逻辑父级与 RadioButton 的内部 Panel。使用一控件一 host
+// 避免 shared host 覆盖同一 bounds 区域内的非 RadioButton sibling；逻辑分组仍由
+// Renderer 的 radioState 元数据维护。
+func (r *Renderer) radioHostFor(parent, h render.Handle) *radioHost {
+	key := radioHostKey{parent: parent, handle: h}
+	if host := r.radioHosts[key]; host != nil {
+		return host
+	}
+	pc, ok := r.controls[parent].(lcl.IWinControl)
+	if !ok {
+		panic(fmt.Sprintf("native: RadioButton 父控件 %d 非 IWinControl", parent))
+	}
+	panel := lcl.NewPanel(r.form)
+	panel.SetParent(pc)
+	panel.SetBevelInner(types.BvNone)
+	panel.SetBevelOuter(types.BvNone)
+	panel.SetBorderWidth(0)
+	panel.SetParentColor(true)
+	panel.SetParentBackground(true)
+	panel.SetTabStop(false)
+	host := &radioHost{key: key, panel: panel, members: make(map[render.Handle]struct{})}
+	if r.radioHosts == nil {
+		r.radioHosts = make(map[radioHostKey]*radioHost)
+	}
+	r.radioHosts[key] = host
+	return host
+}
+
+func (r *Renderer) attachRadioToHost(h render.Handle, radio *radioState) {
+	if radio.parent == 0 {
+		return
+	}
+	if radio.host != nil {
+		r.removeRadioFromHost(h, radio)
+	}
+	host := r.radioHostFor(radio.parent, h)
+	host.members[h] = struct{}{}
+	radio.host = host
+	r.controls[h].SetParent(host.panel)
+	r.layoutRadioHost(host)
+	r.applyRadioChecked(h, radio.checked)
+}
+
+func (r *Renderer) removeRadioFromHost(h render.Handle, radio *radioState) {
+	host := radio.host
+	if host == nil {
+		return
+	}
+	delete(host.members, h)
+	radio.host = nil
+	if len(host.members) != 0 {
+		r.layoutRadioHost(host)
+		return
+	}
+	delete(r.radioHosts, host.key)
+	host.panel.SetVisible(false)
+	r.pendingHosts = append(r.pendingHosts, host)
+}
+
+// layoutRadioHost keeps an internal host exactly under one radio. A host-per-radio
+// design is necessary here: a shared rectangular Panel would change hit testing and
+// z-order for arbitrary interleaved Flux siblings.
+func (r *Renderer) layoutRadioHost(host *radioHost) {
+	for h := range host.members {
+		radio := r.radios[h]
+		if radio == nil {
+			continue
+		}
+		b := radio.bounds
+		dpi := int(r.currentDPI())
+		host.panel.SetBounds(
+			int32(render.DIPToPX(b.X, dpi)),
+			int32(render.DIPToPX(b.Y, dpi)),
+			int32(render.DIPToPX(b.W, dpi)),
+			int32(render.DIPToPX(b.H, dpi)),
+		)
+		r.controls[h].SetBounds(0, 0,
+			int32(render.DIPToPX(b.W, dpi)),
+			int32(render.DIPToPX(b.H, dpi)),
+		)
+		host.panel.SetVisible(radio.visible)
+	}
+}
+
+// applyRadioChecked 必须在 RadioButton 已挂入最终 group host 后调用；否则 LCL
+// 会按其创建时的 native parent 清除错误的兄弟控件。
+func (r *Renderer) applyRadioChecked(h render.Handle, checked bool) {
+	c, ok := r.controls[h].(checkableControl)
+	if !ok {
+		panic(fmt.Sprintf("native: 控件 %d 不支持 Checked", h))
+	}
+	radio := r.radios[h]
+	if radio == nil {
+		c.SetChecked(checked)
+		return
+	}
+	radio.applying = true
+	defer func() { radio.applying = false }()
+	c.SetChecked(checked)
+}
+
 func (r *Renderer) SetBounds(h render.Handle, b render.Rect) {
+	if radio := r.radios[h]; radio != nil {
+		radio.bounds = b
+		if radio.host != nil {
+			r.layoutRadioHost(radio.host)
+		}
+		return
+	}
 	dpi := int(r.currentDPI())
 	r.controls[h].SetBounds(
 		int32(render.DIPToPX(b.X, dpi)),
@@ -286,6 +454,14 @@ func (r *Renderer) SetBounds(h render.Handle, b render.Rect) {
 }
 
 func (r *Renderer) SetVisible(h render.Handle, visible bool) {
+	if radio := r.radios[h]; radio != nil {
+		radio.visible = visible
+		r.controls[h].SetVisible(visible)
+		if radio.host != nil {
+			r.layoutRadioHost(radio.host)
+		}
+		return
+	}
 	r.controls[h].SetVisible(visible)
 }
 
@@ -475,6 +651,181 @@ type keyEvents interface {
 	SetOnKeyUp(fn lcl.TKeyEvent)
 	SetOnKeyPress(fn lcl.TKeyPressEvent)
 	SetOnUTF8KeyPress(fn lcl.TUTF8KeyPressEvent)
+}
+
+// checkableControl 是 TCheckBox/TRadioButton 暴露的最小布尔选择能力。
+// 使用结构化接口让 Renderer 保持对具体 LCL 控件类型的低耦合（D6）。
+type checkableControl interface {
+	Checked() bool
+	SetChecked(bool)
+	SetOnChange(lcl.TNotifyEvent)
+}
+
+// progressControl 是 TProgressBar 暴露的最小范围和值能力。
+type progressControl interface {
+	SetMin(int32)
+	SetMax(int32)
+	SetPosition(int32)
+}
+
+// SetChecked 设置 CheckBox 等可选控件的受控选中状态。RadioButton 在尚未解析
+// native parent 时只缓存值，待 SetParent 完成 host 挂载后才下发。同一逻辑父级和
+// GroupIndex 的 RadioButton 在此处保持互斥；每个 radio 独立 host 则隔离 LCL 原生
+// 的“同 parent 全部互斥”规则，且不会吞没相邻 sibling 的命中区域。
+func (r *Renderer) SetChecked(h render.Handle, checked bool) {
+	if radio := r.radios[h]; radio != nil {
+		radio.checked = checked
+		if radio.host == nil {
+			return
+		}
+		if checked {
+			for peerHandle, peer := range r.radios {
+				if peerHandle == h || peer.host == nil || peer.parent != radio.parent || peer.group != radio.group || !peer.checked {
+					continue
+				}
+				peer.checked = false
+				r.applyRadioChecked(peerHandle, false)
+			}
+		}
+		r.applyRadioChecked(h, checked)
+		return
+	}
+	c, ok := r.controls[h].(checkableControl)
+	if !ok {
+		panic(fmt.Sprintf("native: 控件 %d 不支持 Checked", h))
+	}
+	c.SetChecked(checked)
+}
+
+// OnCheckedChange 绑定 CheckBox 等可选控件的布尔状态变化；nil 清除绑定。
+func (r *Renderer) OnCheckedChange(h render.Handle, fn func(bool)) {
+	c, ok := r.controls[h].(checkableControl)
+	if !ok {
+		panic(fmt.Sprintf("native: 控件 %d 不支持 OnCheckedChange", h))
+	}
+	if fn == nil {
+		c.SetOnChange(nil)
+		return
+	}
+	c.SetOnChange(func(_ lcl.IObject) {
+		radio := r.radios[h]
+		if radio != nil && radio.applying {
+			return
+		}
+		// LCL 只会在同一真实 parent 内互斥。RadioButton 使用独立 host 后，
+		// 用户点击也必须回到 Flux 的逻辑组规则，再通知受控状态所有者。
+		if radio != nil {
+			radio.checked = c.Checked()
+			if radio.checked {
+				r.SetChecked(h, true)
+			}
+		}
+		render.Guard("event.OnCheckedChange", func() { fn(c.Checked()) })
+	})
+}
+
+// SetGroupIndex 设置 RadioButton 的 Flux 逻辑组编号。互斥状态由本 Renderer 按
+// resolved native parent + GroupIndex 维护；内部的逐控件 Panel 只隔离
+// energye/lcl v1.0.3 的同 parent 原生互斥，不能替代逻辑分组元数据。
+func (r *Renderer) SetGroupIndex(h render.Handle, groupIndex int) {
+	radio := r.radios[h]
+	if radio == nil {
+		return
+	}
+	if radio.group == groupIndex {
+		return
+	}
+	radio.group = groupIndex
+	if radio.checked {
+		r.SetChecked(h, true)
+	}
+}
+
+// SetMinimum 设置 ProgressBar 的最小值。
+func (r *Renderer) SetMinimum(h render.Handle, minimum int) {
+	c, ok := r.controls[h].(progressControl)
+	if !ok {
+		return
+	}
+	c.SetMin(int32(minimum))
+}
+
+// SetMaximum 设置 ProgressBar 的最大值。
+func (r *Renderer) SetMaximum(h render.Handle, maximum int) {
+	c, ok := r.controls[h].(progressControl)
+	if !ok {
+		return
+	}
+	c.SetMax(int32(maximum))
+}
+
+// SetValue 设置 ProgressBar 的当前位置。
+func (r *Renderer) SetValue(h render.Handle, value int) {
+	c, ok := r.controls[h].(progressControl)
+	if !ok {
+		return
+	}
+	c.SetPosition(int32(value))
+}
+
+// comboBoxControl 是 TComboBox 暴露的最小选择能力。
+type comboBoxControl interface {
+	Items() lcl.IStrings
+	ItemIndex() int32
+	SetItemIndex(int32)
+	SetOnSelect(lcl.TNotifyEvent)
+}
+
+// SetItems 替换 ComboBox 的全部字符串选项，并保留合法的当前选中索引。
+func (r *Renderer) SetItems(h render.Handle, values []string) {
+	combo, ok := r.controls[h].(comboBoxControl)
+	if !ok {
+		return
+	}
+	items := combo.Items()
+	items.Clear()
+	for _, value := range values {
+		items.Add(value)
+	}
+	combo.SetItemIndex(int32(normalizeComboIndex(len(values), int(combo.ItemIndex()))))
+}
+
+// SetSelectedIndex 设置 ComboBox 的受控选中索引。TComboBox 自己维护 items，
+// 因此只需以当前 Items.Count 为边界规范化。
+func (r *Renderer) SetSelectedIndex(h render.Handle, index int) {
+	combo, ok := r.controls[h].(comboBoxControl)
+	if !ok {
+		return
+	}
+	combo.SetItemIndex(int32(normalizeComboIndex(int(combo.Items().Count()), index)))
+}
+
+// OnSelectionChange 绑定 ComboBox 的 OnSelect；nil 清除绑定。
+func (r *Renderer) OnSelectionChange(h render.Handle, fn func(int)) {
+	combo, ok := r.controls[h].(comboBoxControl)
+	if !ok {
+		return
+	}
+	if fn == nil {
+		combo.SetOnSelect(nil)
+		return
+	}
+	combo.SetOnSelect(func(_ lcl.IObject) {
+		render.Guard("event.OnSelectionChange", func() { fn(int(combo.ItemIndex())) })
+	})
+}
+
+func normalizeComboIndex(count, index int) int {
+	if count == 0 {
+		return -1
+	}
+	if index < -1 {
+		return -1
+	}
+	if index >= count {
+		return count - 1
+	}
+	return index
 }
 
 // SetEvent 把统一事件回调（func(render.Event)）映射到 LCL 事件（Phase 4.2）。

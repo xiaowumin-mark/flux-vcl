@@ -36,6 +36,13 @@ func transparentType(t string) bool {
 	return false
 }
 
+func copyItems(items []string) []string {
+	if len(items) == 0 {
+		return []string{}
+	}
+	return append([]string(nil), items...)
+}
+
 // Element 是 Element 树的节点（design.md §4.3 / D1）：持久 identity。
 //
 // 在控件存活期间复用同一 Element（Type+Key 匹配时），持有当前原生句柄
@@ -213,6 +220,17 @@ func canUpdate(old *Element, node *widget.Node) bool {
 // 返回是否存在"真实属性变化"（值非函数且非生命周期/_bind 隐藏键）——
 // OnUpdate 触发判定（Phase 4.3）。事件回调/生命周期钩子恒判变化（函数值），
 // 但它们不是配置更新，不计入。
+var orderedProps = []string{"Items", "SelectedIndex", "Minimum", "Maximum", "Value"}
+
+func orderedProp(key string) bool {
+	for _, candidate := range orderedProps {
+		if key == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 func (rc *Reconciler) patchProps(e *Element, node *widget.Node) bool {
 	if e.Props.Equal(node.Props) {
 		return false
@@ -220,12 +238,28 @@ func (rc *Reconciler) patchProps(e *Element, node *widget.Node) bool {
 	changed := false
 	// 移除的属性（新树不再声明）→ 回落到挂载默认值（D2 对称：删除的配置不残留
 	// 在原生控件上）。框架管理键/透明容器在 applyRemoved 内天然跳过。
-	for _, key := range e.Props.Removed(node.Props) {
+	// 受控组合属性的移除也必须按其依赖顺序处理，不能依赖 Props 的 map 遍历顺序。
+	removedKeys := e.Props.Removed(node.Props)
+	for _, key := range removedKeys {
+		if orderedProp(key) {
+			continue
+		}
 		if rc.applyRemoved(e, key) {
 			changed = true
 		}
 	}
-	for _, key := range node.Props.Diff(e.Props) {
+	for _, key := range orderedProps {
+		for _, removedKey := range removedKeys {
+			if removedKey == key && rc.applyRemoved(e, key) {
+				changed = true
+			}
+		}
+	}
+	diffKeys := node.Props.Diff(e.Props)
+	for _, key := range diffKeys {
+		if orderedProp(key) {
+			continue
+		}
 		v, _ := node.Props.Get(key)
 		// "_bind" 是 flux 隐藏的绑定依赖键（state.go，diff 不 import flux 防循环）。
 		// 同 State 的 Binding 指针判等、不在 Diff 内；这里兜底排除。
@@ -234,14 +268,39 @@ func (rc *Reconciler) patchProps(e *Element, node *widget.Node) bool {
 		}
 		rc.applyProp(e, key, v)
 	}
+	// 受控组合属性按固定顺序应用，不能依赖 Props 的 map 遍历顺序。
+	for _, key := range orderedProps {
+		changedKey := false
+		for _, diffKey := range diffKeys {
+			if diffKey == key {
+				changedKey = true
+				break
+			}
+		}
+		if !changedKey {
+			continue
+		}
+		v, _ := node.Props.Get(key)
+		changed = true
+		rc.applyProp(e, key, v)
+	}
 	return changed
 }
 
-// applyProps 挂载时全量应用属性（无旧值可比）。
+// applyProps 挂载时全量应用属性（无旧值可比）。ComboBox 的 Items 必须先于
+// SelectedIndex 应用，避免调用方的 Opt 声明顺序使有效的受控索引先被空列表钳制。
 func (rc *Reconciler) applyProps(e *Element, props *widget.Props) {
 	for _, key := range props.Keys() {
+		if orderedProp(key) {
+			continue
+		}
 		v, _ := props.Get(key)
 		rc.applyProp(e, key, v)
+	}
+	for _, key := range orderedProps {
+		if v, ok := props.Get(key); ok {
+			rc.applyProp(e, key, v)
+		}
 	}
 }
 
@@ -275,6 +334,27 @@ func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
 	case "TitleBarDark":
 		rc.applyProp(e, key, false)
 		return true
+	case "Checked":
+		rc.applyProp(e, key, false) // 挂载默认：未选中
+		return true
+	case "Items":
+		rc.applyProp(e, key, []string{}) // ComboBox 挂载默认：空选项
+		return true
+	case "SelectedIndex":
+		rc.applyProp(e, key, -1) // ComboBox 挂载默认：未选择
+		return true
+	case "Minimum":
+		rc.applyProp(e, key, 0) // ProgressBar 挂载默认：最小值 0
+		return true
+	case "Maximum":
+		rc.applyProp(e, key, 100) // ProgressBar 挂载默认：最大值 100
+		return true
+	case "Value":
+		rc.applyProp(e, key, 0) // ProgressBar 挂载默认：当前值 0
+		return true
+	case "GroupIndex":
+		rc.applyProp(e, key, 0) // RadioButton 挂载默认：组 0
+		return true
 	case "Text":
 		rc.applyProp(e, key, "") // 挂载默认：空文本
 		return true
@@ -283,6 +363,16 @@ func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
 		case func(render.Event), func(string): // 事件移除：解绑（native SetEvent nil 分支）
 			rc.r.SetEvent(e.Handle, key, nil)
 			rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+		case func(bool):
+			if c, ok := rc.r.(render.Checkable); ok {
+				c.OnCheckedChange(e.Handle, nil)
+				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+			}
+		case func(int):
+			if s, ok := rc.r.(render.Selectable); ok {
+				s.OnSelectionChange(e.Handle, nil)
+				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+			}
 		}
 		return false
 	}
@@ -315,6 +405,56 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 		if b, ok := v.(bool); ok {
 			rc.r.SetEnabled(e.Handle, b)
 			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Enabled", Value: b})
+		}
+	case "Checked":
+		if b, ok := v.(bool); ok {
+			if c, ok := rc.r.(render.Checkable); ok {
+				c.SetChecked(e.Handle, b)
+				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Checked", Value: b})
+			}
+		}
+	case "Items":
+		if items, ok := v.([]string); ok {
+			if s, ok := rc.r.(render.Selectable); ok {
+				items = copyItems(items)
+				s.SetItems(e.Handle, items)
+				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Items", Value: items})
+			}
+		}
+	case "SelectedIndex":
+		if index, ok := v.(int); ok {
+			if s, ok := rc.r.(render.Selectable); ok {
+				s.SetSelectedIndex(e.Handle, index)
+				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "SelectedIndex", Value: index})
+			}
+		}
+	case "Minimum":
+		if minimum, ok := v.(int); ok {
+			if p, ok := rc.r.(render.Progressable); ok {
+				p.SetMinimum(e.Handle, minimum)
+				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Minimum", Value: minimum})
+			}
+		}
+	case "Maximum":
+		if maximum, ok := v.(int); ok {
+			if p, ok := rc.r.(render.Progressable); ok {
+				p.SetMaximum(e.Handle, maximum)
+				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Maximum", Value: maximum})
+			}
+		}
+	case "Value":
+		if value, ok := v.(int); ok {
+			if p, ok := rc.r.(render.Progressable); ok {
+				p.SetValue(e.Handle, value)
+				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Value", Value: value})
+			}
+		}
+	case "GroupIndex":
+		if groupIndex, ok := v.(int); ok {
+			if g, ok := rc.r.(render.RadioGroupable); ok {
+				g.SetGroupIndex(e.Handle, groupIndex)
+				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "GroupIndex", Value: groupIndex})
+			}
 		}
 	case "Bounds":
 		// Window 是窗体本身：Bounds 只用于布局定位/诊断，应用到原生控件会把窗体外框收缩。
@@ -371,6 +511,24 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 					render.Guard("event.OnScroll", func() { st.Apply(pos) })
 				})
 				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: "Scroll", Value: st})
+			}
+		}
+	case "OnCheckedChange":
+		if fn, ok := v.(func(bool)); ok {
+			if c, ok := rc.r.(render.Checkable); ok {
+				c.OnCheckedChange(e.Handle, func(checked bool) {
+					render.Guard("event.OnCheckedChange", func() { fn(checked) })
+				})
+				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
+			}
+		}
+	case "OnSelectionChange":
+		if fn, ok := v.(func(int)); ok {
+			if s, ok := rc.r.(render.Selectable); ok {
+				s.OnSelectionChange(e.Handle, func(index int) {
+					render.Guard("event.OnSelectionChange", func() { fn(index) })
+				})
+				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
 			}
 		}
 	case "OnMount", "OnUpdate", "OnUnmount":

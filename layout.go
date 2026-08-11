@@ -2,6 +2,7 @@ package flux
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/xiaowumin-mark/flux-vcl/internal/render"
 	"github.com/xiaowumin-mark/flux-vcl/internal/widget"
@@ -132,7 +133,7 @@ func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 		}
 		setBounds(n, pos, sz)
 	case "Text":
-		w, h := r.TextExtent(n.Props.String("Text"))
+		w, h := multilineTextExtent(n.Props.String("Text"), r)
 		sz = leafSize(w, h, n, c)
 		setBounds(n, pos, sz)
 	case "Button":
@@ -143,8 +144,23 @@ func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 		}
 		sz = leafSize(bw, 32, n, c)
 		setBounds(n, pos, sz)
+	case "CheckBox", "RadioButton":
+		w, h := checkableIntrinsicSize(n.Props.String("Text"), r)
+		sz = leafSize(w, h, n, c)
+		setBounds(n, pos, sz)
 	case "Input":
 		sz = leafSize(180, 28, n, c)
+		setBounds(n, pos, sz)
+	case "Memo":
+		w, h := memoIntrinsicSize(n.Props.String("Text"), r)
+		sz = leafSize(w, h, n, c)
+		setBounds(n, pos, sz)
+	case "ComboBox":
+		w, h := comboBoxIntrinsicSize(comboBoxItems(n), r)
+		sz = leafSize(w, h, n, c)
+		setBounds(n, pos, sz)
+	case "ProgressBar":
+		sz = leafSize(180, 20, n, c)
 		setBounds(n, pos, sz)
 	case "ScrollBox":
 		sz = layoutScrollBox(n, r, c, pos, d)
@@ -165,6 +181,81 @@ func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 	}
 	d.record(n, c, sz)
 	return sz
+}
+
+// checkableIntrinsicSize 为 CheckBox（后续 RadioButton 复用）预留稳定的标签尺寸。
+// 选中状态不影响布局；Width/Height Opt 与外部约束由调用方的 leafSize 处理。
+func checkableIntrinsicSize(text string, r render.Renderer) (int, int) {
+	w, h := r.TextExtent(text)
+	w += 28 // 指示器 16 DIP + 标签间距 4 DIP + 两侧 padding 8 DIP
+	if w < 32 {
+		w = 32
+	}
+	if h < 24 {
+		h = 24
+	}
+	return w, h
+}
+
+// multilineTextExtent 按显式换行逐行测量普通 Text 与 Memo，避免 Renderer 的
+// 单行 TextExtent 把换行当普通字符，导致声明高度小于原生控件实际绘制高度。
+func multilineTextExtent(text string, r render.Renderer) (int, int) {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	lines := strings.Split(strings.ReplaceAll(text, "\r", "\n"), "\n")
+	maxW, totalH := 0, 0
+	for _, line := range lines {
+		w, h := r.TextExtent(line)
+		if w > maxW {
+			maxW = w
+		}
+		totalH += h
+	}
+	return maxW, totalH
+}
+
+// memoIntrinsicSize 按显式换行逐行量取 Memo 文本，避免后端将换行当普通字符。
+// 编辑区至少保留 180×96 DIP；Width/Height Opt 与外部约束由调用方的 leafSize 处理。
+func memoIntrinsicSize(text string, r render.Renderer) (int, int) {
+	maxW, totalH := multilineTextExtent(text, r)
+	if maxW < 180 {
+		maxW = 180
+	}
+	if totalH < 96 {
+		totalH = 96
+	}
+	return maxW, totalH
+}
+
+// comboBoxItems 返回已由 ComboBox 构造器规范化的 Items；手写 Node 的空值安全退化。
+func comboBoxItems(n *Node) []string {
+	items, _ := n.Props.Get("Items")
+	values, _ := items.([]string)
+	return values
+}
+
+// comboBoxIntrinsicSize 测量全部选项中最长的字符串，避免切换选中项导致宽度跳动。
+func comboBoxIntrinsicSize(items []string, r render.Renderer) (int, int) {
+	maxW, h := 0, 0
+	if len(items) == 0 {
+		maxW, h = r.TextExtent("")
+	}
+	for _, item := range items {
+		w, itemH := r.TextExtent(item)
+		if w > maxW {
+			maxW = w
+		}
+		if itemH > h {
+			h = itemH
+		}
+	}
+	maxW += 36 // 下拉箭头 16 DIP + 内边距/边框 20 DIP
+	if maxW < 100 {
+		maxW = 100
+	}
+	if h < 28 {
+		h = 28
+	}
+	return maxW, h
 }
 
 // leafSize 用 Width/Height Opt 覆盖 intrinsic 尺寸后钳制到约束（D5 constrain）。

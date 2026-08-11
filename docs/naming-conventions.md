@@ -36,6 +36,7 @@
 | `examples/layout` | 布局引擎 demo（flex 分栏、滚动、DPI 读数） |
 | `examples/events` | 事件与生命周期 demo |
 | `examples/phase5` | **历史遗留**：阶段推进期的多特性合屏（动画/主题/Async/组件） |
+| `examples/form-controls` | 常用表单控件基线（Memo/CheckBox/ComboBox/ProgressBar/RadioButton） |
 | `examples/virtual-list` | 大数据：10 万行虚拟列表（控件池虚拟化 + 滚动双向绑定 + 多窗口） |
 
 - **新增示例不再用 `phaseN`**；若需多特性合屏，按主特性命名。

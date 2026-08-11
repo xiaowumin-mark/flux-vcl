@@ -51,6 +51,11 @@ jobs:
         run: |
           .\scripts\build.ps1 -Target phase5
           .\scripts\smoke.ps1 -Target phase5 -Screenshot "$env:GITHUB_WORKSPACE\bin\phase5-smoke.png"
+      - name: Build & Smoke (form-controls, widget baseline)
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -Target form-controls
+          .\scripts\smoke.ps1 -Target form-controls -Screenshot "$env:GITHUB_WORKSPACE\bin\form-controls-smoke.png"
       - name: Build & Smoke (virtual-list, Phase 6: 10万行虚拟化 + 多窗口)
         shell: pwsh
         run: |

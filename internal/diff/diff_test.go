@@ -42,6 +42,44 @@ func btnNode(s, key string) *widget.Node {
 	return n
 }
 
+func checkBoxNode(s, key string, checked bool) *widget.Node {
+	n := widget.NewNode("CheckBox")
+	n.Props.Set("Text", s)
+	n.Props.Set("Checked", checked)
+	n.Props.Set("Bounds", render.Rect{X: 0, Y: 0, W: 120, H: 24})
+	n.Key = key
+	return n
+}
+
+func comboBoxNode(items []string, index int, key string) *widget.Node {
+	n := widget.NewNode("ComboBox")
+	n.Props.Set("Items", append([]string(nil), items...))
+	n.Props.Set("SelectedIndex", index)
+	n.Props.Set("Bounds", render.Rect{X: 0, Y: 0, W: 120, H: 28})
+	n.Key = key
+	return n
+}
+
+func progressBarNode(minimum, maximum, value int, key string) *widget.Node {
+	n := widget.NewNode("ProgressBar")
+	n.Props.Set("Minimum", minimum)
+	n.Props.Set("Maximum", maximum)
+	n.Props.Set("Value", value)
+	n.Props.Set("Bounds", render.Rect{X: 0, Y: 0, W: 180, H: 20})
+	n.Key = key
+	return n
+}
+
+func radioButtonNode(text, key string, checked bool, groupIndex int) *widget.Node {
+	n := widget.NewNode("RadioButton")
+	n.Props.Set("Text", text)
+	n.Props.Set("Checked", checked)
+	n.Props.Set("GroupIndex", groupIndex)
+	n.Props.Set("Bounds", render.Rect{X: 0, Y: 0, W: 120, H: 24})
+	n.Key = key
+	return n
+}
+
 // —— 断言 helpers ——
 
 func countOps(ops []render.Op, t render.OpType) int {
@@ -209,7 +247,172 @@ func TestEventReboundEachRender(t *testing.T) {
 	}
 }
 
-// TestRemoveSubtreeDestroys 子树被删除时整棵销毁（后序：先子后父）。
+// TestCheckBoxControlledPatch CheckBox 的受控状态变更只更新 Checked 属性；
+// 同树保持零 mutation，既不重建也不重复写状态。
+func TestCheckBoxControlledPatch(t *testing.T) {
+	m := render.NewMock()
+	rc := diff.New(m)
+
+	rc.Render(windowTree(colWith(checkBoxNode("accept", "check", false))))
+	h := findByKey(rc.Root(), "check").Handle
+	if m.Checked(h) {
+		t.Fatal("首次挂载 Checked(false) 后 mock 状态应为 false")
+	}
+
+	ops := rc.Render(windowTree(colWith(checkBoxNode("accept", "check", true))))
+	if n := countOps(ops, render.OpCreate); n != 0 {
+		t.Errorf("Checked patch 的 Create = %d，期望 0", n)
+	}
+	if n := countOps(ops, render.OpDestroy); n != 0 {
+		t.Errorf("Checked patch 的 Destroy = %d，期望 0", n)
+	}
+	if !m.Checked(h) {
+		t.Error("Checked(true) 未原地写入 mock")
+	}
+	if ops := rc.Render(windowTree(colWith(checkBoxNode("accept", "check", true)))); len(ops) != 0 {
+		t.Fatalf("相同 CheckBox 树应零 mutation，实际 %+v", ops)
+	}
+}
+
+// TestCheckBoxRemovalAndEvent CheckBox 的 Checked 移除回落 false，布尔事件可触发、
+// 每次 render 重绑，并在属性移除时解绑。
+func TestCheckBoxRemovalAndEvent(t *testing.T) {
+	m := render.NewMock()
+	rc := diff.New(m)
+	called := false
+
+	first := checkBoxNode("accept", "check", true)
+	first.Props.Set("OnCheckedChange", func(checked bool) { called = checked })
+	rc.Render(windowTree(colWith(first)))
+	h := findByKey(rc.Root(), "check").Handle
+	m.FireCheckedChange(h, true)
+	if !called {
+		t.Fatal("OnCheckedChange 未通过 Checkable mock 触发")
+	}
+
+	second := checkBoxNode("accept", "check", true)
+	second.Props.Set("OnCheckedChange", func(bool) {})
+	ops := rc.Render(windowTree(colWith(second)))
+	if n := countOps(ops, render.OpSetEvent); n != 1 {
+		t.Errorf("OnCheckedChange 重绑 SetEvent = %d，期望 1：%+v", n, ops)
+	}
+
+	removed := widget.NewNode("CheckBox")
+	removed.Props.Set("Text", "accept")
+	removed.Props.Set("Bounds", render.Rect{X: 0, Y: 0, W: 120, H: 24})
+	removed.Key = "check"
+	ops = rc.Render(windowTree(colWith(removed)))
+	if m.Checked(h) {
+		t.Error("移除 Checked 后应回落到 false")
+	}
+	if !hasSetProperty(ops, h, "Checked", false) {
+		t.Errorf("移除 Checked 应产生 false 回落：%+v", ops)
+	}
+	if !hasSetEvent(ops, h, "OnCheckedChange", nil) {
+		t.Errorf("移除 OnCheckedChange 应产生 nil 解绑：%+v", ops)
+	}
+	called = false
+	m.FireCheckedChange(h, true)
+	if called {
+		t.Error("移除 OnCheckedChange 后不应继续触发旧回调")
+	}
+}
+
+// TestComboBoxControlledPatch 覆盖 Items/SelectedIndex 的受控 patch、选项深相等
+// 的 D7c 零 mutation，以及 Mock 选择回调的锁外触发。
+func TestComboBoxControlledPatch(t *testing.T) {
+	m := render.NewMock()
+	rc := diff.New(m)
+
+	rc.Render(windowTree(colWith(comboBoxNode([]string{"short", "longest"}, 1, "combo"))))
+	h := findByKey(rc.Root(), "combo").Handle
+	if got := m.SelectedIndex(h); got != 1 {
+		t.Fatalf("首次 SelectedIndex = %d，期望 1", got)
+	}
+	if got := m.Items(h); fmt.Sprint(got) != "[short longest]" {
+		t.Fatalf("首次 Items = %v", got)
+	}
+
+	ops := rc.Render(windowTree(colWith(comboBoxNode([]string{"short", "longest"}, 0, "combo"))))
+	if countOps(ops, render.OpCreate) != 0 || countOps(ops, render.OpDestroy) != 0 {
+		t.Fatalf("SelectedIndex patch 不应重建：%+v", ops)
+	}
+	if !hasSetProperty(ops, h, "SelectedIndex", 0) || m.SelectedIndex(h) != 0 {
+		t.Fatalf("SelectedIndex patch 未写入：%+v", ops)
+	}
+
+	ops = rc.Render(windowTree(colWith(comboBoxNode([]string{"one", "two", "three"}, 9, "combo"))))
+	if countOps(ops, render.OpCreate) != 0 || countOps(ops, render.OpDestroy) != 0 {
+		t.Fatalf("Items patch 不应重建：%+v", ops)
+	}
+	if got := m.SelectedIndex(h); got != 2 {
+		t.Errorf("越界 SelectedIndex 应钳制为末项 2，实际 %d", got)
+	}
+	if !hasSetProperty(ops, h, "Items", []string{"one", "two", "three"}) {
+		t.Errorf("Items patch 缺失：%+v", ops)
+	}
+
+	if ops := rc.Render(windowTree(colWith(comboBoxNode([]string{"one", "two", "three"}, 9, "combo")))); len(ops) != 0 {
+		t.Fatalf("内容相等的新 Items slice 应零 mutation，实际 %+v", ops)
+	}
+
+	called := -2
+	node := comboBoxNode([]string{"one", "two", "three"}, 2, "combo")
+	node.Props.Set("OnSelectionChange", func(index int) { called = index })
+	rc.Render(windowTree(colWith(node)))
+	m.FireSelectionChange(h, 1)
+	if called != 1 {
+		t.Fatalf("OnSelectionChange 未由 Selectable mock 触发，实际 %d", called)
+	}
+}
+
+// TestComboBoxRemovalAndEvent 确保属性删除回落到规范默认值并解绑旧选择回调。
+func TestComboBoxRemovalAndEvent(t *testing.T) {
+	m := render.NewMock()
+	rc := diff.New(m)
+	called := false
+	first := comboBoxNode([]string{"a", "b"}, 1, "combo")
+	first.Props.Set("OnSelectionChange", func(int) { called = true })
+	rc.Render(windowTree(colWith(first)))
+	h := findByKey(rc.Root(), "combo").Handle
+
+	removed := widget.NewNode("ComboBox")
+	removed.Props.Set("Bounds", render.Rect{X: 0, Y: 0, W: 120, H: 28})
+	removed.Key = "combo"
+	ops := rc.Render(windowTree(colWith(removed)))
+	if got := m.Items(h); len(got) != 0 {
+		t.Errorf("移除 Items 后应为空，实际 %v", got)
+	}
+	if got := m.SelectedIndex(h); got != -1 {
+		t.Errorf("移除 SelectedIndex 后应为 -1，实际 %d", got)
+	}
+	if !hasSetEvent(ops, h, "OnSelectionChange", nil) {
+		t.Errorf("移除 OnSelectionChange 应解绑：%+v", ops)
+	}
+	m.FireSelectionChange(h, 0)
+	if called {
+		t.Error("移除 OnSelectionChange 后不应继续触发旧回调")
+	}
+}
+
+func hasSetProperty(ops []render.Op, h render.Handle, key string, want any) bool {
+	for _, op := range ops {
+		if op.Type == render.OpSetProperty && op.Handle == h && op.Key == key && fmt.Sprint(op.Value) == fmt.Sprint(want) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSetEvent(ops []render.Op, h render.Handle, key string, want any) bool {
+	for _, op := range ops {
+		if op.Type == render.OpSetEvent && op.Handle == h && op.Key == key && op.Value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRemoveSubtreeDestroys(t *testing.T) {
 	m := render.NewMock()
 	rc := diff.New(m)

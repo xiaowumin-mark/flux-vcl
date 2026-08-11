@@ -106,7 +106,127 @@ func TestStateTwoWayBind(t *testing.T) {
 	}
 }
 
-// TestStateSetFromGoroutine 外部 goroutine 修改 State（验收项）：不崩溃、
+// TestMemoTwoWayBind Memo 复用文本绑定：用户输入通过 OnChange 回写 State，
+// 后续 render 原地更新 Text，不创建或销毁原生控件。
+func TestMemoTwoWayBind(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	text := flux.NewState("first\nline")
+
+	app.Mount(func() flux.Widget {
+		return flux.Window(flux.Memo(flux.Bind(text), flux.Key("memo")))
+	})
+
+	el := findByKey(t, app.Root(), "memo")
+	if got := el.Props.String("Text"); got != "first\nline" {
+		t.Errorf("Memo 初值 = %q，期望 first\\nline", got)
+	}
+	cb, ok := el.Props.Get("OnChange")
+	if !ok {
+		t.Fatal("Memo OnChange 回调缺失（双向绑定未设置回写）")
+	}
+	base := len(m.Ops())
+	cb.(func(string))("updated\ntext")
+
+	if got := text.Get(); got != "updated\ntext" {
+		t.Errorf("State = %q，期望 updated\\ntext", got)
+	}
+	if got := findByKey(t, app.Root(), "memo").Props.String("Text"); got != "updated\ntext" {
+		t.Errorf("Memo 同步后 = %q，期望 updated\\ntext", got)
+	}
+	ops := m.Ops()[base:]
+	if n := countOps(ops, render.OpCreate); n != 0 {
+		t.Errorf("Memo 回写后 Create = %d，期望 0", n)
+	}
+	if n := countOps(ops, render.OpDestroy); n != 0 {
+		t.Errorf("Memo 回写后 Destroy = %d，期望 0", n)
+	}
+	if n := countOps(ops, render.OpSetText); n != 1 {
+		t.Errorf("Memo 回写后 SetText = %d，期望 1", n)
+	}
+}
+
+// TestComboBoxExplicitControlledState ComboBox 不扩张 Bind 语义：回调显式写 State，
+// 后续构建以 SelectedIndex 受控回写，控件句柄保持不变。
+func TestComboBoxExplicitControlledState(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	selected := flux.NewState(-1)
+
+	app.Mount(func() flux.Widget {
+		return flux.Window(flux.ComboBox(
+			flux.Key("combo"),
+			flux.Items([]string{"red", "green", "blue"}),
+			flux.SelectedIndex(selected.Get()),
+			flux.OnSelectionChange(func(index int) { selected.Set(index) }),
+		))
+	})
+	h := findByKey(t, app.Root(), "combo").Handle
+	base := len(m.Ops())
+	m.FireSelectionChange(h, 2)
+
+	if got := selected.Get(); got != 2 {
+		t.Fatalf("选择回调后的 State = %d，期望 2", got)
+	}
+	el := findByKey(t, app.Root(), "combo")
+	if el.Handle != h {
+		t.Fatalf("受控更新后 ComboBox 句柄变化：%d → %d", h, el.Handle)
+	}
+	if got := m.SelectedIndex(h); got != 2 {
+		t.Errorf("受控回写后 SelectedIndex = %d，期望 2", got)
+	}
+	ops := m.Ops()[base:]
+	if n := countOps(ops, render.OpCreate); n != 0 {
+		t.Errorf("选择回写 Create = %d，期望 0", n)
+	}
+	if n := countOps(ops, render.OpDestroy); n != 0 {
+		t.Errorf("选择回写 Destroy = %d，期望 0", n)
+	}
+}
+
+// TestRadioButtonExplicitControlledState 验证 RadioButton 沿用显式受控模式：
+// 原生事件只通知调用方，调用方写入 State 后由下一次 render 回写 Checked。
+func TestRadioButtonExplicitControlledState(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	checked := flux.NewState(false)
+
+	var build func() flux.Widget
+	build = func() flux.Widget {
+		return flux.Window(flux.RadioButton(
+			"option",
+			flux.Key("radio"),
+			flux.Checked(checked.Get()),
+			flux.OnCheckedChange(func(value bool) {
+				checked.Set(value)
+				app.Render(build())
+			}),
+		))
+	}
+	app.Mount(build)
+	h := findByKey(t, app.Root(), "radio").Handle
+	base := len(m.Ops())
+	m.FireCheckedChange(h, true)
+
+	if got := checked.Get(); !got {
+		t.Fatal("选中回调后的 State = false，期望 true")
+	}
+	el := findByKey(t, app.Root(), "radio")
+	if el.Handle != h {
+		t.Fatalf("受控更新后 RadioButton 句柄变化：%d → %d", h, el.Handle)
+	}
+	if !m.Checked(h) || !el.Props.Bool("Checked") {
+		t.Errorf("受控回写后 Checked = mock(%v) props(%v)，期望 true/true", m.Checked(h), el.Props.Bool("Checked"))
+	}
+	ops := m.Ops()[base:]
+	if n := countOps(ops, render.OpCreate); n != 0 {
+		t.Errorf("选中回写 Create = %d，期望 0", n)
+	}
+	if n := countOps(ops, render.OpDestroy); n != 0 {
+		t.Errorf("选中回写 Destroy = %d，期望 0", n)
+	}
+}
+
 // UI 正确刷新。mock RunOnUI 同步执行，render 在各自 goroutine 内完成；
 // -race 下验证 State/App 的锁纪律。
 func TestStateSetFromGoroutine(t *testing.T) {

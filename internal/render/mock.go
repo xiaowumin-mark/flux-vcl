@@ -11,15 +11,21 @@ import "sync"
 // 线程安全：方法加锁，允许 State 从任意 goroutine 触发 render 的 -race 测试。
 // RunOnUI 直接同步执行（mock 无独立 UI 线程）。
 type Mock struct {
-	mu       sync.Mutex
-	ops      []Op
-	next     Handle
-	clientW  int // 模拟窗体客户区尺寸（缺省 400x300）
-	clientH  int
-	resizeFn func(w, h int)            // 已注册的 resize 回调
-	handlers map[Handle]map[string]any // 已注册事件回调（Phase 4 触发测试用）
-	timerFn  func()                    // NewTimer 注册的回调（nil=未注册/已停止；FireTimer 驱动）
-	scrolls  map[Handle]*mockScroll    // Phase 6 ListView 滚动状态（Scrollable 测试面）
+	mu         sync.Mutex
+	ops        []Op
+	next       Handle
+	clientW    int // 模拟窗体客户区尺寸（缺省 400x300）
+	clientH    int
+	resizeFn   func(w, h int)             // 已注册的 resize 回调
+	handlers   map[Handle]map[string]any  // 已注册事件回调（Phase 4 触发测试用）
+	timerFn    func()                     // NewTimer 注册的回调（nil=未注册/已停止；FireTimer 驱动）
+	scrolls    map[Handle]*mockScroll     // Phase 6 ListView 滚动状态（Scrollable 测试面）
+	checked    map[Handle]*mockCheckable  // 可选控件的状态与回调（Checkable 测试面）
+	widgetType map[Handle]string          // 已创建控件类型（RadioButton 逻辑组测试面）
+	parents    map[Handle]Handle          // resolved native parent（RadioButton 逻辑组测试面）
+	selectable map[Handle]*mockSelectable // 下拉选择控件的状态与回调（Selectable 测试面）
+	progress   map[Handle]*mockProgress   // 进度控件的范围和值（Progressable 测试面）
+	radioGroup map[Handle]int             // 单选控件原生组编号（RadioGroupable 测试面）
 }
 
 // mockScroll 记录 ListView 滚动配置/位置（Phase 6）。与真实滚动条不同，mock 不
@@ -31,12 +37,35 @@ type mockScroll struct {
 	onScroll func(int)
 }
 
+// mockCheckable 记录 CheckBox 等可选控件的状态与回调。
+type mockCheckable struct {
+	checked   bool
+	onChanged func(bool)
+}
+
+// mockSelectable 记录 ComboBox 选项、受控索引和选择回调。
+type mockSelectable struct {
+	items    []string
+	selected int
+	onSelect func(int)
+}
+
+type mockProgress struct {
+	minimum int
+	maximum int
+	value   int
+}
+
 // NewMock 创建空的 Mock。
 func NewMock() *Mock { return &Mock{clientW: 400, clientH: 300} }
 
 func (m *Mock) Create(widgetType string) Handle {
 	h := m.alloc()
 	m.mu.Lock()
+	if m.widgetType == nil {
+		m.widgetType = make(map[Handle]string)
+	}
+	m.widgetType[h] = widgetType
 	m.ops = append(m.ops, Op{Type: OpCreate, Handle: h, Key: widgetType})
 	m.mu.Unlock()
 	return h
@@ -44,12 +73,24 @@ func (m *Mock) Create(widgetType string) Handle {
 
 func (m *Mock) Destroy(h Handle) {
 	m.mu.Lock()
+	delete(m.widgetType, h)
+	delete(m.parents, h)
+	delete(m.checked, h)
+	delete(m.selectable, h)
+	delete(m.progress, h)
+	delete(m.radioGroup, h)
+	delete(m.handlers, h)
+	delete(m.scrolls, h)
 	m.ops = append(m.ops, Op{Type: OpDestroy, Handle: h})
 	m.mu.Unlock()
 }
 
 func (m *Mock) SetParent(child, parent Handle) {
 	m.mu.Lock()
+	if m.parents == nil {
+		m.parents = make(map[Handle]Handle)
+	}
+	m.parents[child] = parent
 	m.ops = append(m.ops, Op{Type: OpAppendChild, Handle: child, Parent: parent})
 	m.mu.Unlock()
 }
@@ -117,6 +158,267 @@ func (m *Mock) FireTimer() {
 	m.mu.Unlock()
 	if fn != nil {
 		fn()
+	}
+}
+
+// ensureCheckable 取回（必要时创建）控件 h 的选中状态。调用方须持有 m.mu。
+func (m *Mock) ensureCheckable(h Handle) *mockCheckable {
+	if m.checked == nil {
+		m.checked = make(map[Handle]*mockCheckable)
+	}
+	if m.checked[h] == nil {
+		m.checked[h] = &mockCheckable{}
+	}
+	return m.checked[h]
+}
+
+// SetChecked 记录可选控件受控状态。RadioButton 额外模拟 Flux 的逻辑分组契约：
+// 同一 resolved parent、同一 GroupIndex 内只能有一个 checked=true。
+func (m *Mock) SetChecked(h Handle, checked bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := m.ensureCheckable(h)
+	if checked && m.widgetType[h] == "RadioButton" {
+		parent, group := m.parents[h], m.radioGroup[h]
+		for peer, peerCheckable := range m.checked {
+			if peer != h && m.widgetType[peer] == "RadioButton" &&
+				m.parents[peer] == parent && m.radioGroup[peer] == group {
+				peerCheckable.checked = false
+			}
+		}
+	}
+	c.checked = checked
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "Checked", Value: checked})
+}
+
+// OnCheckedChange 保存选中状态变化回调供 FireCheckedChange 驱动。
+func (m *Mock) OnCheckedChange(h Handle, fn func(bool)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureCheckable(h).onChanged = fn
+	m.ops = append(m.ops, Op{Type: OpSetEvent, Handle: h, Key: "OnCheckedChange", Value: fn})
+}
+
+// Checked 返回控件 h 的当前选中状态（测试断言用；未配置返回 false）。
+func (m *Mock) Checked(h Handle) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c := m.checked[h]; c != nil {
+		return c.checked
+	}
+	return false
+}
+
+// FireCheckedChange 模拟用户改变选中状态（未绑定时为 no-op）。RadioButton 按
+// SetChecked 的 Flux 逻辑分组语义更新 peers，回调仍在 mutex 外执行。
+func (m *Mock) FireCheckedChange(h Handle, checked bool) {
+	m.mu.Lock()
+	var fn func(bool)
+	if c := m.ensureCheckable(h); c != nil {
+		if checked && m.widgetType[h] == "RadioButton" {
+			parent, group := m.parents[h], m.radioGroup[h]
+			for peer, peerCheckable := range m.checked {
+				if peer != h && m.widgetType[peer] == "RadioButton" &&
+					m.parents[peer] == parent && m.radioGroup[peer] == group {
+					peerCheckable.checked = false
+				}
+			}
+		}
+		c.checked = checked
+		fn = c.onChanged
+	}
+	m.mu.Unlock()
+	if fn != nil {
+		fn(checked)
+	}
+}
+
+func (m *Mock) ensureProgress(h Handle) *mockProgress {
+	if m.progress == nil {
+		m.progress = make(map[Handle]*mockProgress)
+	}
+	if m.progress[h] == nil {
+		m.progress[h] = &mockProgress{maximum: 100}
+	}
+	return m.progress[h]
+}
+
+func clampProgress(value, minimum, maximum int) int {
+	if maximum < minimum {
+		maximum = minimum
+	}
+	if value < minimum {
+		return minimum
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
+}
+
+// SetMinimum 写入进度条最小值，并保持当前范围和值有效。
+func (m *Mock) SetMinimum(h Handle, minimum int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p := m.ensureProgress(h)
+	p.minimum = minimum
+	if p.maximum < minimum {
+		p.maximum = minimum
+	}
+	p.value = clampProgress(p.value, p.minimum, p.maximum)
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "Minimum", Value: minimum})
+}
+
+// SetMaximum 写入进度条最大值，并保持当前值有效。
+func (m *Mock) SetMaximum(h Handle, maximum int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p := m.ensureProgress(h)
+	if maximum < p.minimum {
+		maximum = p.minimum
+	}
+	p.maximum = maximum
+	p.value = clampProgress(p.value, p.minimum, p.maximum)
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "Maximum", Value: maximum})
+}
+
+// SetValue 写入已规范化的受控进度值。
+func (m *Mock) SetValue(h Handle, value int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p := m.ensureProgress(h)
+	p.value = clampProgress(value, p.minimum, p.maximum)
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "Value", Value: p.value})
+}
+
+// Progress 返回控件 h 的进度状态副本（测试断言用）。
+func (m *Mock) Progress(h Handle) (minimum, maximum, value int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p := m.progress[h]; p != nil {
+		return p.minimum, p.maximum, p.value
+	}
+	return 0, 100, 0
+}
+
+// SetGroupIndex 设置 RadioButton 的 Flux 逻辑组编号。若已选中的单选按钮改入
+// 一个新组，Mock 与 native Renderer 一样让它成为该组的唯一选中项。
+func (m *Mock) SetGroupIndex(h Handle, groupIndex int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.radioGroup == nil {
+		m.radioGroup = make(map[Handle]int)
+	}
+	m.radioGroup[h] = groupIndex
+	if c := m.checked[h]; c != nil && c.checked && m.widgetType[h] == "RadioButton" {
+		parent := m.parents[h]
+		for peer, peerCheckable := range m.checked {
+			if peer != h && m.widgetType[peer] == "RadioButton" &&
+				m.parents[peer] == parent && m.radioGroup[peer] == groupIndex {
+				peerCheckable.checked = false
+			}
+		}
+	}
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "GroupIndex", Value: groupIndex})
+}
+
+// GroupIndex 返回控件 h 的单选组编号（测试断言用；未配置返回 0）。
+func (m *Mock) GroupIndex(h Handle) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.radioGroup[h]
+}
+
+// ensureSelectable 取回（必要时创建）控件 h 的选择状态。调用方须持有 m.mu。
+func (m *Mock) ensureSelectable(h Handle) *mockSelectable {
+	if m.selectable == nil {
+		m.selectable = make(map[Handle]*mockSelectable)
+	}
+	if m.selectable[h] == nil {
+		m.selectable[h] = &mockSelectable{items: []string{}, selected: -1}
+	}
+	return m.selectable[h]
+}
+
+func normalizeSelectedIndex(items []string, index int) int {
+	if len(items) == 0 {
+		return -1
+	}
+	if index < -1 {
+		return -1
+	}
+	if index >= len(items) {
+		return len(items) - 1
+	}
+	return index
+}
+
+func cloneItems(items []string) []string {
+	if len(items) == 0 {
+		return []string{}
+	}
+	return append([]string(nil), items...)
+}
+
+// SetItems 记录 ComboBox 的选项，并使当前索引始终相对于新选项合法。
+func (m *Mock) SetItems(h Handle, items []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := m.ensureSelectable(h)
+	c.items = cloneItems(items)
+	c.selected = normalizeSelectedIndex(c.items, c.selected)
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "Items", Value: cloneItems(c.items)})
+}
+
+// SetSelectedIndex 记录 ComboBox 的受控选中索引。
+func (m *Mock) SetSelectedIndex(h Handle, index int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := m.ensureSelectable(h)
+	c.selected = normalizeSelectedIndex(c.items, index)
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "SelectedIndex", Value: c.selected})
+}
+
+// OnSelectionChange 保存选择变化回调供 FireSelectionChange 驱动。
+func (m *Mock) OnSelectionChange(h Handle, fn func(int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureSelectable(h).onSelect = fn
+	m.ops = append(m.ops, Op{Type: OpSetEvent, Handle: h, Key: "OnSelectionChange", Value: fn})
+}
+
+// Items 返回控件 h 的选项副本（测试断言用）。
+func (m *Mock) Items(h Handle) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c := m.selectable[h]; c != nil {
+		return cloneItems(c.items)
+	}
+	return []string{}
+}
+
+// SelectedIndex 返回控件 h 的当前选中索引（测试断言用）。
+func (m *Mock) SelectedIndex(h Handle) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c := m.selectable[h]; c != nil {
+		return c.selected
+	}
+	return -1
+}
+
+// FireSelectionChange 模拟用户选择选项。回调在锁外执行以允许其触发 re-render。
+func (m *Mock) FireSelectionChange(h Handle, index int) {
+	m.mu.Lock()
+	var fn func(int)
+	if c := m.selectable[h]; c != nil {
+		c.selected = normalizeSelectedIndex(c.items, index)
+		index = c.selected
+		fn = c.onSelect
+	}
+	m.mu.Unlock()
+	if fn != nil {
+		fn(index)
 	}
 }
 

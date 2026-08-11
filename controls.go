@@ -143,9 +143,112 @@ func setTextProp(n *Node, text any) {
 	}
 }
 
+// CheckBox 复选框（对应绑定层 TCheckBox）。text 为标签文本，可为字符串或 State 绑定。
+//
+// Checked 控制选中状态；OnCheckedChange 接收用户操作后的布尔值。本批不为
+// State[bool] 添加隐式双向绑定，Bind(...) 仅绑定标签文本。
+func CheckBox(text any, opts ...Opt) Widget {
+	n := widget.NewNode("CheckBox")
+	setTextProp(n, text)
+	applyOpts(n, opts)
+	return widgetNode{n}
+}
+
+// RadioButton 单选按钮（对应绑定层 TRadioButton）。text 为标签文本，可为字符串或
+// State 绑定。Checked 与 OnCheckedChange 复用 CheckBox 的显式受控语义；支持
+// RadioGroupable 的 Renderer 会在同一 resolved native parent 下维持 GroupIndex 的
+// 逻辑互斥，默认组为 0。
+func RadioButton(text any, opts ...Opt) Widget {
+	n := widget.NewNode("RadioButton")
+	setTextProp(n, text)
+	applyOpts(n, opts)
+	return widgetNode{n}
+}
+
 // Input 单行输入框（对应绑定层 TEdit）。
 func Input(opts ...Opt) Widget {
 	n := widget.NewNode("Input")
 	applyOpts(n, opts)
 	return widgetNode{n}
+}
+
+// Memo 多行输入框（对应绑定层 TMemo）。text 为初始文本，可为字符串或 State 绑定。
+//
+// Memo 的 intrinsic 尺寸按显式换行逐行测量，并保留 180×96 DIP 的最小编辑区域；
+// 不自动根据软换行扩高，也不提供富文本语义。
+func Memo(text any, opts ...Opt) Widget {
+	n := widget.NewNode("Memo")
+	setTextProp(n, text)
+	// Bind(...) 同时实现 Opt 与 bindable：setTextProp 登记依赖和当前文本，
+	// 再通过 Opt 写入 OnChange，实现与 Input 一致的双向文本绑定。
+	if binding, ok := text.(Opt); ok {
+		binding.apply(n)
+	}
+	applyOpts(n, opts)
+	return widgetNode{n}
+}
+
+// ComboBox 下拉选择框（对应绑定层 TComboBox）。Items 提供字符串选项，
+// SelectedIndex 控制选中索引，-1 表示未选择；OnSelectionChange 接收用户选择后的索引。
+// 选择状态保持显式受控：调用方在回调中更新 State 后以 SelectedIndex 重新声明。
+func ComboBox(opts ...Opt) Widget {
+	n := widget.NewNode("ComboBox")
+	applyOpts(n, opts)
+	items, _ := n.Props.Get("Items")
+	values, _ := items.([]string)
+	values = canonicalItems(values)
+	n.Props.Set("Items", values)
+	n.Props.Set("SelectedIndex", normalizeSelectedIndex(values, n.Props.Int("SelectedIndex")))
+	return widgetNode{n}
+}
+
+// ProgressBar 进度条（对应绑定层 TProgressBar）。Minimum、Maximum 与 Value 在所有
+// Opt 应用后统一规范化：Maximum 不小于 Minimum，Value 钳制到该闭区间。
+func ProgressBar(opts ...Opt) Widget {
+	n := widget.NewNode("ProgressBar")
+	applyOpts(n, opts)
+	minimum := n.Props.Int("Minimum")
+	maximum := 100
+	if _, ok := n.Props.Get("Maximum"); ok {
+		maximum = n.Props.Int("Maximum")
+	}
+	value := n.Props.Int("Value")
+	minimum, maximum, value = normalizeProgress(minimum, maximum, value)
+	n.Props.Set("Minimum", minimum)
+	n.Props.Set("Maximum", maximum)
+	n.Props.Set("Value", value)
+	return widgetNode{n}
+}
+
+func normalizeProgress(minimum, maximum, value int) (int, int, int) {
+	if maximum < minimum {
+		maximum = minimum
+	}
+	if value < minimum {
+		value = minimum
+	}
+	if value > maximum {
+		value = maximum
+	}
+	return minimum, maximum, value
+}
+
+func canonicalItems(items []string) []string {
+	if len(items) == 0 {
+		return []string{}
+	}
+	return append([]string(nil), items...)
+}
+
+func normalizeSelectedIndex(items []string, index int) int {
+	if len(items) == 0 {
+		return -1
+	}
+	if index < -1 {
+		return -1
+	}
+	if index >= len(items) {
+		return len(items) - 1
+	}
+	return index
 }

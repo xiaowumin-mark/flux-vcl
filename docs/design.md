@@ -299,6 +299,10 @@ Column(
 
 ## 6.2 Layout 算法
 
+`Text` 与 `Memo` 的 intrinsic 测量会先规范化 CRLF/CR，再按显式换行逐行调用
+`Renderer.TextExtent`：宽度取最长行，高度累加各行行高。该规则只处理显式换行，
+不推断原生控件的软换行；显式 `Width`/`Height` 仍优先。
+
 支持：
 
 * Measure
@@ -600,11 +604,15 @@ ListView(count int, itemHeight int, builder func(index int) Widget,
 
 ## 绑定层（D6 窄接口）
 
-`render.Scrollable`（`SetScrollConfig`/`SetScrollPos`/`OnScroll`，全 DIP）是 diff 层
-与绑定层间唯一知识点。native 实现 = `TScrollBox` 视口（`AutoScroll=false`、隐藏内建
-双滚动条、`DoubleBuffered` 防闪烁）+ 内部 `TScrollBar`（`SetKind(SbVertical)`，范围 =
-内容−视口，页尺寸 = 视口高）；未实现该接口时 ListView 布局照常、仅无原生滚动条
-（退化，不 panic）。
+控件专属能力不加入基础 `render.Renderer`，而是由 diff 按可选窄接口下发；未实现某项能力的 Renderer 安全退化为 no-op，不 panic：
+
+- `render.Scrollable`：`SetScrollConfig`/`SetScrollPos`/`OnScroll`（全 DIP），供 `ListView` 使用。native 实现 = `TScrollBox` 视口（`AutoScroll=false`、隐藏内建双滚动条、`DoubleBuffered` 防闪烁）+ 内部 `TScrollBar`（`SetKind(SbVertical)`，范围 = 内容−视口，页尺寸 = 视口高）。
+- `render.Checkable`：`SetChecked`/`OnCheckedChange`，由 `CheckBox` 与 `RadioButton` 复用。
+- `render.Selectable`：`SetItems`/`SetSelectedIndex`/`OnSelectionChange`，供 `ComboBox` 使用。
+- `render.Progressable`：`SetMinimum`/`SetMaximum`/`SetValue`，供 `ProgressBar` 使用；diff 固定按范围优先、值在后的顺序下发。
+- `render.RadioGroupable`：`SetGroupIndex`，将 Flux 逻辑组编号下发给 `RadioButton`；energye/lcl v1.0.3 没有可用的分组 setter，因此 native Renderer 按 resolved native parent + `GroupIndex` 维护同组互斥，并用逐控件内部 host 隔离 LCL 的“同 parent 全部互斥”行为；diff 不遍历或修改兄弟节点。
+
+`Memo`、`CheckBox`、`ComboBox`、`ProgressBar` 和 `RadioButton` 组成当前常用表单基线。`Memo` 的 intrinsic 按显式换行逐行测量（最小编辑区 180×96 DIP），不承诺富文本或软换行自动扩高；`ComboBox` 固定使用 `[]string` Items 和显式受控 `SelectedIndex`（空列表为 `-1`）；`ProgressBar` 默认 `Minimum=0`、`Maximum=100`、`Value=0`，构造时保证 `Minimum ≤ Maximum` 且把 Value 钳制到该闭区间；`RadioButton` 仅在相同原生父容器且 `GroupIndex` 相同时具有原生互斥语义。布尔和选择状态均由调用方在类型化回调中写入 State，并在下次 render 以 `Checked` 或 `SelectedIndex` 回写；本阶段不扩张 `Bind` 的隐式双向语义。
 
 **已知限制（win32，实测）**：`TLabel`（无 HWND，自绘在父表面）的 caption 变化在
 `DoubleBuffered` 容器（ListView 视口）内**不保证触发父容器重绘** —— 仅改文字、不改
