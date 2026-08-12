@@ -24,6 +24,22 @@ type Ref interface {
 	SetNative(obj any)
 }
 
+// NativeInfo 是 Inspector 可读取的原生控件元数据副本。
+type NativeInfo struct {
+	Type      string
+	Parent    Handle
+	Allocated bool
+}
+
+// NativeSnapshot 是 Inspector 一次性读取的原生控件元数据副本。
+type NativeSnapshot map[Handle]NativeInfo
+
+// NativeInspectable 是 Renderer 可选的只读 Inspector 能力。
+// 查询不得创建控件、修改属性或触发事件。
+type NativeInspectable interface {
+	InspectNative() NativeSnapshot
+}
+
 // Renderer 是 FluxVCL 对原生控件后端的最小依赖面（D6 窄接口）。
 //
 // 所有方法在主 UI 线程调用（D4）；diff 引擎生成的 op 经调度器落到这里。
@@ -111,13 +127,39 @@ const (
 	OpSetEvent
 )
 
+// String 返回 mutation 操作名，供 Inspector 与日志展示。
+func (t OpType) String() string {
+	switch t {
+	case OpCreate:
+		return "create"
+	case OpDestroy:
+		return "destroy"
+	case OpAppendChild:
+		return "reparent"
+	case OpInsertChildBefore:
+		return "insert"
+	case OpRemoveChild:
+		return "remove"
+	case OpSetProperty:
+		return "property"
+	case OpSetText:
+		return "text"
+	case OpSetEvent:
+		return "event"
+	default:
+		return "unknown"
+	}
+}
+
 // Op 是一条针对某个控件的 mutation。diff 引擎批量生成，
 // 由调度器在 UI 线程上逐条应用（D2 批量提交 + D4 线程纪律）。
 type Op struct {
-	Type   OpType
-	Handle Handle // 目标控件
-	Parent Handle // AppendChild/InsertChildBefore/RemoveChild 的父控件
-	Before Handle // InsertChildBefore 的参考控件（零值=追加到末尾）
-	Key    string // Create 的 widgetType；SetProperty 的属性名
-	Value  any    // Create 无；SetProperty/SetText 为值
+	Type       OpType
+	Handle     Handle // 目标控件
+	Parent     Handle // AppendChild/InsertChildBefore/RemoveChild 的父控件
+	Before     Handle // InsertChildBefore 的参考控件（零值=追加到末尾）
+	Key        string // Create 的 widgetType；SetProperty 的属性名
+	Value      any    // Create 无；SetProperty/SetText 为值
+	Path       string // Element 路径；仅供只读观测，不参与 Renderer 应用
+	ParentPath string // 目标父 Element 路径；仅供只读观测
 }

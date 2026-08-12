@@ -19,15 +19,21 @@ import (
 //
 // 绑定层 renderer 必须由 internal/native 的适配器创建（D6 隔离）。
 type App struct {
-	r           render.Renderer
-	rc          *diff.Reconciler
-	build       func() Widget
-	mu          sync.Mutex
-	renderMu    sync.Mutex   // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
-	pending     bool         // 脏标志：有待处理的失效（D4 合并）
-	inRender    bool         // 重入防护：当前已有 renderWidget 在栈上（生命周期钩子等 render 中触发 State.Set）
-	lastDiags   []LayoutDiag // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
-	lastInspect []NodeDiag   // 最近一次 render 的全节点布局诊断（Phase 3.7 inspector）
+	r                     render.Renderer
+	rc                    *diff.Reconciler
+	build                 func() Widget
+	mu                    sync.Mutex
+	renderMu              sync.Mutex   // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
+	pending               bool         // 脏标志：有待处理的失效（D4 合并）
+	inRender              bool         // 重入防护：当前已有 renderWidget 在栈上（生命周期钩子等 render 中触发 State.Set）
+	lastDiags             []LayoutDiag // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
+	lastInspect           []NodeDiag   // 最近一次 render 的全节点布局诊断（Phase 3.7 inspector）
+	inspectorRenderID     uint64
+	inspectorEventSeq     uint64
+	nextInspectorObserver uint64
+	inspectorObservers    map[uint64]InspectorObserver
+	lastInspectorSnapshot InspectorSnapshot
+	inspectorPending      []InspectorCommit
 }
 
 // NewApp 创建 App。r 为绑定层 renderer（默认 LCL 适配见 internal/native）。
@@ -35,6 +41,7 @@ type App struct {
 // resize 风暴安全）→ Window 布局用最新客户区尺寸。
 func NewApp(r render.Renderer) *App {
 	a := &App{r: r, rc: diff.New(r)}
+	a.rc.SetEventSink(a.recordInspectorEvent)
 	r.OnResize(func(w, h int) { a.invalidate() })
 	return a
 }
@@ -90,6 +97,21 @@ func (a *App) Animate(duration time.Duration, curve Curve, onStep func(v float64
 func (a *App) SetBounds(key string, r render.Rect) {
 	if e := a.rc.Lookup(key); e != nil && !diff.IsTransparent(e.Type) && e.Type != "Window" {
 		a.r.SetBounds(e.Handle, r)
+		a.mu.Lock()
+		renderID := a.inspectorRenderID
+		inRender := a.inRender
+		a.mu.Unlock()
+		if inRender {
+			renderID++
+		}
+		commit := inspectorCommit(renderID, true, []render.Op{{
+			Type: render.OpSetProperty, Handle: e.Handle, Key: "Bounds", Value: r, Path: e.Path,
+		}}, nil)
+		if inRender {
+			a.queueInspectorNotification(commit)
+		} else {
+			a.publishInspectorCommit(commit)
+		}
 	}
 }
 
@@ -161,7 +183,12 @@ func (a *App) renderWidget(w Widget) {
 	}
 	a.inRender = true
 	a.mu.Unlock()
-	defer a.finishRender()
+	defer func() {
+		again := a.finishRender()
+		if !again {
+			a.flushInspectorCommits()
+		}
+	}()
 
 	a.renderMu.Lock() // 串行化 reconcile：并发 Set 也只允许一个 render 进行
 	defer a.renderMu.Unlock()
@@ -176,17 +203,22 @@ func (a *App) renderWidget(w Widget) {
 	a.lastInspect = d.nodes
 	a.mu.Unlock()
 	a.collectBindings(root)
-	a.rc.Render(root)
+	ops := a.rc.Render(root)
 	// D4 延后销毁落地点：reconcile 移除的控件在此统一物理释放（在 UI 线程、
 	// 事件回调触发 render 时也晚于 reconcile 完成）。
 	if d, ok := a.r.(drainer); ok {
 		d.DrainDestroy()
 	}
+	a.mu.Lock()
+	a.inspectorRenderID++
+	renderID := a.inspectorRenderID
+	a.mu.Unlock()
+	a.queueInspectorCommit(inspectorCommit(renderID, false, ops, a.rc.Rebuilds()))
 }
 
 // finishRender 结束一次 renderWidget：清 inRender，若 render 期间有重入排队
 // 的 State.Set（pending），flush 一次（递归走 render() → 最新 build）。
-func (a *App) finishRender() {
+func (a *App) finishRender() bool {
 	a.mu.Lock()
 	a.inRender = false
 	again := a.pending
@@ -195,6 +227,7 @@ func (a *App) finishRender() {
 	if again {
 		a.render()
 	}
+	return again
 }
 
 // LastLayoutDiags 返回最近一次 render 的布局溢出诊断（无则空切片）。

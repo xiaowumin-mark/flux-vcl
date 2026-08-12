@@ -1,5 +1,7 @@
 package flux
 
+import "github.com/xiaowumin-mark/flux-vcl/internal/render"
+
 // 布局协议类型（design.md §6.2 / D5，Phase 3.1）。
 //
 // constraints 下传 / size 上抛 / 父定 offset：父用 BoxConstraints 约束子，
@@ -10,6 +12,9 @@ type Size struct{ W, H int }
 
 // Point 是布局坐标（DIP，相对窗体客户区）。
 type Point struct{ X, Y int }
+
+// Rect 是控件几何矩形（DIP）。
+type Rect = render.Rect
 
 // BoxConstraints 是父向子下传的布局约束（Flutter BoxConstraints 的最小集）。
 //

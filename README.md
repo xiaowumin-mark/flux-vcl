@@ -107,6 +107,8 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 
 **控件扩充批次 1（常用表单基线）✅ 完成**：`Memo`、`CheckBox`、`ComboBox`、`ProgressBar`、`RadioButton` 均已完成公开 API、布局、diff 属性对称性、Mock、LCL 适配及聚合示例。`ComboBox` 采用 `[]string` + 显式受控 `SelectedIndex`；`ProgressBar` 规范化 `Minimum ≤ Maximum` 并把 `Value` 钳制到该范围；`RadioButton` 由 native Renderer 按 resolved native parent + `GroupIndex` 维护逻辑互斥，规避 energye/lcl v1.0.3 缺少分组 setter 的限制。
 
+**P7.1 Inspector ✅ 完成**：`App.ObserveInspector` + `InspectorSnapshot` 提供只读提交/事件与 Widget → Element → native 三层快照，覆盖 Props、DIP 布局/溢出、create/destroy/reparent/property/event/bounds 统计；type/key canUpdate 失败会标记重建与焦点风险。`inspector.Open(app)` 使用独立工具窗，刷新/关闭不触发目标 App render；`App.SetBounds` 直接动画也作为 direct bounds commit 可见。
+
 | 子任务 | 状态 |
 |---|---|
 | 6.1 ListView + 稳定 key（`ListView(count, itemH, builder)` + slot key=`row-i` 控件池复用；行内容不带数据 key） | ✅ `flux.ListView` + diff/layout `ListViewRow` 透明分支 |
@@ -160,6 +162,7 @@ app.Mount(func() flux.Widget {
 - `examples/phase5` —— 高级特性 demo（点击按钮：计数 + 方块滑动动画 + 异步加载；点击"主题"切换 Light/Dark）
 - `examples/form-controls` —— 常用表单控件 demo（Memo/CheckBox/ComboBox/ProgressBar/RadioButton；唯一数字 Button 供 smoke）
 - `examples/virtual-list` —— 大数据 demo（10 万行虚拟滚动列表：控件池 + 稳定 key + 滚动双向绑定 + 第二窗体多窗口）
+- `examples/inspector` —— P7.1 Inspector demo（三层树、Props/布局、事件/mutation 时间线、重建风险）
 
 ```powershell
 # 构建并冒烟 basic（State）
@@ -179,6 +182,9 @@ app.Mount(func() flux.Widget {
 
 # 构建并冒烟 virtual-list（10 万行虚拟列表 + 多窗口）
 .\scripts\build.ps1 -Target virtual-list; .\scripts\smoke.ps1 -Target virtual-list
+
+# 构建并冒烟 inspector（三层树 + mutation/event + 重建风险）
+.\scripts\build.ps1 -Target inspector; .\scripts\smoke.ps1 -Target inspector
 ```
 
 ## 目录结构
@@ -194,12 +200,14 @@ flux-vcl/
 ├── list.go                # ListView 虚拟滚动列表 + ScrollOffset（Phase 6）
 ├── box.go                 # 布局协议：BoxConstraints/Size/Point/对齐枚举（Phase 3.1）
 ├── layout.go              # 单遍 RenderFlex 布局 + ScrollBox 滚动 + 虚拟列表布局 + NodeDiag（Phase 3/6）
+├── inspector.go           # P7.1 只读 observer、提交/事件、三层树快照与有界历史
 ├── controls.go            # 控件构造器：Window/Column/Row/ScrollBox/ListView/Component/Text/Button/Input
 ├── internal/
 │   ├── widget/            # Widget 接口 + Node + Props（有序属性集，D2 diff）
 │   ├── diff/              # Element 树 + diff/reconciliation 引擎（Phase 1.4）
 │   ├── render/            # Renderer 窄接口 + Mutation op 集 + DIP 换算 + Mock
 │   └── native/            # 默认 LCL 后端适配（energye/lcl + libenergy DLL）
+├── inspector/             # 独立只读 Inspector LCL 工具窗
 ├── examples/
 │   ├── basic/             # State 驱动冒烟应用（counter + two-way 绑定）
 │   │   └── winres/        # go-winres 资源配置（manifest/icon/version）
@@ -211,7 +219,9 @@ flux-vcl/
 │   │   └── winres/
 │   ├── form-controls/     # 常用表单控件 demo（批次 1）
 │   │   └── winres/
-│   └── virtual-list/      # 大数据 demo（10 万行虚拟列表 + 多窗口）
+│   ├── virtual-list/      # 大数据 demo（10 万行虚拟列表 + 多窗口）
+│   │   └── winres/
+│   └── inspector/         # P7.1 三层树/mutation/event/rebuild demo
 │       └── winres/
 ├── scripts/
 │   ├── build.ps1          # 构建脚手架

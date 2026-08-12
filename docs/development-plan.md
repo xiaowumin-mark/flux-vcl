@@ -494,7 +494,7 @@ State 驱动更新，以及窗口关闭后无异常。
 
 ## Phase 7 — 工程化与生态 · 目标：可用、可信、可发布
 
-> **状态：未开始。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
+> **状态：进行中（7.1 Inspector 已完成，2026-08-12）。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
 > 指为 Inspector、插件验证与 7GUIs 首发示例补齐必要的内建控件和机制，不等于包装
 > energye/lcl 的全部控件。菜单、对话框、TreeView、图像/媒体、托盘等不属于 v0.1.0
 > 发布阻塞项，后续按真实用例或插件生态增量加入。
@@ -503,7 +503,7 @@ State 驱动更新，以及窗口关闭后无异常。
 
 | # | 子任务 | 要点 / 参考 | 状态 |
 |---|---|---|---|
-| 7.1 | Inspector | Widget/Element 树、属性、布局、事件和 mutation 查看（design.md §18）；高亮任何原生控件重建。 | ⬜ 未开始 |
+| 7.1 | Inspector | Widget/Element/native 树、属性、布局、实际事件和 mutation 查看（design.md §18）；高亮任何原生控件重建。 | ✅ 完成 |
 | 7.2 | 插件系统 | `RegisterWidget` 注册、生命周期、布局与可选 Renderer 能力（design.md §19）；内建控件与第三方 builder 双轨隔离。 | ⬜ 未开始 |
 | 7.2c | 控件扩充批次 2 | 插件模型定案后实现 `TabControl/PageControl` 结构性容器，验证每页子树与 native parent 模型。 | ⬜ 未开始 |
 | 7.3 | 测试与 CI 强化 | 分 7.3a 基线门和 7.3b 发布门；D7 覆盖全量已发布控件、Windows 冒烟/截图、性能基准。 | ⬜ 未开始 |
@@ -606,6 +606,14 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 - 展示 Widget/Element/native 三层对应关系、Key/Path、Props、Bounds/constraints/诊断和最近一次提交统计。
 - 重建节点醒目标记，能定位“哪次 render、哪个 canUpdate 失败条件”导致焦点风险。
 - Inspector 自身关闭/刷新不得触发被检查应用重建；提供无头 observer 测试和 `examples/inspector`。
+
+> **完成记录（2026-08-12）**：`App.ObserveInspector` / `InspectorSnapshot` 发布深复制
+> 只读数据；render commit 与 `App.SetBounds` direct commit 覆盖全部 mutation，实际
+> 事件在用户 handler 前记录；diff 同时识别 canUpdate type/key mismatch 和 keyed
+> no-candidate replacement。`render.NativeInspectable` 提供 D6 可选原生元数据；
+> `inspector.Open` 独立工具窗只读取目标快照，关闭仅取消订阅。`inspector_test.go`
+> 覆盖首次挂载不误报、属性/零 mutation、type/key 重建、事件/direct bounds、深复制、
+> unsubscribe 与有界历史；`examples/inspector` 提供人工与 Windows smoke 验证。
 
 #### 7.2 插件系统
 

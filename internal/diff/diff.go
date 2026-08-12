@@ -73,13 +73,38 @@ func (e *Element) parentHandle() render.Handle {
 
 // Reconciler 是 diff 引擎：持有 Element 树根与 Renderer，逐次 Render 对齐。
 type Reconciler struct {
-	r       render.Renderer
-	root    *Element
-	lastOps []render.Op
+	r         render.Renderer
+	root      *Element
+	lastOps   []render.Op
+	rebuilds  []Rebuild
+	eventSink func(EventDispatch)
+}
+
+// Rebuild 描述一次 canUpdate 失败或 keyed replacement 导致的原生子树重建。
+type Rebuild struct {
+	Path                    string
+	OldPath                 string
+	OldType, OldKey         string
+	NewType, NewKey         string
+	Reason                  string
+	TypeChanged, KeyChanged bool
+}
+
+// EventDispatch 是 diff 注入 Source 后、调用用户 handler 前产生的只读事件记录。
+type EventDispatch struct {
+	Path     string
+	Name     string
+	Source   string
+	Event    render.Event
+	HasEvent bool
+	Value    any
 }
 
 // New 创建空 Reconciler。
 func New(r render.Renderer) *Reconciler { return &Reconciler{r: r} }
+
+// SetEventSink 设置事件观测回调。回调只能读取事件，不参与 diff 状态修改。
+func (rc *Reconciler) SetEventSink(fn func(EventDispatch)) { rc.eventSink = fn }
 
 // Root 返回当前 Element 树根（首次 Render 前为 nil）。
 func (rc *Reconciler) Root() *Element { return rc.root }
@@ -155,12 +180,18 @@ func (e *Element) FindByPath(path string) *Element {
 // 相同树 diff 零 mutation（D7c）：未变属性不产生 op，未匹配节点不重建。
 func (rc *Reconciler) Render(root *widget.Node) []render.Op {
 	rc.lastOps = nil
+	rc.rebuilds = nil
 	if rc.root == nil {
 		rc.root = rc.mount(root, 0, root.Type)
 	} else {
 		rc.root = rc.reconcile(rc.root, root, root.Type)
 	}
 	return append([]render.Op(nil), rc.lastOps...)
+}
+
+// Rebuilds 返回最近一次 Render 的重建记录副本。
+func (rc *Reconciler) Rebuilds() []Rebuild {
+	return append([]Rebuild(nil), rc.rebuilds...)
 }
 
 // mount 挂载新子树：创建原生控件（透明容器除外）、应用全部属性、递归子节点。
@@ -173,7 +204,7 @@ func (rc *Reconciler) mount(node *widget.Node, parentHandle render.Handle, path 
 		e.Handle = parentHandle // 透明容器：无原生控件，继承父句柄
 	} else {
 		e.Handle = rc.r.Create(node.Type)
-		rc.record(render.Op{Type: render.OpCreate, Handle: e.Handle, Key: node.Type})
+		rc.record(e, render.Op{Type: render.OpCreate, Handle: e.Handle, Key: node.Type})
 		rc.applyProps(e, node.Props)
 	}
 
@@ -183,7 +214,7 @@ func (rc *Reconciler) mount(node *widget.Node, parentHandle render.Handle, path 
 		e.Children = append(e.Children, ce)
 		if !transparentType(c.Type) {
 			rc.r.SetParent(ce.Handle, e.Handle)
-			rc.record(render.Op{Type: render.OpAppendChild, Handle: ce.Handle, Parent: e.Handle})
+			rc.record(ce, render.Op{Type: render.OpAppendChild, Handle: ce.Handle, Parent: e.Handle, ParentPath: e.Path})
 		}
 	}
 	rc.fireLifecycle(node.Props, "OnMount")
@@ -197,7 +228,24 @@ func (rc *Reconciler) mount(node *widget.Node, parentHandle render.Handle, path 
 // 每次 render 都触发导致钩子里 Set State → 无限 re-render）。
 func (rc *Reconciler) reconcile(old *Element, node *widget.Node, path string) *Element {
 	if !canUpdate(old, node) {
+		oldPath := old.Path
+		reason := "type-mismatch"
+		if old.Type == node.Type {
+			reason = "key-mismatch"
+		} else if old.Key != node.Key {
+			reason = "type-and-key-mismatch"
+		}
+		rc.rebuilds = append(rc.rebuilds, Rebuild{
+			Path: path, OldPath: oldPath, OldType: old.Type, OldKey: old.Key, NewType: node.Type, NewKey: node.Key,
+			Reason: reason, TypeChanged: old.Type != node.Type, KeyChanged: old.Key != node.Key,
+		})
 		rc.destroySubtree(old)
+		for i := len(rc.lastOps) - 1; i >= 0; i-- {
+			if rc.lastOps[i].Type == render.OpDestroy && rc.lastOps[i].Path == oldPath {
+				rc.lastOps[i].Path = path
+				break
+			}
+		}
 		return rc.mount(node, old.parentHandle(), path)
 	}
 
@@ -362,16 +410,16 @@ func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
 		switch v.(type) {
 		case func(render.Event), func(string): // 事件移除：解绑（native SetEvent nil 分支）
 			rc.r.SetEvent(e.Handle, key, nil)
-			rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+			rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
 		case func(bool):
 			if c, ok := rc.r.(render.Checkable); ok {
 				c.OnCheckedChange(e.Handle, nil)
-				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
 			}
 		case func(int):
 			if s, ok := rc.r.(render.Selectable); ok {
 				s.OnSelectionChange(e.Handle, nil)
-				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
 			}
 		}
 		return false
@@ -394,23 +442,23 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 	case "Text":
 		if s, ok := v.(string); ok {
 			rc.r.SetText(e.Handle, s)
-			rc.record(render.Op{Type: render.OpSetText, Handle: e.Handle, Value: s})
+			rc.record(e, render.Op{Type: render.OpSetText, Handle: e.Handle, Value: s})
 		}
 	case "Visible":
 		if b, ok := v.(bool); ok {
 			rc.r.SetVisible(e.Handle, b)
-			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Visible", Value: b})
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Visible", Value: b})
 		}
 	case "Enabled":
 		if b, ok := v.(bool); ok {
 			rc.r.SetEnabled(e.Handle, b)
-			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Enabled", Value: b})
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Enabled", Value: b})
 		}
 	case "Checked":
 		if b, ok := v.(bool); ok {
 			if c, ok := rc.r.(render.Checkable); ok {
 				c.SetChecked(e.Handle, b)
-				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Checked", Value: b})
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Checked", Value: b})
 			}
 		}
 	case "Items":
@@ -418,42 +466,42 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 			if s, ok := rc.r.(render.Selectable); ok {
 				items = copyItems(items)
 				s.SetItems(e.Handle, items)
-				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Items", Value: items})
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Items", Value: items})
 			}
 		}
 	case "SelectedIndex":
 		if index, ok := v.(int); ok {
 			if s, ok := rc.r.(render.Selectable); ok {
 				s.SetSelectedIndex(e.Handle, index)
-				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "SelectedIndex", Value: index})
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "SelectedIndex", Value: index})
 			}
 		}
 	case "Minimum":
 		if minimum, ok := v.(int); ok {
 			if p, ok := rc.r.(render.Progressable); ok {
 				p.SetMinimum(e.Handle, minimum)
-				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Minimum", Value: minimum})
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Minimum", Value: minimum})
 			}
 		}
 	case "Maximum":
 		if maximum, ok := v.(int); ok {
 			if p, ok := rc.r.(render.Progressable); ok {
 				p.SetMaximum(e.Handle, maximum)
-				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Maximum", Value: maximum})
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Maximum", Value: maximum})
 			}
 		}
 	case "Value":
 		if value, ok := v.(int); ok {
 			if p, ok := rc.r.(render.Progressable); ok {
 				p.SetValue(e.Handle, value)
-				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Value", Value: value})
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Value", Value: value})
 			}
 		}
 	case "GroupIndex":
 		if groupIndex, ok := v.(int); ok {
 			if g, ok := rc.r.(render.RadioGroupable); ok {
 				g.SetGroupIndex(e.Handle, groupIndex)
-				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "GroupIndex", Value: groupIndex})
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "GroupIndex", Value: groupIndex})
 			}
 		}
 	case "Bounds":
@@ -464,27 +512,27 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 		}
 		if r, ok := v.(render.Rect); ok {
 			rc.r.SetBounds(e.Handle, r)
-			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Bounds", Value: r})
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Bounds", Value: r})
 		}
 	case "Color": // Phase 5.2 Theme 背景色
 		if c, ok := v.(render.Color); ok {
 			rc.r.SetColor(e.Handle, c)
-			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Color", Value: c})
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Color", Value: c})
 		}
 	case "FontColor": // Phase 5.2 Theme 文字色
 		if c, ok := v.(render.Color); ok {
 			rc.r.SetFontColor(e.Handle, c)
-			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "FontColor", Value: c})
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "FontColor", Value: c})
 		}
 	case "TitleBarDark": // Phase 5.2 Theme 标题栏沉浸式暗色（win32 DWM；仅 Window 生效）
 		if b, ok := v.(bool); ok {
 			rc.r.SetTitleBarDark(e.Handle, b)
-			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "TitleBarDark", Value: b})
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "TitleBarDark", Value: b})
 		}
 	case "Native": // 逃逸口：控件创建后调用，注入绑定层原生对象
 		if fn, ok := v.(func(any)); ok {
 			rc.r.ApplyNative(e.Handle, fn)
-			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Native", Value: "fn"})
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Native", Value: "fn"})
 		}
 	case "ItemCount", "ItemHeight", "Builder":
 		// ListView 虚拟列表配置（Phase 6）：布局引擎据此重建可见区 slot 子树，
@@ -494,41 +542,62 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 		if cfg, ok := v.(render.ScrollConfig); ok {
 			if s, ok := rc.r.(render.Scrollable); ok {
 				s.SetScrollConfig(e.Handle, cfg)
-				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "ScrollConfig", Value: cfg})
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "ScrollConfig", Value: cfg})
 			}
 		}
 	case "ScrollPos": // ListView 滚动位置（DIP）→ Scrollable
 		if v, ok := v.(int); ok {
 			if s, ok := rc.r.(render.Scrollable); ok {
 				s.SetScrollPos(e.Handle, v)
-				rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "ScrollPos", Value: v})
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "ScrollPos", Value: v})
 			}
 		}
 	case "Scroll": // ListView 滚动目标（ScrollTarget，可比值类型）→ 绑 OnScroll
 		if st, ok := v.(render.ScrollTarget); ok {
 			if s, ok := rc.r.(render.Scrollable); ok {
 				s.OnScroll(e.Handle, func(pos int) {
-					render.Guard("event.OnScroll", func() { st.Apply(pos) })
+					render.Guard("event.OnScroll", func() {
+						if rc.eventSink != nil {
+							rc.eventSink(EventDispatch{
+								Name: "Scroll", Path: e.Path, Source: eventSource(e), Value: pos,
+							})
+						}
+						st.Apply(pos)
+					})
 				})
-				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: "Scroll", Value: st})
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: "Scroll", Value: st})
 			}
 		}
 	case "OnCheckedChange":
 		if fn, ok := v.(func(bool)); ok {
 			if c, ok := rc.r.(render.Checkable); ok {
 				c.OnCheckedChange(e.Handle, func(checked bool) {
-					render.Guard("event.OnCheckedChange", func() { fn(checked) })
+					render.Guard("event.OnCheckedChange", func() {
+						if rc.eventSink != nil {
+							rc.eventSink(EventDispatch{
+								Name: key, Path: e.Path, Source: eventSource(e), Value: checked,
+							})
+						}
+						fn(checked)
+					})
 				})
-				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
 			}
 		}
 	case "OnSelectionChange":
 		if fn, ok := v.(func(int)); ok {
 			if s, ok := rc.r.(render.Selectable); ok {
 				s.OnSelectionChange(e.Handle, func(index int) {
-					render.Guard("event.OnSelectionChange", func() { fn(index) })
+					render.Guard("event.OnSelectionChange", func() {
+						if rc.eventSink != nil {
+							rc.eventSink(EventDispatch{
+								Name: key, Path: e.Path, Source: eventSource(e), Value: index,
+							})
+						}
+						fn(index)
+					})
 				})
-				rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
 			}
 		}
 	case "OnMount", "OnUpdate", "OnUnmount":
@@ -537,38 +606,52 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 	default:
 		if ref, ok := v.(render.Ref); ok { // 逃逸口：引用绑定
 			rc.r.AttachRef(e.Handle, ref)
-			rc.record(render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Ref", Value: ref})
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Ref", Value: ref})
 		} else if widget.IsFunc(v) {
 			// 事件回调：每次重新绑定（无法比较相等性，D2 逃逸口行为）。
 			// 统一事件（func(Event)）：注入稳定 Source（Type#Key，D3）后转发，
 			// 供共享 handler 区分事件来源。
 			if ef, ok := v.(func(render.Event)); ok {
-				src := e.Type
-				if e.Key != "" {
-					src += "#" + e.Key // 稳定身份（D3）：跨 render 不漂移
-				} else if e.Path != "" {
-					src += "@" + e.Path // 隐式寻址回落：无 key 时用树路径（含类型），
-					// 静态树可零 Key 区分同型控件；结构重排后路径随之漂移 —— 需要稳定
-					// 身份的同型多 handler 请用 Key（D3）。
-				}
+				src := eventSource(e)
 				rc.r.SetEvent(e.Handle, key, func(ev render.Event) {
 					render.Guard("event."+key, func() {
 						ev.Source = src
+						if rc.eventSink != nil {
+							rc.eventSink(EventDispatch{Name: key, Path: e.Path, Source: src, Event: ev, HasEvent: true})
+						}
 						ef(ev)
 					})
 				})
 			} else if cf, ok := v.(func(string)); ok {
 				// func(string)（如 Input 双向绑定 OnChange）：同样包错误边界。
 				rc.r.SetEvent(e.Handle, key, func(s string) {
-					render.Guard("event."+key, func() { cf(s) })
+					render.Guard("event."+key, func() {
+						if rc.eventSink != nil {
+							rc.eventSink(EventDispatch{
+								Name: key, Path: e.Path, Source: eventSource(e), Value: s,
+							})
+						}
+						cf(s)
+					})
 				})
 			} else {
 				rc.r.SetEvent(e.Handle, key, v)
 			}
-			rc.record(render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
+			rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
 		}
 		// 其余未识别属性 Phase 1 静默忽略
 	}
+}
+
+func eventSource(e *Element) string {
+	source := e.Type
+	if e.Key != "" {
+		return source + "#" + e.Key
+	}
+	if e.Path != "" {
+		return source + "@" + e.Path
+	}
+	return source
 }
 
 // fireLifecycle 触发生命周期钩子（OnMount/OnUpdate/OnUnmount，Phase 4.3）。
@@ -605,6 +688,12 @@ func (rc *Reconciler) reconcileChildren(oldP *Element, newP *widget.Node) {
 			nonKeyedOlds = append(nonKeyedOlds, e)
 		}
 	}
+	newKeys := make(map[string]struct{})
+	for _, node := range newP.Children {
+		if node.Key != "" {
+			newKeys[node.Key] = struct{}{}
+		}
+	}
 
 	used := make(map[*Element]bool)
 	newElems := make([]*Element, 0, len(newP.Children))
@@ -628,6 +717,23 @@ func (rc *Reconciler) reconcileChildren(oldP *Element, newP *widget.Node) {
 			}
 			ne = rc.reconcile(oe, nc, childPath)
 		} else {
+			// keyed replacement 不会进入 canUpdate：新 key 无候选，旧 key 在尾部销毁。
+			// 仅当同槽旧 key 也从新列表消失时配对，避免把插入或重排误报为重建。
+			if nc.Key != "" && i < len(oldKids) {
+				candidate := oldKids[i]
+				_, oldKeyStillPresent := newKeys[candidate.Key]
+				if candidate.Key != "" && !used[candidate] && !oldKeyStillPresent {
+					reason := "key-mismatch"
+					if candidate.Type != nc.Type {
+						reason = "type-and-key-mismatch"
+					}
+					rc.rebuilds = append(rc.rebuilds, Rebuild{
+						Path: childPath, OldPath: candidate.Path, OldType: candidate.Type, OldKey: candidate.Key,
+						NewType: nc.Type, NewKey: nc.Key, Reason: reason,
+						TypeChanged: candidate.Type != nc.Type, KeyChanged: true,
+					})
+				}
+			}
 			ne = rc.mount(nc, oldP.Handle, childPath)
 		}
 
@@ -635,7 +741,7 @@ func (rc *Reconciler) reconcileChildren(oldP *Element, newP *widget.Node) {
 		// 原地复用（D7c：相同树零 mutation）与列表内重排（D7b：不迁移焦点）不发。
 		if !transparentType(nc.Type) && ne.Parent != oldP {
 			rc.r.SetParent(ne.Handle, oldP.Handle)
-			rc.record(render.Op{Type: render.OpAppendChild, Handle: ne.Handle, Parent: oldP.Handle})
+			rc.record(ne, render.Op{Type: render.OpAppendChild, Handle: ne.Handle, Parent: oldP.Handle, ParentPath: oldP.Path})
 		}
 		ne.Parent = oldP
 		newElems = append(newElems, ne)
@@ -659,8 +765,16 @@ func (rc *Reconciler) destroySubtree(e *Element) {
 	rc.fireLifecycle(e.Props, "OnUnmount")
 	if !transparentType(e.Type) {
 		rc.r.Destroy(e.Handle)
-		rc.record(render.Op{Type: render.OpDestroy, Handle: e.Handle})
+		rc.record(e, render.Op{Type: render.OpDestroy, Handle: e.Handle})
 	}
 }
 
-func (rc *Reconciler) record(op render.Op) { rc.lastOps = append(rc.lastOps, op) }
+func (rc *Reconciler) record(e *Element, op render.Op) {
+	if e != nil {
+		op.Path = e.Path
+		if op.ParentPath == "" && e.Parent != nil {
+			op.ParentPath = e.Parent.Path
+		}
+	}
+	rc.lastOps = append(rc.lastOps, op)
+}

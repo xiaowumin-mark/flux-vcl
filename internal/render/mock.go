@@ -482,6 +482,17 @@ func (m *Mock) RunOnUI(fn func()) {
 
 func (m *Mock) HandleAllocated(h Handle) bool { return h != 0 }
 
+// InspectNative 返回全部 Mock 控件的只读类型、父级和分配状态。
+func (m *Mock) InspectNative() NativeSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(NativeSnapshot, len(m.widgetType))
+	for h, widgetType := range m.widgetType {
+		out[h] = NativeInfo{Type: "Mock" + widgetType, Parent: m.parents[h], Allocated: true}
+	}
+	return out
+}
+
 // ClientSize 返回模拟窗体客户区尺寸（缺省 400x300，与 Phase 1 Window 默认一致）。
 func (m *Mock) ClientSize() (int, int) {
 	m.mu.Lock()

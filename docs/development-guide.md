@@ -52,7 +52,8 @@
 | `internal/diff` | Element 树 + diff/reconciliation 引擎（D1/D2/D3/D7） | → widget |
 | `internal/render` | `Renderer` 窄接口 + mutation op 集 + DIP 换算 + Mock（D6） | 面向接口，无 LCL 依赖 |
 | `internal/native` | 默认 LCL 后端适配 + 事件映射（D4/D6 落点） | → render |
-| `examples/` | 可运行演示（见 [命名规范 §2](naming-conventions.md)） | → 根包 |
+| `inspector/` | P7.1 独立只读 Inspector 工具窗 | → 根包 |
+| `examples/` | 可运行演示（见 [命名规范 §2](naming-conventions.md)） | → 根包 / inspector |
 | `scripts/` | 构建 / 冒烟 / 取 DLL 脚本 | — |
 | `docs/` | 设计 / 计划 / 调研 / 规范文档 | — |
 
@@ -93,10 +94,10 @@
 
 - **无头优先**：核心逻辑（widget/diff/render/flux 声明式层）用 `internal/render.Mock` 测试，不接触 energye/lcl/DLL，任意平台 `go test` 可跑（见 `renderer_test.go` 的 `TestMockHasNoDisplayDependency`）。
 - **命名**：`Test<特征><场景>`，英文 PascalCase；架构不变量用 `TestD<N><...>` 前缀（如 `TestD7aPurePropertyChangeNoRebuild`）。
-- **文件**：`<被测文件>_test.go`（如 `state_test.go`），跨特性收尾测试用功能域名（如 `phase5_test.go`、`scroll_inspect_test.go`）。
+- **文件**：`<被测文件>_test.go`（如 `state_test.go`、`inspector_test.go`），跨特性收尾测试用功能域名（如 `phase5_test.go`、`scroll_inspect_test.go`）。
 - **并发**：涉及 goroutine / 跨线程 marshalling 的测试必须用 `go test -race` 通过（如 Phase 2 的 5 goroutine 并发 Set）。
 - **覆盖**：新功能必须带测试；修 bug 先加复现测试再修。
-- **CI 红线**：`go test ./...` + `go vet ./...` 全绿；冒烟示例（basic/events/phase5/form-controls/virtual-list）由 CI 构建 + 截图验证。
+- **CI 红线**：`go test ./...` + `go vet ./...` 全绿；冒烟示例（basic/events/phase5/form-controls/virtual-list/inspector）由 CI 构建 + 截图验证。
 
 ---
 

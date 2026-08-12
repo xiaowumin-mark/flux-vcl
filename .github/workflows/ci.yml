@@ -61,6 +61,11 @@ jobs:
         run: |
           .\scripts\build.ps1 -Target virtual-list
           .\scripts\smoke.ps1 -Target virtual-list -Screenshot "$env:GITHUB_WORKSPACE\bin\virtual-list-smoke.png"
+      - name: Build & Smoke (inspector, P7.1)
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -Target inspector
+          .\scripts\smoke.ps1 -Target inspector -Screenshot "$env:GITHUB_WORKSPACE\bin\inspector-smoke.png"
       - name: Upload smoke screenshot
         if: always()
         uses: actions/upload-artifact@v4

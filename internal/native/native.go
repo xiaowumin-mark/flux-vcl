@@ -1063,6 +1063,30 @@ func (r *Renderer) HandleAllocated(h render.Handle) bool {
 	return ok
 }
 
+// InspectNative 返回 Inspector 使用的全部原生类型、逻辑父级与分配状态。
+// ClassName 只读，不创建 HWND，也不改变被检查控件。
+func (r *Renderer) InspectNative() render.NativeSnapshot {
+	out := make(render.NativeSnapshot, len(r.controls))
+	for h, c := range r.controls {
+		if c == nil {
+			continue
+		}
+		info := render.NativeInfo{Type: c.ClassName(), Allocated: true}
+		if radio := r.radios[h]; radio != nil {
+			info.Parent = radio.parent
+		} else if parent := c.Parent(); parent != nil {
+			for parentHandle, candidate := range r.controls {
+				if candidate != nil && candidate.Instance() == parent.Instance() {
+					info.Parent = parentHandle
+					break
+				}
+			}
+		}
+		out[h] = info
+	}
+	return out
+}
+
 // —— Phase 6 滚动（Scrollable 实现）与多窗口 ——
 
 // SetScrollConfig 配置 ListView 滚动（DIP）：内容总高 + 滚轮步长。

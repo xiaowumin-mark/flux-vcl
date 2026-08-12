@@ -30,6 +30,7 @@ const listScrollbarStrip = 17
 type LayoutDiag struct {
 	Type      string
 	Key       string
+	Path      string
 	OverflowW int
 	OverflowH int
 }
@@ -39,6 +40,7 @@ type LayoutDiag struct {
 // 与 flex 因子（Expanded/Flexible 才 >0）。与 LayoutDiag（仅溢出）互补。
 type NodeDiag struct {
 	Type, Key   string
+	Path        string
 	Constraints BoxConstraints
 	Size        Size
 	Frame       render.Rect
@@ -47,8 +49,9 @@ type NodeDiag struct {
 
 // layoutDiags 收集布局诊断（App 每次 render 新建，布局后读取）。
 type layoutDiags struct {
-	list  []LayoutDiag // 溢出诊断（LastLayoutDiags）
-	nodes []NodeDiag   // 全节点诊断（Inspect）
+	list          []LayoutDiag // 溢出诊断（LastLayoutDiags）
+	overflowNodes []*Node
+	nodes         []NodeDiag // 全节点诊断（Inspect）
 }
 
 func (d *layoutDiags) overflow(n *Node, ow, oh int) {
@@ -56,6 +59,7 @@ func (d *layoutDiags) overflow(n *Node, ow, oh int) {
 		return
 	}
 	d.list = append(d.list, LayoutDiag{Type: n.Type, Key: n.Key, OverflowW: ow, OverflowH: oh})
+	d.overflowNodes = append(d.overflowNodes, n)
 }
 
 // record 收集一个节点的布局诊断。Frame 留空，由 finalize 在整棵布局完成后
@@ -78,19 +82,27 @@ func (d *layoutDiags) finalize(root *Node) {
 		return
 	}
 	idx := 0
-	var walk func(n *Node)
-	walk = func(n *Node) {
-		for _, c := range n.Children {
-			walk(c)
+	paths := make(map[*Node]string)
+	var walk func(n *Node, path string)
+	walk = func(n *Node, path string) {
+		paths[n] = path
+		for i, c := range n.Children {
+			walk(c, path+"/"+fmt.Sprint(i)+"/"+c.Type)
 		}
 		if idx < len(d.nodes) {
+			d.nodes[idx].Path = path
 			if b, ok := n.Props.Get("Bounds"); ok {
 				d.nodes[idx].Frame = b.(render.Rect)
 			}
 			idx++
 		}
 	}
-	walk(root)
+	walk(root, root.Type)
+	for i, node := range d.overflowNodes {
+		if i < len(d.list) {
+			d.list[i].Path = paths[node]
+		}
+	}
 }
 
 // flexKid 是 flex 容器的一个子项（测量/定位工作单元）。

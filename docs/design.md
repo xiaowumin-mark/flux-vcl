@@ -666,14 +666,41 @@ Element 维护树路径 `Path`（如 `"Window/0/Column/1/Text"`），提供隐�
 
 # 18. Inspector 开发工具
 
-类似 Flutter Inspector。
+类似 Flutter Inspector，但观测对象是 FluxVCL 的三棵树与提交，而不是直接枚举
+Win32 HWND。`TLabel` 没有独立 HWND，透明 Widget/Element 也共享祖先句柄，因此
+Inspector 从 `App` / diff 的只读快照构造 Widget → Element → native 对应关系。
 
-功能：
+## 18.1 只读 observer 与提交边界
 
-* Widget Tree
-* 属性查看
-* Layout 调试
-* Event 查看
+`App.ObserveInspector(observer)` 订阅两类记录：
+
+- 每次 render 都发布一个 `InspectorCommit`，包含递增 `RenderID`、mutation 列表、
+  create/destroy/reparent/property/event/bounds 统计和 canUpdate 重建原因；相同树也
+  发布零 mutation commit，便于证明 D7c。
+- 实际事件在调用用户 handler 前发布 `InspectorEventRecord`，覆盖统一 Event、文本
+  change、checked/selection change 与滚动回写；handler panic 仍能在日志中定位。
+
+`App.SetBounds` 动画绕过 diff，因此发布 `Direct=true` 的 bounds commit，但不递增
+`RenderID`，避免把直接 mutation 误报成 render。observer 得到的 Props/value/slice
+均已清洗并深复制，不含函数闭包、State/Ref/原生指针，不能反向修改 diff 状态。
+
+## 18.2 快照与重建风险
+
+`App.InspectorSnapshot()` 返回当前三层树：Type、Key、Path、父路径、Props、DIP
+constraints/size/bounds/flex、溢出、native 数字 ID/类型/父级/allocated。原生信息走
+`render.NativeInspectable` 可选窄能力一次返回元数据副本，基础 Renderer 接口不因
+Inspector 膨胀，快照遍历也不会在后台线程逐项触碰原生控件。
+
+重建只标记非首次挂载的 replacement，并记录 render 序号、旧/新 Type/Key 与
+`type-mismatch` / `key-mismatch` / `type-and-key-mismatch`。keyed child 改 key 会绕过
+普通 canUpdate（新 key 无旧候选），diff 在 children 匹配点显式识别该风险。
+
+## 18.3 独立工具窗
+
+`inspector.Open(target)` 创建只含只读 Memo 的独立 LCL 工具窗，展示三层树、属性、
+布局、事件和 mutation 时间线；重建用 `REBUILD / FOCUS RISK` 醒目标记。工具窗刷新
+只读取 `InspectorSnapshot()`，关闭只 unsubscribe，均不调用 target Render/State.Set。
+历史使用有界 `InspectorHistory`，默认工具窗保留最近 80 条提交和事件。
 
 ---
 
