@@ -1,12 +1,18 @@
 package flux
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/xiaowumin-mark/flux-vcl/internal/diff"
 	"github.com/xiaowumin-mark/flux-vcl/internal/render"
 )
+
+// ErrAppCloseDuringRender 表示插件或用户生命周期回调在提交尚未结束时调用 App.Close。
+// Close 必须由生命周期回调的调用方在回调返回后执行，避免同步等待当前提交。
+var ErrAppCloseDuringRender = errors.New("flux: 不能在 render 或生命周期回调中调用 App.Close")
 
 // App 管理一棵声明式 UI 树的 reconciliation 生命周期。
 //
@@ -23,9 +29,15 @@ type App struct {
 	rc                    *diff.Reconciler
 	build                 func() Widget
 	mu                    sync.Mutex
-	renderMu              sync.Mutex   // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
-	pending               bool         // 脏标志：有待处理的失效（D4 合并）
-	inRender              bool         // 重入防护：当前已有 renderWidget 在栈上（生命周期钩子等 render 中触发 State.Set）
+	closeMu               sync.Mutex
+	renderMu              sync.Mutex // 串行化 reconcile：即使并发 Set 也只允许一个 render 进行
+	pending               bool       // 脏标志：有待处理的失效（D4 合并）
+	inRender              bool       // 重入防护：当前已有 renderWidget 在栈上（生命周期钩子等 render 中触发 State.Set）
+	closed                bool
+	closeErr              error
+	lastError             error
+	plugins               map[string]*pluginRuntime
+	pluginOrder           []string
 	lastDiags             []LayoutDiag // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
 	lastInspect           []NodeDiag   // 最近一次 render 的全节点布局诊断（Phase 3.7 inspector）
 	inspectorRenderID     uint64
@@ -40,22 +52,126 @@ type App struct {
 // 注册窗体 resize 回调 → invalidate（pending 合并 + renderMu 串行化，
 // resize 风暴安全）→ Window 布局用最新客户区尺寸。
 func NewApp(r render.Renderer) *App {
-	a := &App{r: r, rc: diff.New(r)}
+	a := &App{r: r, rc: diff.New(r), plugins: make(map[string]*pluginRuntime)}
 	a.rc.SetEventSink(a.recordInspectorEvent)
 	r.OnResize(func(w, h int) { a.invalidate() })
 	return a
 }
 
 // Mount 注册根构建函数并首次渲染。之后 State.Set 自动触发 re-render。
-func (a *App) Mount(build func() Widget) {
+// 插件解析、初始化、builder 或测量失败时返回 *PluginError，且本次不提交原生 mutation。
+func (a *App) Mount(build func() Widget) error {
 	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return ErrAppClosed
+	}
 	a.build = build
 	a.mu.Unlock()
-	a.render()
+	return a.render()
 }
 
 // Render 手动渲染一棵具体树（Phase 1 兼容路径；不触发 State 自动更新，请用 Mount）。
-func (a *App) Render(w Widget) { a.renderWidget(w) }
+// 返回值只报告本次同步准备/提交错误；事件和实例生命周期的异步错误从 LastError 读取。
+func (a *App) Render(w Widget) error { return a.renderWidget(w) }
+
+// LastError 返回最近一次插件或渲染错误。返回值只读；成功的新渲染会清除旧错误。
+func (a *App) LastError() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastError
+}
+
+// Close 卸载当前 Element 树并关闭 App 使用过的插件。
+// 实例 OnUnmount 先执行，插件 Close 再按 Init 的逆序执行；方法幂等且并发安全。
+// Close 应在 Renderer 消息循环结束前调用，确保全部回调仍在 UI 线程执行（D4）。
+func (a *App) Close() error {
+	a.mu.Lock()
+	if a.inRender {
+		err := ErrAppCloseDuringRender
+		a.lastError = errors.Join(a.lastError, err)
+		a.mu.Unlock()
+		return err
+	}
+	if a.closed {
+		err := a.closeErr
+		a.mu.Unlock()
+		return err
+	}
+	a.mu.Unlock()
+
+	a.closeMu.Lock()
+	defer a.closeMu.Unlock()
+
+	a.mu.Lock()
+	if a.inRender {
+		err := ErrAppCloseDuringRender
+		a.lastError = errors.Join(a.lastError, err)
+		a.mu.Unlock()
+		return err
+	}
+	if a.closed {
+		err := a.closeErr
+		a.mu.Unlock()
+		return err
+	}
+	a.closed = true
+	a.pending = false
+	a.mu.Unlock()
+
+	var closeErrs []error
+	ran := false
+	a.r.RunOnUI(func() {
+		ran = true
+		a.renderMu.Lock()
+		defer a.renderMu.Unlock()
+
+		a.setLastError(nil)
+		ops := a.rc.Unmount()
+		if d, ok := a.r.(drainer); ok {
+			d.DrainDestroy()
+		}
+		a.mu.Lock()
+		renderID := a.inspectorRenderID
+		a.lastDiags = nil
+		a.lastInspect = nil
+		commit := inspectorCommit(renderID, false, ops, nil)
+		a.lastInspectorSnapshot = InspectorSnapshot{RenderID: renderID, Commit: cloneInspectorCommit(commit)}
+		a.inspectorPending = nil
+		a.mu.Unlock()
+		if len(ops) > 0 {
+			a.publishInspectorCommit(commit)
+		}
+		if err := a.LastError(); err != nil {
+			closeErrs = append(closeErrs, err)
+		}
+
+		for i := len(a.pluginOrder) - 1; i >= 0; i-- {
+			name := a.pluginOrder[i]
+			runtime := a.plugins[name]
+			if runtime.descriptor.Close != nil {
+				if err := pluginCall(name, "close", func() error { return runtime.descriptor.Close(runtime.context()) }); err != nil {
+					closeErrs = append(closeErrs, err)
+				}
+			}
+			releaseWidget(name)
+		}
+		a.plugins = make(map[string]*pluginRuntime)
+		a.pluginOrder = nil
+	})
+	if !ran {
+		closeErrs = append(closeErrs, fmt.Errorf("flux: Renderer 未执行 App.Close 的 UI 线程任务"))
+	}
+
+	err := errors.Join(closeErrs...)
+	a.mu.Lock()
+	a.closeErr = err
+	if err != nil {
+		a.lastError = err
+	}
+	a.mu.Unlock()
+	return err
+}
 
 // Root 返回当前 Element 树根（Inspector / 测试用）。
 func (a *App) Root() *diff.Element { return a.rc.Root() }
@@ -88,14 +204,15 @@ func (a *App) Animate(duration time.Duration, curve Curve, onStep func(v float64
 // SetBounds 按稳定 key 直接应用控件几何（DIP）—— 动画高频落地路径（D2 逃逸口）。
 //
 // 不经 diff/布局（不重跑 render）：逐帧 SetBounds 比整树 re-diff 便宜一个量级。
-// 目标必须是带稳定 key 的真实控件（透明容器/Window 跳过 —— 无独立原生句柄）。
+// 目标必须是带稳定 key 且由 Flux 管理几何的真实控件。透明容器/Window 跳过
+// （无独立原生句柄）；TabPage 也跳过（其客户区由 PageControl/widgetset 管理）。
 // 与布局的关系：本方法不改 Element 的 Bounds 属性，布局在下次 render 会按
 // 布局结果决定是否 patch 回 —— 布局槽位不变时 diff 不发 SetBounds，动画位置保持。
 //
 // key 必须是稳定身份（D3）：动画目标是跨 render 保持同一控件的场景，路径会随
 // 结构变动漂移，故不能用 FindByPath 定位（静态树/一次性寻址用 FindByPath）。
 func (a *App) SetBounds(key string, r render.Rect) {
-	if e := a.rc.Lookup(key); e != nil && !diff.IsTransparent(e.Type) && e.Type != "Window" {
+	if e := a.rc.Lookup(key); e != nil && !diff.IsTransparent(e) && e.Type != "Window" && e.Type != "TabPage" {
 		a.r.SetBounds(e.Handle, r)
 		a.mu.Lock()
 		renderID := a.inspectorRenderID
@@ -155,14 +272,18 @@ func Async[T any](a *App, load func() (T, error), onSuccess func(T), onError ...
 
 // render 取当前 build 并渲染（build 为空则跳过，未 Mount）。renderMu 与重入
 // 防护在 renderWidget 内统一处理（见下）。
-func (a *App) render() {
+func (a *App) render() error {
 	a.mu.Lock()
 	b := a.build
+	closed := a.closed
 	a.mu.Unlock()
-	if b == nil {
-		return
+	if closed {
+		return ErrAppClosed
 	}
-	a.renderWidget(b())
+	if b == nil {
+		return nil
+	}
+	return a.renderWidget(b())
 }
 
 // renderWidget 对一棵具体 Widget 树做 diff：布局（constraints 下传，写 Bounds）→
@@ -174,18 +295,33 @@ func (a *App) render() {
 // 内联）→ renderWidget，会重入当前栈：非重入 renderMu 自锁 + 无限递归。
 // 因此 renderWidget 持有 inRender 守卫：重入调用只置 pending 并返回，由当前
 // render 结束后 finishRender 统一 flush（D4 合并更新，递归变一次尾调）。
-func (a *App) renderWidget(w Widget) {
+func (a *App) renderWidget(w Widget) (renderErr error) {
 	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return ErrAppClosed
+	}
 	if a.inRender {
 		a.pending = true // 已有 render 在栈上：排队，由当前 render 结束时 flush
 		a.mu.Unlock()
-		return
+		return nil
 	}
 	a.inRender = true
+	a.lastError = nil
 	a.mu.Unlock()
 	defer func() {
+		cycleErr := a.LastError()
+		if cycleErr == nil {
+			cycleErr = renderErr
+		}
 		again := a.finishRender()
-		if !again {
+		if again {
+			renderErr = errors.Join(cycleErr, a.render())
+		} else {
+			renderErr = cycleErr
+		}
+		a.setLastError(renderErr)
+		if !again || renderErr != nil {
 			a.flushInspectorCommits()
 		}
 	}()
@@ -193,10 +329,22 @@ func (a *App) renderWidget(w Widget) {
 	a.renderMu.Lock() // 串行化 reconcile：并发 Set 也只允许一个 render 进行
 	defer a.renderMu.Unlock()
 
-	root := w.Create()
+	pluginStart := len(a.pluginOrder)
+	root, err := a.expandWidget(w)
+	if err != nil {
+		a.setLastError(err)
+		return err
+	}
 	cw, ch := a.r.ClientSize()
 	d := &layoutDiags{}
 	layoutTree(root, a.r, Tight(cw, ch), Point{}, d)
+	if d.err != nil {
+		errs := []error{d.err}
+		errs = append(errs, a.rollbackPluginsFrom(pluginStart)...)
+		err := errors.Join(errs...)
+		a.setLastError(err)
+		return err
+	}
 	d.finalize(root) // 布局完成后后序回填 Frame（record 时点早于父 setPos 平移）
 	a.mu.Lock()
 	a.lastDiags = d.list
@@ -214,6 +362,10 @@ func (a *App) renderWidget(w Widget) {
 	renderID := a.inspectorRenderID
 	a.mu.Unlock()
 	a.queueInspectorCommit(inspectorCommit(renderID, false, ops, a.rc.Rebuilds()))
+	if err := a.LastError(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // finishRender 结束一次 renderWidget：清 inRender，若 render 期间有重入排队
@@ -224,9 +376,6 @@ func (a *App) finishRender() bool {
 	again := a.pending
 	a.pending = false
 	a.mu.Unlock()
-	if again {
-		a.render()
-	}
 	return again
 }
 
@@ -255,6 +404,10 @@ func (a *App) Inspect() []NodeDiag {
 // render 在进行。经 renderer.RunOnUI marshal 到 UI 线程，任意 goroutine 安全。
 func (a *App) invalidate() {
 	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return
+	}
 	if a.pending {
 		a.mu.Unlock()
 		return
@@ -264,10 +417,32 @@ func (a *App) invalidate() {
 
 	a.r.RunOnUI(func() {
 		a.mu.Lock()
+		if a.closed {
+			a.pending = false
+			a.mu.Unlock()
+			return
+		}
 		a.pending = false
 		a.mu.Unlock()
-		a.render()
+		if err := a.render(); err != nil {
+			a.setLastError(err)
+		}
 	})
+}
+
+func (a *App) setLastError(err error) {
+	a.mu.Lock()
+	a.lastError = err
+	a.mu.Unlock()
+}
+
+func (a *App) reportError(err error) {
+	if err == nil {
+		return
+	}
+	a.mu.Lock()
+	a.lastError = errors.Join(a.lastError, err)
+	a.mu.Unlock()
 }
 
 // drainer 是可选接口：实现方在每次 render 完成后统一物理释放延后销毁的

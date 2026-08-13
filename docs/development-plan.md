@@ -234,7 +234,8 @@
 >   `lcl.RunOnMainThreadSync` 与窗体 teardown 竞争，在 `Application.Run()` 内间歇崩溃
 >   （纯 LCL 最小复现不崩、FluxVCL 集成层崩、加探针即消失 → heisenbug 竞态；50ms tick
 >   压力下必现、修复后 8/8 干净）。修复（纵深防御）：`Renderer.RunOnUI` 在窗体
->   `OnClose` 置 `closed` 门后直接丢弃（不再产生任何 DLL sync 调用）；
+>   `OnClose` 置 `closed` 门后丢弃后台线程任务（不再产生 DLL sync 调用），但 UI 主线程
+>   回调仍内联执行，以便完成 `App.Close` 清理；
 >   `emitResize` 同门控；demo 用 `r.OnClose` 关闭 `done` 通道停止后台轮询 goroutine。
 >   教训：LCL 对象只在主线程访问是必要不充分 —— 关机期间连"主线程同步调用"本身都要避免。
 
@@ -494,7 +495,7 @@ State 驱动更新，以及窗口关闭后无异常。
 
 ## Phase 7 — 工程化与生态 · 目标：可用、可信、可发布
 
-> **状态：进行中（7.1 Inspector 已完成，2026-08-12）。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
+> **状态：进行中（7.1 Inspector、7.2 插件系统与 7.2c 分页容器已完成，2026-08-13）。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
 > 指为 Inspector、插件验证与 7GUIs 首发示例补齐必要的内建控件和机制，不等于包装
 > energye/lcl 的全部控件。菜单、对话框、TreeView、图像/媒体、托盘等不属于 v0.1.0
 > 发布阻塞项，后续按真实用例或插件生态增量加入。
@@ -504,8 +505,8 @@ State 驱动更新，以及窗口关闭后无异常。
 | # | 子任务 | 要点 / 参考 | 状态 |
 |---|---|---|---|
 | 7.1 | Inspector | Widget/Element/native 树、属性、布局、实际事件和 mutation 查看（design.md §18）；高亮任何原生控件重建。 | ✅ 完成 |
-| 7.2 | 插件系统 | `RegisterWidget` 注册、生命周期、布局与可选 Renderer 能力（design.md §19）；内建控件与第三方 builder 双轨隔离。 | ⬜ 未开始 |
-| 7.2c | 控件扩充批次 2 | 插件模型定案后实现 `TabControl/PageControl` 结构性容器，验证每页子树与 native parent 模型。 | ⬜ 未开始 |
+| 7.2 | 插件系统 | `RegisterWidget` 注册、生命周期、布局与可选 Renderer 能力（design.md §19）；内建控件与第三方 builder 双轨隔离。 | ✅ 完成 |
+| 7.2c | 控件扩充批次 2 | 插件模型定案后实现 `PageControl/TabPage` 结构性容器，验证每页子树与 native parent 模型。 | ✅ 完成 |
 | 7.3 | 测试与 CI 强化 | 分 7.3a 基线门和 7.3b 发布门；D7 覆盖全量已发布控件、Windows 冒烟/截图、性能基准。 | ⬜ 未开始 |
 | 7.4 | 打包 | 安装器、DPI manifest/版本资源、DLL 版本校验、单 EXE 方案评估。 | ⬜ 未开始 |
 | 7.5 | 产品化与控件扩充批次 3 | 中英双语文档、全量示例、7GUIs；按示例机制逐项实现 `Slider`、`StringGrid`（native `TStringGrid`）、`Canvas/PaintBox`。 | ⬜ 未开始 |
@@ -517,7 +518,7 @@ State 驱动更新，以及窗口关闭后无异常。
 
 1. **7.1 Inspector**：先让重建、属性 patch、布局和事件流可观察，作为后续结构性控件的排错工具。
 2. **7.2 插件系统**：冻结注册、builder、生命周期和布局接口；内建 `native.Create` switch 与第三方注册表保持正交。
-3. **控件批次 2（7.2c）**：实现 `TabControl/PageControl`，用真实多页子树验证容器与插件边界。
+3. **控件批次 2（7.2c）**：实现 `PageControl/TabPage`，用真实多页子树验证容器与插件边界。
 4. **7.3a 基线门**：对批次 1、批次 2 和既有控件完成统一 D7/CI 覆盖；未通过不得进入产品示例扩张。
 5. **7.4 打包**：可与 7.3a 后半并行，但必须在 7.5 发布文档冻结前产出可安装测试包。
 6. **7.5 产品化 + 控件批次 3**：按 7GUIs 示例需要逐项实现机制型控件，不单独开启“无限补控件”支线。
@@ -543,7 +544,7 @@ energye/lcl 探针确认 `TPageControl/TTabSheet` 能力，再决定暴露一个
 
 | 目标 | 最小语义 | 必须验证 |
 |---|---|---|
-| `PageControl/TabControl` | 受控 `SelectedIndex`、选择回调、带稳定 Key 的页面列表、每页标题与唯一子树。 | 切页只 patch 选择状态，不重建页面或子控件；焦点/IME 不迁移到错误页面。 |
+| `PageControl/TabPage` | 受控 `SelectedIndex`、选择回调、带稳定 Key 的页面列表、每页标题与唯一子树。 | 切页只 patch 选择状态，不重建页面或子控件；焦点/IME 不迁移到错误页面。 |
 | 页面子树 | 每页拥有独立 native parent；inactive 页面保留 Element/native 子树，仅隐藏而不卸载。 | 页面重排按 Key 复用；增删只影响目标页；透明容器不改变页面归属。 |
 | 布局 | PageControl 参与普通 constraints；活动页内容填充扣除 tab header 后的客户区。 | resize/DPI/显式 Width/Height 下 bounds 正确，无重叠、负尺寸或坐标越界。 |
 | 插件边界 | 内建容器继续走 native switch；插件注册表只负责第三方类型及 builder。 | 注册同名、未知类型、插件卸载/失败有确定错误；内建控件不依赖插件初始化顺序。 |
@@ -621,6 +622,35 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 - 注册表并发安全；重复注册、未知类型、插件 panic、初始化失败和关闭顺序有确定错误边界。
 - 至少提供一个不修改 `internal/native` switch 的第三方 Chart/Badge 示例，验证插件确实走注册路径。
 - 插件不能 import 不稳定 internal 包；需要的扩展点必须从公开、最小接口暴露并写兼容政策。
+
+> **完成记录（2026-08-12）**：公开 API 已落地 `RegisterWidget` / `UnregisterWidget` /
+> `RegisteredWidgets`、`PluginWidget`、`WidgetPlugin`、四种类型化 property、DIP
+> `Measure`、App 级 Init/Close、实例 Mount/Update/Unmount 与类型安全 capability；
+> 内建控件仍走 native Create switch，第三方 builder 只返回公开 Widget 子树。错误边界覆盖
+> 非法/保留/重复/未知/在用注销、Init/Build/Measure/Close 失败、插件 panic、递归循环，
+> prepare 失败在 native commit 前回滚，实例提交期错误经 Render/`LastError` 可观测。
+> `plugin_test.go` 覆盖并发注册、能力缺失退化、生命周期/逆序关闭、事务回滚、DIP 布局和
+> D7a/D7b/D7c；capability 按回调捕获不可变快照，覆盖保存旧上下文后的并发读取与动态值刷新；
+> 插件透明身份由不可导出 marker 证明而非信任 `Plugin:` 字符串；`examples/plugin-badge/badge`
+> 仅依赖公开根包且未修改 native switch。收尾审查进一步覆盖 prepare 失败时的重入 State
+> 更新不得递归重试、Close UI 任务未执行时可重试，以及 App 关闭后解除 State 订阅。
+> CI 已纳入 `go test ./...`、`go vet ./...` 以及 Windows `plugin-badge` build/smoke/非空截图。
+> **7.2c 控件扩充批次 2 已完成（2026-08-13）**：基于 energye/lcl v1.0.3 的
+> `TPageControl/TTabSheet`，公开 `PageControl` + `TabPage`，实现稳定 Key 页面、受控
+> `SelectedIndex`/选择回调、每页 native parent、inactive 保活、keyed 重排与 DIP 客户区
+> 布局。prepare 会在 commit 前拦截手写 Node/插件 builder 的非法结构并回滚本次 runtime；
+> Mock/diff 无头回归覆盖挂载顺序、默认值/钳制、事件抑制及重排零 create/destroy。
+> `examples/page-control` 的 Windows smoke 连续执行索引切换和 keyed 重排，确认 PageControl、
+> 两个 TabSheet parent 与 Edit HWND 全程不变，并产出经像素检查的目标窗口截图。`TabControl`
+> 未暴露，因为当前 LCL 版本没有对应的后端类型。
+>
+> **复核记录（2026-08-13）：P7.2 插件系统确认完成。** 已逐项复核公开注册与 builder API、
+> 类型化属性、DIP 测量、App/实例生命周期、Renderer 可选能力、并发注册表与可判定错误边界；
+> 第三方 `examples/plugin-badge/badge` 仍只依赖公开根包，`internal/native` 未增加插件类型分支。
+> 本地执行 `go test ./...`、`go test -race ./...`、`go vet ./...`、`git diff --check` 均通过；
+> `scripts/build.ps1 -Target plugin-badge` 与对应 smoke 通过，Win32 验证窗口出现、按钮文本
+> `0 -> 1` 且进程正常退出。smoke 的全屏截图未保证目标窗口置前，故本次不把截图内容作为
+> UI 视觉验收证据。结论仅覆盖 7.2 插件系统；7.2c 分页容器按上方独立完成记录验收。
 
 #### 7.3 测试与 CI 强化
 

@@ -39,6 +39,8 @@
 | `examples/form-controls` | 常用表单控件基线（Memo/CheckBox/ComboBox/ProgressBar/RadioButton） |
 | `examples/virtual-list` | 大数据：10 万行虚拟列表（控件池虚拟化 + 滚动双向绑定 + 多窗口） |
 | `examples/inspector` | P7.1 三层树、mutation、事件、布局与重建风险查看。 |
+| `examples/plugin-badge` | P7.2 第三方组合式 Badge 插件；`badge` 子包只依赖公开 SDK。 |
+| `examples/page-control` | P7.2c PageControl/TabPage 多页容器、稳定 Key 与 native parent。 |
 
 - **新增示例不再用 `phaseN`**；若需多特性合屏，按主特性命名。
 - 推荐名（按能力）：`animation` / `theme` / `async` / `component` / `scroll` / `dpi` / `virtual-list` / `multi-backend`…（`inspector` 已使用）
@@ -114,7 +116,7 @@ examples/<name>/
 ### 4.3 State / 绑定 / App（导出）
 
 - `State[T]`（泛型类型）、`NewState[T](initial)`（构造函数）、`Bind(s)`（绑定）。
-- `NewApp(r render.Renderer)`、`App.Mount` / `App.Render` / `App.Root` / `App.Animate` / `App.SetBounds` / `App.Inspect` / `App.LastLayoutDiags`。
+- `NewApp(r render.Renderer)`、`App.Mount` / `App.Render` / `App.Close` / `App.LastError` / `App.Root` / `App.Animate` / `App.SetBounds` / `App.Inspect` / `App.LastLayoutDiags`。
 - 顶层泛型函数：`Async[T](app, load, onSuccess, onError...)`（Go 方法不支持泛型，故为包级函数）。
 
 ### 4.4 常量（导出）
@@ -159,7 +161,7 @@ examples/<name>/
 
 **type**：`feat` / `fix` / `docs` / `test` / `refactor` / `perf` / `build` / `ci` / `chore` / `revert`
 
-**scope**：`phaseN`（阶段主推进）、`example`、以及子系统名 —— `theme` / `animation` / `state` / `layout` / `list`（Phase 6 虚拟列表） / `inspector` / `event` / `diff` / `native` / `render` / `widget` / `docs` / `ci` / `scripts`
+**scope**：`phaseN`（阶段主推进）、`example`、以及子系统名 —— `theme` / `animation` / `state` / `layout` / `list`（Phase 6 虚拟列表） / `inspector` / `plugin` / `event` / `diff` / `native` / `render` / `widget` / `docs` / `ci` / `scripts`
 
 ---
 

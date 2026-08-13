@@ -87,8 +87,8 @@ func OnCheckedChange(fn func(checked bool)) Opt {
 	return optFn(func(n *Node) { n.Props.Set("OnCheckedChange", fn) })
 }
 
-// OnSelectionChange 绑定 ComboBox 选择变化事件。fn 接收用户选择后的索引；-1 表示
-// 当前未选择。该事件不复用文本控件的 OnChange。
+// OnSelectionChange 绑定 ComboBox 或 PageControl 的选择变化事件。fn 接收用户
+// 选择后的索引；-1 表示当前未选择。该事件不复用文本控件的 OnChange。
 func OnSelectionChange(fn func(index int)) Opt {
 	return optFn(func(n *Node) { n.Props.Set("OnSelectionChange", fn) })
 }

@@ -109,6 +109,10 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 
 **P7.1 Inspector ✅ 完成**：`App.ObserveInspector` + `InspectorSnapshot` 提供只读提交/事件与 Widget → Element → native 三层快照，覆盖 Props、DIP 布局/溢出、create/destroy/reparent/property/event/bounds 统计；type/key canUpdate 失败会标记重建与焦点风险。`inspector.Open(app)` 使用独立工具窗，刷新/关闭不触发目标 App render；`App.SetBounds` 直接动画也作为 direct bounds commit 可见。
 
+**P7.2 插件系统 ✅ 完成**：`RegisterWidget` / `PluginWidget` 提供进程内组合式插件 SDK；第三方 builder 只返回公开 Widget 子树，不接触 `internal/*` 或 LCL。注册表并发安全，支持类型化属性、DIP `Measure`、App 级 Init/Close、实例 Mount/Update/Unmount、具名可选 Renderer capability，以及重复/未知/在用注销、初始化失败和 panic 的可判定错误边界。`examples/plugin-badge/badge` 是只导入根包的第三方 Badge，未修改 native Create switch。
+
+**P7.2c 分页容器 ✅ 完成**：公开 `PageControl` + `TabPage`（不虚构不存在的 `TabControl`），支持稳定页面 Key、受控 `SelectedIndex`、`OnSelectionChange`、每页独立 native parent、inactive 页面保活和 keyed 重排零重建。布局以 `8×32 DIP` 预算扣除页签边框/表头后填充页面客户区；`examples/page-control` 的 Windows smoke 连续切换并重排页面，校验 PageControl、TabSheet parent 与 Edit HWND 不变，同时保存经像素检查的目标窗口截图。Win32/LCL 的页签实际像素仍由 widgetset 主题/DPI 决定。
+
 | 子任务 | 状态 |
 |---|---|
 | 6.1 ListView + 稳定 key（`ListView(count, itemH, builder)` + slot key=`row-i` 控件池复用；行内容不带数据 key） | ✅ `flux.ListView` + diff/layout `ListViewRow` 透明分支 |
@@ -163,6 +167,8 @@ app.Mount(func() flux.Widget {
 - `examples/form-controls` —— 常用表单控件 demo（Memo/CheckBox/ComboBox/ProgressBar/RadioButton；唯一数字 Button 供 smoke）
 - `examples/virtual-list` —— 大数据 demo（10 万行虚拟滚动列表：控件池 + 稳定 key + 滚动双向绑定 + 第二窗体多窗口）
 - `examples/inspector` —— P7.1 Inspector demo（三层树、Props/布局、事件/mutation 时间线、重建风险）
+- `examples/plugin-badge` —— P7.2 第三方 Badge 插件（公开 SDK、类型化属性、布局/生命周期、零 native switch 改动）
+- `examples/page-control` —— P7.2c 多页容器（稳定 Key、受控切页、页内输入子树与 native parent）
 
 ```powershell
 # 构建并冒烟 basic（State）
@@ -185,7 +191,31 @@ app.Mount(func() flux.Widget {
 
 # 构建并冒烟 inspector（三层树 + mutation/event + 重建风险）
 .\scripts\build.ps1 -Target inspector; .\scripts\smoke.ps1 -Target inspector
+
+# 构建并冒烟 plugin-badge（第三方组合式插件）
+.\scripts\build.ps1 -Target plugin-badge; .\scripts\smoke.ps1 -Target plugin-badge
+
+# 构建并冒烟 page-control（P7.2c 多页容器）
+.\scripts\build.ps1 -Target page-control; .\scripts\smoke.ps1 -Target page-control
 ```
+
+插件最小用法：
+
+```go
+err := flux.RegisterWidget("example.badge", flux.WidgetPlugin{
+    Build: func(ctx flux.PluginBuildContext) (flux.Widget, error) {
+        label, _ := ctx.Properties.String("label")
+        return flux.Text("[" + label + "]"), nil
+    },
+})
+if err != nil { return err }
+
+badge := flux.PluginWidget("example.badge", flux.NewPluginProperties(
+    flux.PluginString("label", "Ready"),
+), flux.Key("status"))
+```
+
+插件是已链接进进程的 Go 代码注册，不是 DLL/Go `plugin` 动态加载。App 使用插件时必须在窗口关闭前调用 `App.Close()`；不要在 build/render 或插件实例 Mount/Update/Unmount 回调内同步关闭，否则返回 `ErrAppCloseDuringRender`，应在回调返回后的外层关闭流程中调用。活跃 App 存在时 `UnregisterWidget` 返回 `ErrPluginInUse`。
 
 ## 目录结构
 
@@ -201,6 +231,7 @@ flux-vcl/
 ├── box.go                 # 布局协议：BoxConstraints/Size/Point/对齐枚举（Phase 3.1）
 ├── layout.go              # 单遍 RenderFlex 布局 + ScrollBox 滚动 + 虚拟列表布局 + NodeDiag（Phase 3/6）
 ├── inspector.go           # P7.1 只读 observer、提交/事件、三层树快照与有界历史
+├── plugin.go              # P7.2 插件注册表、公开 SDK、builder/布局/生命周期/能力
 ├── controls.go            # 控件构造器：Window/Column/Row/ScrollBox/ListView/Component/Text/Button/Input
 ├── internal/
 │   ├── widget/            # Widget 接口 + Node + Props（有序属性集，D2 diff）
@@ -221,7 +252,10 @@ flux-vcl/
 │   │   └── winres/
 │   ├── virtual-list/      # 大数据 demo（10 万行虚拟列表 + 多窗口）
 │   │   └── winres/
-│   └── inspector/         # P7.1 三层树/mutation/event/rebuild demo
+│   ├── inspector/         # P7.1 三层树/mutation/event/rebuild demo
+│   │   └── winres/
+│   ├── plugin-badge/      # P7.2 第三方 Badge（badge 子包只依赖公开 flux）
+│   └── page-control/      # P7.2c PageControl/TabPage 多页容器
 │       └── winres/
 ├── scripts/
 │   ├── build.ps1          # 构建脚手架

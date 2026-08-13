@@ -73,6 +73,67 @@ func Component(build func() Widget, opts ...Opt) Widget {
 //	ScrollBox(Column(Text("a"), Text("b")))
 func ScrollBox(child Widget) Widget { return containerArgs("ScrollBox", []any{child}) }
 
+// PageControl 分页容器（对应绑定层 TPageControl）。
+//
+// args 只能混排 TabPage 与 Opt。每个 TabPage 必须带非空、唯一的稳定 Key，
+// 以保证增删和重排时页面及其输入焦点、caret、IME 状态原地复用。SelectedIndex
+// 是受控索引：非空页面默认选中第 0 页，-1 表示不选中，越界值会被钳制。
+func PageControl(args ...any) Widget {
+	n := widget.NewNode("PageControl")
+	keys := make(map[string]struct{})
+	for _, a := range args {
+		switch v := a.(type) {
+		case Widget:
+			page := v.Create()
+			if page == nil || page.Type != "TabPage" {
+				panic("flux.PageControl: 子节点必须是 TabPage")
+			}
+			if len(page.Children) != 1 || page.Children[0] == nil {
+				panic("flux.PageControl: TabPage 必须包含唯一非空子树")
+			}
+			if page.Key == "" {
+				panic("flux.PageControl: TabPage 必须设置非空 Key")
+			}
+			if _, exists := keys[page.Key]; exists {
+				panic("flux.PageControl: TabPage Key 必须唯一")
+			}
+			keys[page.Key] = struct{}{}
+			n.Add(page)
+		case Opt:
+			v.apply(n)
+		default:
+			panic("flux.PageControl: 参数必须是 TabPage 或 Opt")
+		}
+	}
+	selected := 0
+	if _, exists := n.Props.Get("SelectedIndex"); exists {
+		selected = n.Props.Int("SelectedIndex")
+	}
+	n.Props.Set("SelectedIndex", normalizePageSelectedIndex(len(n.Children), selected))
+	return widgetNode{n}
+}
+
+// TabPage 创建 PageControl 的一个页面（对应绑定层 TTabSheet）。title 是页签标题，
+// child 是该页唯一的内容子树。opts 必须包含 Key；动态页面的 Key 应来自业务模型，
+// 不能使用数组下标或每次 render 临时生成的值。
+func TabPage(title string, child Widget, opts ...Opt) Widget {
+	if child == nil {
+		panic("flux.TabPage: child 不能为空")
+	}
+	content := child.Create()
+	if content == nil {
+		panic("flux.TabPage: child.Create() 不能返回 nil")
+	}
+	n := widget.NewNode("TabPage")
+	n.Props.Set("Text", title)
+	applyOpts(n, opts)
+	if n.Key == "" {
+		panic("flux.TabPage: 必须设置非空 Key")
+	}
+	n.Add(content)
+	return widgetNode{n}
+}
+
 // Expanded 把子控件在主轴上强制填满 flex 容器分配的剩余空间（tight，Phase 3.3）。
 // 默认 flex=1；多个 flex 子按因子比例分配 freeSpace。Expanded(child, 2) 占双份。
 func Expanded(child Widget, flex ...int) Widget { return flexNode("Expanded", child, flex) }
@@ -249,6 +310,19 @@ func normalizeSelectedIndex(items []string, index int) int {
 	}
 	if index >= len(items) {
 		return len(items) - 1
+	}
+	return index
+}
+
+func normalizePageSelectedIndex(pageCount, index int) int {
+	if pageCount == 0 {
+		return -1
+	}
+	if index < -1 {
+		return -1
+	}
+	if index >= pageCount {
+		return pageCount - 1
 	}
 	return index
 }

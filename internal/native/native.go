@@ -81,6 +81,14 @@ type Renderer struct {
 	radios         map[render.Handle]*radioState // RadioButton 的逻辑分组元数据（不依赖缺失的 LCL setter）
 	radioHosts     map[radioHostKey]*radioHost   // (原生父句柄, RadioButton 句柄) → 隔离用 TPanel
 	pendingHosts   []*radioHost                  // 已脱离逻辑父级、待普通控件释放后销毁的内部 Panel
+	pages          map[render.Handle]*pageState  // PageControl 的受控选择、页面顺序与事件状态
+}
+
+type pageState struct {
+	selected int
+	applying bool
+	onSelect func(int)
+	pages    []render.Handle
 }
 
 // radioState 保存 RadioButton 的 Flux 逻辑父级、坐标和受控属性。TRadioButton 在
@@ -162,6 +170,14 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 		c = lcl.NewRadioButton(r.form)
 	case "ProgressBar":
 		c = lcl.NewProgressBar(r.form)
+	case "PageControl":
+		page := lcl.NewPageControl(r.form)
+		page.SetAlign(types.AlNone)
+		c = page
+	case "TabPage":
+		page := lcl.NewTabSheet(r.form)
+		page.SetAlign(types.AlNone)
+		c = page
 	case "ScrollBox":
 		// 垂直滚动容器（Phase 3.6）：AutoScroll=true 让 LCL 自动按子控件包围盒
 		// 计算滚动范围、滚动条自动出现；DoubleBuffered 防闪烁（WM_SETREDRAW 批量
@@ -201,6 +217,12 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 			r.scrolls = make(map[render.Handle]*listScroll)
 		}
 		r.scrolls[h] = ls
+	}
+	if widgetType == "PageControl" {
+		if r.pages == nil {
+			r.pages = make(map[render.Handle]*pageState)
+		}
+		r.pages[h] = &pageState{selected: -1}
 	}
 	return h
 }
@@ -283,7 +305,16 @@ func (r *Renderer) Destroy(h render.Handle) {
 	if c == nil || c == r.form {
 		return // 主窗体不显式 Free
 	}
+	// TabSheet 必须先从 PageControl 的页面集合摘除，再进入延后 Free 队列；否则
+	// keyed 删除后的 SyncPages 会在原生列表中看到已逻辑删除的旧页，索引会错位。
+	if sheet, ok := c.(lcl.ITabSheet); ok {
+		// LCL widgetset 可能在 SetPageControl(nil) 时同步派发 PageControl.OnChange。
+		// 删除发生在 reconcile/render 栈内，必须把这类结构性变更视为程序化应用，
+		// 避免用户回调重入 State/render；真正的用户切页仍由 OnChange 正常派发。
+		r.setSheetPageControl(sheet, nil)
+	}
 	delete(r.controls, h)
+	delete(r.pages, h)
 	delete(r.scrolls, h) // ListView 滚动状态随控件销毁；滚动条由视口 owner 级联 Free
 	r.pendingDestroy = append(r.pendingDestroy, c)
 }
@@ -303,23 +334,45 @@ func (r *Renderer) DrainDestroy() {
 }
 
 func (r *Renderer) SetParent(child, parent render.Handle) {
-	if radio := r.radios[child]; radio != nil {
-		if parent == 0 {
-			return // 顶层 Window；RadioButton 必须有实际 native parent。
+	childControl := r.controls[child]
+	if childControl == nil {
+		panic(fmt.Sprintf("native: 未知子控件 %d", child))
+	}
+	if parent == 0 {
+		if _, isSheet := childControl.(lcl.ITabSheet); isSheet {
+			panic("native: TabPage 只能直接属于 PageControl")
 		}
+		return // 顶层（窗体）无父
+	}
+	parentControl := r.controls[parent]
+	if parentControl == nil {
+		panic(fmt.Sprintf("native: 未知父控件 %d", parent))
+	}
+	sheet, isSheet := childControl.(lcl.ITabSheet)
+	page, isPageControl := parentControl.(lcl.IPageControl)
+	if isSheet != isPageControl {
+		if isSheet {
+			panic(fmt.Sprintf("native: TabPage 父控件 %d 非 IPageControl", parent))
+		}
+		panic(fmt.Sprintf("native: PageControl %d 只能直接挂载 TabPage，子控件为 %d", parent, child))
+	}
+	if isSheet {
+		// 页面 attach 是 reconciliation 的结构性操作，不是用户选择；同样屏蔽
+		// widgetset 可能同步产生的 OnChange。跨 PageControl 移动时旧、新两侧
+		// 都由 setSheetPageControl 进入 applying 状态。
+		r.setSheetPageControl(sheet, page)
+		return
+	}
+	if radio := r.radios[child]; radio != nil {
 		radio.parent = parent
 		r.attachRadioToHost(child, radio)
 		return
 	}
-	if parent == 0 {
-		return // 顶层（窗体）无父
-	}
-	cc := r.controls[child]
-	pc, ok := r.controls[parent].(lcl.IWinControl)
+	pc, ok := parentControl.(lcl.IWinControl)
 	if !ok {
 		panic(fmt.Sprintf("native: 父控件 %d 非 IWinControl", parent))
 	}
-	cc.SetParent(pc)
+	childControl.SetParent(pc)
 }
 
 // radioHostFor 返回指定逻辑父级与 RadioButton 的内部 Panel。使用一控件一 host
@@ -424,6 +477,9 @@ func (r *Renderer) applyRadioChecked(h render.Handle, checked bool) {
 }
 
 func (r *Renderer) SetBounds(h render.Handle, b render.Rect) {
+	if _, ok := r.controls[h].(lcl.ITabSheet); ok {
+		return // TabPage 客户区由 PageControl/widgetset 通过 TCM_AdjustRect 管理。
+	}
 	if radio := r.radios[h]; radio != nil {
 		radio.bounds = b
 		if radio.host != nil {
@@ -790,6 +846,142 @@ func (r *Renderer) SetItems(h render.Handle, values []string) {
 	combo.SetItemIndex(int32(normalizeComboIndex(len(values), int(combo.ItemIndex()))))
 }
 
+func normalizePageIndex(count, index int) int {
+	if count == 0 {
+		return -1
+	}
+	if index < -1 {
+		return -1
+	}
+	if index >= count {
+		return count - 1
+	}
+	return index
+}
+
+func samePageControl(left, right lcl.IPageControl) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Instance() == right.Instance()
+}
+
+// setSheetPageControl is the only path that changes a TabSheet's PageControl.
+// LCL can synchronously notify both the old and new PageControl, so both states
+// must suppress OnChange while the structural mutation is in progress. The
+// identity guard also keeps an unchanged attachment mutation-free.
+func (r *Renderer) setSheetPageControl(sheet lcl.ITabSheet, page lcl.IPageControl) {
+	previous := sheet.PageControl()
+	if samePageControl(previous, page) {
+		return
+	}
+	r.withPageApplying(previous, func() {
+		r.withPageApplying(page, func() { sheet.SetPageControl(page) })
+	})
+}
+
+// withPageApplying 在 LCL 页面集合发生结构性变化时抑制 OnChange。不同 widgetset
+// 对 SetPageControl/SetPageIndex 是否同步通知的行为并不一致，统一在适配层兜底，
+// 让 diff 只把真正的用户选择交给 OnPageSelectionChange。
+func (r *Renderer) withPageApplying(page lcl.IPageControl, fn func()) {
+	if fn == nil {
+		return
+	}
+	if page == nil {
+		fn()
+		return
+	}
+	var state *pageState
+	for handle, candidate := range r.controls {
+		if candidate != nil && candidate.Instance() == page.Instance() {
+			state = r.pages[handle]
+			break
+		}
+	}
+	if state == nil {
+		fn()
+		return
+	}
+	previous := state.applying
+	state.applying = true
+	defer func() { state.applying = previous }()
+	fn()
+}
+
+// SyncPages 把 keyed reconciliation 得到的 TabPage 句柄顺序原地同步到 LCL，
+// 再应用缓存的受控索引。SetPageIndex 可能同步触发 Change，因此整个过程抑制回调。
+func (r *Renderer) SyncPages(parent render.Handle, pages []render.Handle) {
+	state := r.pages[parent]
+	page, ok := r.controls[parent].(lcl.IPageControl)
+	if state == nil || !ok {
+		panic(fmt.Sprintf("native: 分页父控件 %d 非 IPageControl", parent))
+	}
+	sheets := make([]lcl.ITabSheet, len(pages))
+	seen := make(map[render.Handle]struct{}, len(pages))
+	for index, handle := range pages {
+		sheet, ok := r.controls[handle].(lcl.ITabSheet)
+		if !ok {
+			panic(fmt.Sprintf("native: PageControl 子控件 %d 非 ITabSheet", handle))
+		}
+		if _, exists := seen[handle]; exists {
+			panic(fmt.Sprintf("native: PageControl 页面句柄 %d 重复", handle))
+		}
+		seen[handle] = struct{}{}
+		sheets[index] = sheet
+	}
+	r.withPageApplying(page, func() {
+		for index, sheet := range sheets {
+			r.setSheetPageControl(sheet, page)
+			if sheet.PageIndex() != int32(index) {
+				sheet.SetPageIndex(int32(index))
+			}
+		}
+		state.pages = append(state.pages[:0], pages...)
+		index := normalizePageIndex(len(state.pages), state.selected)
+		if page.ActivePageIndex() != int32(index) {
+			page.SetActivePageIndex(int32(index))
+		}
+	})
+}
+
+// SetPageSelectedIndex 缓存并应用 PageControl 的受控选择。默认 LCL Options 不会
+// 因程序化 SetActivePageIndex 派发 OnChange；applying 仍作为后端差异的防线。
+func (r *Renderer) SetPageSelectedIndex(parent render.Handle, index int) {
+	state := r.pages[parent]
+	page, ok := r.controls[parent].(lcl.IPageControl)
+	if state == nil || !ok {
+		return
+	}
+	state.selected = index
+	index = normalizePageIndex(len(state.pages), index)
+	r.withPageApplying(page, func() {
+		if page.ActivePageIndex() != int32(index) {
+			page.SetActivePageIndex(int32(index))
+		}
+	})
+}
+
+// OnPageSelectionChange 绑定 PageControl 的用户选择事件；nil 清除绑定。
+func (r *Renderer) OnPageSelectionChange(parent render.Handle, fn func(int)) {
+	state := r.pages[parent]
+	page, ok := r.controls[parent].(lcl.IPageControl)
+	if state == nil || !ok {
+		return
+	}
+	state.onSelect = fn
+	if fn == nil {
+		page.SetOnChange(nil)
+		return
+	}
+	page.SetOnChange(func(_ lcl.IObject) {
+		if state.applying || state.onSelect == nil {
+			return
+		}
+		index := int(page.ActivePageIndex())
+		render.Guard("event.OnPageSelectionChange", func() { state.onSelect(index) })
+	})
+}
+
 // SetSelectedIndex 设置 ComboBox 的受控选中索引。TComboBox 自己维护 items，
 // 因此只需以当前 Items.Count 为边界规范化。
 func (r *Renderer) SetSelectedIndex(h render.Handle, index int) {
@@ -1031,22 +1223,32 @@ func (r *Renderer) ApplyNative(h render.Handle, fn func(obj any)) {
 // 已在主线程（事件回调内）则直接执行；否则经 lcl.RunOnMainThreadSync 阻塞
 // 等待主线程消费 —— State 从任意 goroutine 触发 re-render 的规范路径。
 //
-// 关机竞态防护（Phase 3.6）：窗体进入关闭流程后（OnClose 置 closed），
-// 直接丢弃 —— 后台 goroutine 的 RunOnMainThreadSync 与窗体 teardown 竞争会在
-// Application.Run() 内触发间歇性 0xC0000005（能量层复现：goroutine+ScrollBox）。
-// 关闭后不再产生任何对 DLL 的 sync 调用，杜绝竞态窗口。
+// 关机竞态防护（Phase 3.6）：窗体进入关闭流程后（OnClose 置 closed），后台
+// goroutine 的新任务直接丢弃，避免 RunOnMainThreadSync 与窗体 teardown 竞争；
+// 已在主线程的关闭回调仍可同步执行 App.Close，完成 Element/plugin 清理且不产生
+// 新的跨线程 DLL sync 调用。
 func (r *Renderer) RunOnUI(fn func()) {
-	if r.closed.Load() {
-		return
-	}
 	if api.CurrentThreadId() == api.MainThreadId() {
 		render.Guard("RunOnUI", fn)
+		return
+	}
+	if r.closed.Load() {
 		return
 	}
 	lcl.RunOnMainThreadSync(func() { render.Guard("RunOnUI", fn) })
 }
 
-// OnClose 注册窗体关闭回调，并置 closed 门（此后 RunOnUI/invalidate 一律丢弃）。
+// PluginCapabilitySnapshot 在插件回调开始前于 UI 线程捕获 LCL 后端的只读能力快照。
+// 返回值不得含 Renderer、原生对象、句柄或其他可变后端状态。
+func (r *Renderer) PluginCapabilitySnapshot() map[string]any {
+	return map[string]any{
+		"flux.renderer.dpi":     r.DPI(),
+		"flux.renderer.backend": "lcl",
+	}
+}
+
+// OnClose 注册窗体关闭回调，并置 closed 门（此后后台 RunOnUI/invalidate 丢弃；
+// 当前主线程回调仍可执行 App.Close 清理）。
 // fn 在窗体销毁前于主线程触发 —— demo 用它停止后台轮询 goroutine，双保险。
 func (r *Renderer) OnClose(fn func()) {
 	r.closeFn = fn

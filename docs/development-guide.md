@@ -70,7 +70,8 @@
 - **错误处理**：库代码返回 error；示例的启动失败用 `fmt.Fprintln(os.Stderr, ...)` + `os.Exit(2)`（见各 `examples/*/main.go`）。
 - **Panic 边界**：构造器对非法参数 `panic` 并给出明确信息（如 `flux.Window: 参数必须是 Widget 或 Opt`）。
 - **注释语言**：代码内注释与提交、文档一致用中文；标识符用英文。
-- **高内聚文件**：根包按特性拆小文件（`state.go`/`event.go`/`event_opts.go`/`animation.go`/`theme.go`/`box.go`/`layout.go`/`controls.go`），不要堆成一个大 `flux.go`。
+- **高内聚文件**：根包按特性拆小文件（`state.go`/`event.go`/`event_opts.go`/`animation.go`/`theme.go`/`box.go`/`layout.go`/`controls.go`/`plugin.go`），不要堆成一个大 `flux.go`。
+- **插件边界**：第三方插件只能 import 公开 `flux` 包；builder 组合公开 Widget，不得 import `internal/*`、energye/lcl 或持有 Renderer/原生句柄。插件专属后端信息通过具名可选 capability 读取，缺失时必须安全退化（design §19）。
 
 ---
 
@@ -97,7 +98,7 @@
 - **文件**：`<被测文件>_test.go`（如 `state_test.go`、`inspector_test.go`），跨特性收尾测试用功能域名（如 `phase5_test.go`、`scroll_inspect_test.go`）。
 - **并发**：涉及 goroutine / 跨线程 marshalling 的测试必须用 `go test -race` 通过（如 Phase 2 的 5 goroutine 并发 Set）。
 - **覆盖**：新功能必须带测试；修 bug 先加复现测试再修。
-- **CI 红线**：`go test ./...` + `go vet ./...` 全绿；冒烟示例（basic/events/phase5/form-controls/virtual-list/inspector）由 CI 构建 + 截图验证。
+- **CI 红线**：`go test ./...` + `go vet ./...` 全绿；冒烟示例（basic/events/phase5/form-controls/virtual-list/inspector/plugin-badge）由 CI 构建 + 截图验证。
 
 ---
 

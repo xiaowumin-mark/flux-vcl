@@ -28,12 +28,33 @@ import (
 // Component（Phase 5.4）同样是透明分组：子树 = build() 结果，身份靠外部 Key
 // （D3），不产生原生控件。ListViewRow（Phase 6）是虚拟列表行：也是透明包装
 // （不建原生控件、子挂祖父），身份靠 slot key（控件池槽位，跨 render 复用）。
+// 插件透明性由框架写入的 PluginLifecycle marker 证明，不能只信任 Type 字符串。
 func transparentType(t string) bool {
 	switch t {
 	case "Column", "Row", "Expanded", "Flexible", "Component", "ListViewRow":
 		return true
 	}
 	return false
+}
+
+func transparentNode(node *widget.Node) bool {
+	if node == nil {
+		return false
+	}
+	if transparentType(node.Type) {
+		return true
+	}
+	return widget.IsPlugin(node)
+}
+
+func transparentElement(e *Element) bool {
+	if e == nil {
+		return false
+	}
+	if transparentType(e.Type) {
+		return true
+	}
+	return e.plugin
 }
 
 func copyItems(items []string) []string {
@@ -54,21 +75,15 @@ func copyItems(items []string) []string {
 // Source 回落的数据源。Path 是位置身份：结构重排后随之漂移（这正是静态树适用、
 // 身份敏感控件需用稳定 Key 的原因）。
 type Element struct {
-	Type     string
-	Key      string
-	Path     string
-	Props    *widget.Props // prevConfig：上一次成功 reconcile 的属性集
-	Handle   render.Handle // 原生句柄（透明容器 = 父容器句柄）
-	Parent   *Element
-	Children []*Element
-}
-
-// parentHandle 返回父容器的原生句柄（root 无父时为零值）。
-func (e *Element) parentHandle() render.Handle {
-	if e.Parent != nil {
-		return e.Parent.Handle
-	}
-	return 0
+	Type               string
+	Key                string
+	Path               string
+	plugin             bool          // 由 internal/widget 的不可导出标记复制，不能由 Type 前缀伪造
+	pageSelectionDirty bool          // 用户切页后，下一次 render 必须重施受控索引
+	Props              *widget.Props // prevConfig：上一次成功 reconcile 的属性集
+	Handle             render.Handle // 原生句柄（透明容器 = 父容器句柄）
+	Parent             *Element
+	Children           []*Element
 }
 
 // Reconciler 是 diff 引擎：持有 Element 树根与 Renderer，逐次 Render 对齐。
@@ -100,6 +115,14 @@ type EventDispatch struct {
 	Value    any
 }
 
+// PluginLifecycle 是根包插件运行时接入 Element 生命周期的最小接口。
+// diff 不依赖公开 flux 包，从而保持依赖方向；实现负责自身 panic/error 边界。
+type PluginLifecycle interface {
+	PluginMount(key string, props *widget.Props)
+	PluginUpdate(key string, props *widget.Props)
+	PluginUnmount(key string, props *widget.Props)
+}
+
 // New 创建空 Reconciler。
 func New(r render.Renderer) *Reconciler { return &Reconciler{r: r} }
 
@@ -111,7 +134,7 @@ func (rc *Reconciler) Root() *Element { return rc.root }
 
 // IsTransparent 报告类型是否为透明容器（无原生控件，Element 句柄继承父）。
 // 供 flux 根包的逃逸口（App.SetBounds）判断目标是否有独立原生句柄可直改。
-func IsTransparent(t string) bool { return transparentType(t) }
+func IsTransparent(e *Element) bool { return transparentElement(e) }
 
 // Lookup 按 key 在 Element 树中查找节点（深度优先，先父后子）。
 //
@@ -182,9 +205,21 @@ func (rc *Reconciler) Render(root *widget.Node) []render.Op {
 	rc.lastOps = nil
 	rc.rebuilds = nil
 	if rc.root == nil {
-		rc.root = rc.mount(root, 0, root.Type)
+		rc.root = rc.mount(root, nil, root.Type)
 	} else {
 		rc.root = rc.reconcile(rc.root, root, root.Type)
+	}
+	return append([]render.Op(nil), rc.lastOps...)
+}
+
+// Unmount 卸载当前 Element 树并返回已应用的 mutation 副本。
+// 生命周期按子后父触发，Renderer.Destroy 仍遵循其延后释放策略（D4）。
+func (rc *Reconciler) Unmount() []render.Op {
+	rc.lastOps = nil
+	rc.rebuilds = nil
+	if rc.root != nil {
+		rc.destroySubtree(rc.root)
+		rc.root = nil
 	}
 	return append([]render.Op(nil), rc.lastOps...)
 }
@@ -197,27 +232,51 @@ func (rc *Reconciler) Rebuilds() []Rebuild {
 // mount 挂载新子树：创建原生控件（透明容器除外）、应用全部属性、递归子节点。
 // path 为该节点的树路径（隐式寻址，自顶向下拼接），子节点路径 = 父路径+下标+类型。
 // 子树全部挂载完成后触发 OnMount（Phase 4.3：父钩子在子钩子之后，可访问完整子树）。
-func (rc *Reconciler) mount(node *widget.Node, parentHandle render.Handle, path string) *Element {
-	e := &Element{Type: node.Type, Key: node.Key, Path: path, Props: node.Props}
+func (rc *Reconciler) mount(node *widget.Node, parent *Element, path string) *Element {
+	e := &Element{
+		Type: node.Type, Key: node.Key, Path: path, plugin: widget.IsPlugin(node),
+		Props: node.Props, Parent: parent,
+	}
+	parentHandle := render.Handle(0)
+	if parent != nil {
+		parentHandle = parent.Handle
+	}
+	earlyPageAttach := node.Type == "TabPage" && parent != nil && parent.Type == "PageControl"
 
-	if transparentType(node.Type) {
+	if transparentNode(node) {
 		e.Handle = parentHandle // 透明容器：无原生控件，继承父句柄
 	} else {
 		e.Handle = rc.r.Create(node.Type)
 		rc.record(e, render.Op{Type: render.OpCreate, Handle: e.Handle, Key: node.Type})
+		// TTabSheet 必须先归属 TPageControl，再把页内控件挂到它的客户区。
+		// 其他原生控件继续沿用原有的“子树完成后挂父级”顺序。
+		if earlyPageAttach {
+			rc.r.SetParent(e.Handle, parentHandle)
+			rc.record(e, render.Op{
+				Type: render.OpAppendChild, Handle: e.Handle,
+				Parent: parentHandle, ParentPath: parent.Path,
+			})
+		}
 		rc.applyProps(e, node.Props)
 	}
 
 	for i, c := range node.Children {
-		ce := rc.mount(c, e.Handle, path+"/"+strconv.Itoa(i)+"/"+c.Type)
-		ce.Parent = e
+		ce := rc.mount(c, e, path+"/"+strconv.Itoa(i)+"/"+c.Type)
 		e.Children = append(e.Children, ce)
-		if !transparentType(c.Type) {
-			rc.r.SetParent(ce.Handle, e.Handle)
-			rc.record(ce, render.Op{Type: render.OpAppendChild, Handle: ce.Handle, Parent: e.Handle, ParentPath: e.Path})
-		}
 	}
+	if e.Type == "PageControl" {
+		rc.syncPages(e)
+		rc.applyPageSelectedIndex(e, node.Props)
+	}
+	rc.firePluginLifecycle(widget.IsPlugin(node), node.Key, node.Props, "mount")
 	rc.fireLifecycle(node.Props, "OnMount")
+	if !transparentNode(node) && parent != nil && !earlyPageAttach {
+		rc.r.SetParent(e.Handle, parentHandle)
+		rc.record(e, render.Op{
+			Type: render.OpAppendChild, Handle: e.Handle,
+			Parent: parentHandle, ParentPath: parent.Path,
+		})
+	}
 	return e
 }
 
@@ -246,22 +305,32 @@ func (rc *Reconciler) reconcile(old *Element, node *widget.Node, path string) *E
 				break
 			}
 		}
-		return rc.mount(node, old.parentHandle(), path)
+		return rc.mount(node, old.Parent, path)
 	}
 
 	old.Path = path // 位置变更（重排/跨容器移动）时更新；事件 Source 回落据此取最新路径
-	changed := rc.patchProps(old, node)
-	rc.reconcileChildren(old, node)
+	changed := false
+	if old.Type == "PageControl" {
+		// 页面顺序和数量必须先稳定，再把受控索引应用到最终页面列表。
+		if rc.reconcileChildren(old, node) {
+			rc.syncPages(old)
+		}
+		changed = rc.patchProps(old, node)
+	} else {
+		changed = rc.patchProps(old, node)
+		rc.reconcileChildren(old, node)
+	}
 	if changed {
+		rc.firePluginLifecycle(widget.IsPlugin(node), node.Key, node.Props, "update")
 		rc.fireLifecycle(node.Props, "OnUpdate")
 	}
 	old.Props = node.Props
 	return old
 }
 
-// canUpdate 判定两个节点是否同一 identity（D1）：类型相同 && key 相同。
+// canUpdate 判定两个节点是否同一 identity（D1）：类型、key 与可信插件标记均相同。
 func canUpdate(old *Element, node *widget.Node) bool {
-	return old.Type == node.Type && old.Key == node.Key
+	return old.Type == node.Type && old.Key == node.Key && old.plugin == widget.IsPlugin(node)
 }
 
 // patchProps 对变化属性逐一应用（D2 属性级 patch）。完全相等直接跳过。
@@ -280,7 +349,12 @@ func orderedProp(key string) bool {
 }
 
 func (rc *Reconciler) patchProps(e *Element, node *widget.Node) bool {
+	selectionDirty := e.Type == "PageControl" && e.pageSelectionDirty
 	if e.Props.Equal(node.Props) {
+		if selectionDirty {
+			rc.applyPageSelectedIndex(e, node.Props)
+			e.pageSelectionDirty = false
+		}
 		return false
 	}
 	changed := false
@@ -311,12 +385,13 @@ func (rc *Reconciler) patchProps(e *Element, node *widget.Node) bool {
 		v, _ := node.Props.Get(key)
 		// "_bind" 是 flux 隐藏的绑定依赖键（state.go，diff 不 import flux 防循环）。
 		// 同 State 的 Binding 指针判等、不在 Diff 内；这里兜底排除。
-		if !widget.IsFunc(v) && key != "_bind" && key != "OnMount" && key != "OnUpdate" && key != "OnUnmount" {
+		if !widget.IsFunc(v) && key != "_bind" && key != "_pluginRuntime" && key != "OnMount" && key != "OnUpdate" && key != "OnUnmount" {
 			changed = true
 		}
 		rc.applyProp(e, key, v)
 	}
 	// 受控组合属性按固定顺序应用，不能依赖 Props 的 map 遍历顺序。
+	selectionPatched := false
 	for _, key := range orderedProps {
 		changedKey := false
 		for _, diffKey := range diffKeys {
@@ -331,6 +406,15 @@ func (rc *Reconciler) patchProps(e *Element, node *widget.Node) bool {
 		v, _ := node.Props.Get(key)
 		changed = true
 		rc.applyProp(e, key, v)
+		if e.Type == "PageControl" && key == "SelectedIndex" {
+			selectionPatched = true
+		}
+	}
+	if selectionDirty {
+		if !selectionPatched {
+			rc.applyPageSelectedIndex(e, node.Props)
+		}
+		e.pageSelectionDirty = false
 	}
 	return changed
 }
@@ -346,10 +430,27 @@ func (rc *Reconciler) applyProps(e *Element, props *widget.Props) {
 		rc.applyProp(e, key, v)
 	}
 	for _, key := range orderedProps {
+		if e.Type == "PageControl" && key == "SelectedIndex" {
+			continue
+		}
 		if v, ok := props.Get(key); ok {
 			rc.applyProp(e, key, v)
 		}
 	}
+}
+
+// applyPageSelectedIndex 在页面全部挂载并完成顺序同步后应用最终受控索引。
+// 手写 Node 未声明 SelectedIndex 时，非空页面默认第 0 页；后端会把空页面规范为 -1。
+func (rc *Reconciler) applyPageSelectedIndex(e *Element, props *widget.Props) {
+	index := 0
+	if value, ok := props.Get("SelectedIndex"); ok {
+		configured, valid := value.(int)
+		if !valid {
+			return
+		}
+		index = configured
+	}
+	rc.applyProp(e, "SelectedIndex", index)
 }
 
 // applyRemoved 处理被移除的属性（新树不再声明）→ 回落到挂载默认值（D2 对称）。
@@ -362,7 +463,7 @@ func (rc *Reconciler) applyProps(e *Element, props *widget.Props) {
 // 返回是否构成真实配置变化（OnUpdate 触发判定）：事件/框架键的移除不算
 // （与 patchProps 的 func 排除一致）。
 func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
-	if transparentType(e.Type) {
+	if transparentElement(e) {
 		return false
 	}
 	v, _ := e.Props.Get(key)
@@ -389,7 +490,11 @@ func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
 		rc.applyProp(e, key, []string{}) // ComboBox 挂载默认：空选项
 		return true
 	case "SelectedIndex":
-		rc.applyProp(e, key, -1) // ComboBox 挂载默认：未选择
+		if e.Type == "PageControl" {
+			rc.applyProp(e, key, 0) // PageControl 默认：首个页面；空页面由后端规范为 -1
+		} else {
+			rc.applyProp(e, key, -1) // ComboBox 默认：未选择
+		}
 		return true
 	case "Minimum":
 		rc.applyProp(e, key, 0) // ProgressBar 挂载默认：最小值 0
@@ -417,7 +522,12 @@ func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
 				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
 			}
 		case func(int):
-			if s, ok := rc.r.(render.Selectable); ok {
+			if e.Type == "PageControl" {
+				if p, ok := rc.r.(render.PageController); ok {
+					p.OnPageSelectionChange(e.Handle, nil)
+					rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+				}
+			} else if s, ok := rc.r.(render.Selectable); ok {
 				s.OnSelectionChange(e.Handle, nil)
 				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
 			}
@@ -435,7 +545,7 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 	// （如整个 Window）上：Visible(false) 会藏掉整窗、Color 会改父控件底色、事件
 	// 会注册到父控件。统一守卫：透明容器不应用任何原生属性（Bounds 分支原有的
 	// 透明判断因此冗余，保留作防御纵深）。
-	if transparentType(e.Type) {
+	if transparentElement(e) {
 		return
 	}
 	switch key {
@@ -471,7 +581,12 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 		}
 	case "SelectedIndex":
 		if index, ok := v.(int); ok {
-			if s, ok := rc.r.(render.Selectable); ok {
+			if e.Type == "PageControl" {
+				if p, ok := rc.r.(render.PageController); ok {
+					p.SetPageSelectedIndex(e.Handle, index)
+					rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "SelectedIndex", Value: index})
+				}
+			} else if s, ok := rc.r.(render.Selectable); ok {
 				s.SetSelectedIndex(e.Handle, index)
 				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "SelectedIndex", Value: index})
 			}
@@ -507,7 +622,7 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 	case "Bounds":
 		// Window 是窗体本身：Bounds 只用于布局定位/诊断，应用到原生控件会把窗体外框收缩。
 		// 透明容器已由 applyProp 顶部统一守卫截断（此判断冗余，防御纵深）。
-		if transparentType(e.Type) || e.Type == "Window" {
+		if transparentElement(e) || e.Type == "Window" || e.Type == "TabPage" {
 			break
 		}
 		if r, ok := v.(render.Rect); ok {
@@ -534,7 +649,7 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 			rc.r.ApplyNative(e.Handle, fn)
 			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Native", Value: "fn"})
 		}
-	case "ItemCount", "ItemHeight", "Builder":
+	case "ItemCount", "ItemHeight", "Builder", "PluginProperties", "_pluginRuntime":
 		// ListView 虚拟列表配置（Phase 6）：布局引擎据此重建可见区 slot 子树，
 		// 无对应原生属性 —— 静默忽略（Builder 是 func，漏过 default 会误走 SetEvent
 		// 触发 native panic）。
@@ -586,17 +701,26 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 		}
 	case "OnSelectionChange":
 		if fn, ok := v.(func(int)); ok {
-			if s, ok := rc.r.(render.Selectable); ok {
-				s.OnSelectionChange(e.Handle, func(index int) {
-					render.Guard("event.OnSelectionChange", func() {
-						if rc.eventSink != nil {
-							rc.eventSink(EventDispatch{
-								Name: key, Path: e.Path, Source: eventSource(e), Value: index,
-							})
-						}
-						fn(index)
-					})
+			wrap := func(index int) {
+				render.Guard("event.OnSelectionChange", func() {
+					if e.Type == "PageControl" {
+						e.pageSelectionDirty = true
+					}
+					if rc.eventSink != nil {
+						rc.eventSink(EventDispatch{
+							Name: key, Path: e.Path, Source: eventSource(e), Value: index,
+						})
+					}
+					fn(index)
 				})
+			}
+			if e.Type == "PageControl" {
+				if p, ok := rc.r.(render.PageController); ok {
+					p.OnPageSelectionChange(e.Handle, wrap)
+					rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
+				}
+			} else if s, ok := rc.r.(render.Selectable); ok {
+				s.OnSelectionChange(e.Handle, wrap)
 				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
 			}
 		}
@@ -665,6 +789,36 @@ func (rc *Reconciler) fireLifecycle(props *widget.Props, name string) {
 	}
 }
 
+func (rc *Reconciler) firePluginLifecycle(isPlugin bool, key string, props *widget.Props, stage string) {
+	if !isPlugin {
+		return
+	}
+	lifecycle, ok := pluginLifecycle(props)
+	if !ok {
+		return
+	}
+	switch stage {
+	case "mount":
+		lifecycle.PluginMount(key, props)
+	case "update":
+		lifecycle.PluginUpdate(key, props)
+	case "unmount":
+		lifecycle.PluginUnmount(key, props)
+	}
+}
+
+func pluginLifecycle(props *widget.Props) (PluginLifecycle, bool) {
+	if props == nil {
+		return nil, false
+	}
+	value, ok := props.Get("_pluginRuntime")
+	if !ok {
+		return nil, false
+	}
+	lifecycle, ok := value.(PluginLifecycle)
+	return lifecycle, ok && lifecycle != nil
+}
+
 // reconcileChildren 对齐子节点列表（D3 稳定 key / 无 key 按位置）。
 //
 // 匹配策略：带 key 的子节点按 key 精确匹配旧 element（复用，重排不重建）；
@@ -676,8 +830,9 @@ func (rc *Reconciler) fireLifecycle(props *widget.Props, name string) {
 //
 // 匹配者 reconcile（原地 patch），未匹配者挂载；未复用的旧 element 整棵销毁。
 // 透明容器子节点直接挂到祖父句柄。
-func (rc *Reconciler) reconcileChildren(oldP *Element, newP *widget.Node) {
+func (rc *Reconciler) reconcileChildren(oldP *Element, newP *widget.Node) bool {
 	oldKids := oldP.Children
+	oldOrder := childHandles(oldKids)
 
 	oldByKey := make(map[string]*Element) // D3：带 key 的旧子节点索引
 	var nonKeyedOlds []*Element           // 无 key 旧子节点（按顺序，位置匹配池）
@@ -734,12 +889,12 @@ func (rc *Reconciler) reconcileChildren(oldP *Element, newP *widget.Node) {
 					})
 				}
 			}
-			ne = rc.mount(nc, oldP.Handle, childPath)
+			ne = rc.mount(nc, oldP, childPath)
 		}
 
 		// 仅当父关系实际变化（新建或跨容器移动）才发挂载 op；
 		// 原地复用（D7c：相同树零 mutation）与列表内重排（D7b：不迁移焦点）不发。
-		if !transparentType(nc.Type) && ne.Parent != oldP {
+		if !transparentNode(nc) && ne.Parent != oldP {
 			rc.r.SetParent(ne.Handle, oldP.Handle)
 			rc.record(ne, render.Op{Type: render.OpAppendChild, Handle: ne.Handle, Parent: oldP.Handle, ParentPath: oldP.Path})
 		}
@@ -753,6 +908,37 @@ func (rc *Reconciler) reconcileChildren(oldP *Element, newP *widget.Node) {
 		}
 	}
 	oldP.Children = newElems
+	return !equalHandles(oldOrder, childHandles(newElems))
+}
+
+func childHandles(children []*Element) []render.Handle {
+	handles := make([]render.Handle, len(children))
+	for i, child := range children {
+		handles[i] = child.Handle
+	}
+	return handles
+}
+
+func equalHandles(a, b []render.Handle) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (rc *Reconciler) syncPages(parent *Element) {
+	pager, ok := rc.r.(render.PageController)
+	if !ok {
+		return
+	}
+	pages := childHandles(parent.Children)
+	pager.SyncPages(parent.Handle, pages)
+	rc.record(parent, render.Op{Type: render.OpSetProperty, Handle: parent.Handle, Key: "Pages", Value: pages})
 }
 
 // destroySubtree 销毁整棵子树（后序：先子后父）。透明容器不销毁句柄（无原生控件），
@@ -763,7 +949,8 @@ func (rc *Reconciler) destroySubtree(e *Element) {
 		rc.destroySubtree(c)
 	}
 	rc.fireLifecycle(e.Props, "OnUnmount")
-	if !transparentType(e.Type) {
+	rc.firePluginLifecycle(e.plugin, e.Key, e.Props, "unmount")
+	if !transparentElement(e) {
 		rc.r.Destroy(e.Handle)
 		rc.record(e, render.Op{Type: render.OpDestroy, Handle: e.Handle})
 	}

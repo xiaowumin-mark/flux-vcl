@@ -47,6 +47,17 @@ func TestPropsEqual(t *testing.T) {
 	}
 }
 
+func TestPluginMarkerCannotBeForgedByType(t *testing.T) {
+	node := NewNode("Plugin:forged")
+	if IsPlugin(node) {
+		t.Fatal("Plugin: Type 前缀不得自动获得框架插件标记")
+	}
+	MarkPlugin(node)
+	if !IsPlugin(node) {
+		t.Fatal("MarkPlugin 后应识别为已解析插件节点")
+	}
+}
+
 // TestValuesEqualFunc 函数值永远不相等（事件每次重新绑定）。
 func TestValuesEqualFunc(t *testing.T) {
 	f1 := func() {}

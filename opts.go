@@ -82,8 +82,8 @@ func Items(items []string) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Items", values) })
 }
 
-// SelectedIndex 设置 ComboBox 的受控选中索引。-1 表示未选择；最终值会按 Items
-// 规范化到 [-1, len(Items)-1]（空 Items 恒为 -1）。
+// SelectedIndex 设置 ComboBox 或 PageControl 的受控选中索引。-1 表示未选择；
+// ComboBox 按 Items、PageControl 按页面数规范化到合法范围，空集合恒为 -1。
 func SelectedIndex(index int) Opt {
 	return optFn(func(n *Node) { n.Props.Set("SelectedIndex", index) })
 }

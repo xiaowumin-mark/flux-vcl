@@ -706,18 +706,262 @@ Inspector 膨胀，快照遍历也不会在后台线程逐项触碰原生控件�
 
 # 19. 插件系统
 
-允许第三方组件：
+FluxVCL 的插件是**编译并链接进同一 Go 进程的组合式 Widget 扩展**。插件通过公开
+`flux` API 注册 builder，builder 只返回公开 `Widget` 子树；插件节点自身是透明
+Element，不创建原生句柄，也不会进入 `internal/native.Renderer.Create` 的内建控件
+switch。这里的“注册/注销”只管理进程内类型目录和 App 使用计数，**不是** DLL、Go
+`plugin`、脚本或热加载/卸载机制。
+
+## 19.1 公开 API 与最小示例
 
 ```go
-RegisterWidget(
-    "Chart",
-    ChartWidget,
-)
+const BadgeType = "example.badge"
+
+err := flux.RegisterWidget(BadgeType, flux.WidgetPlugin{
+    Build: func(ctx flux.PluginBuildContext) (flux.Widget, error) {
+        label, ok := ctx.Properties.String("label")
+        if !ok {
+            return nil, errors.New("缺少 label")
+        }
+        return flux.Text("[" + label + "]"), nil
+    },
+})
+
+badge := flux.PluginWidget(BadgeType, flux.NewPluginProperties(
+    flux.PluginString("label", "Ready"),
+), flux.Key("status-badge"))
 ```
+
+公开入口如下：
+
+- `RegisterWidget(name string, descriptor WidgetPlugin) error`：向进程全局注册表注册
+  类型。`Build` 必填；注册成功后 descriptor 按值保存。
+- `UnregisterWidget(name string) error`：逻辑注销未被 App 使用的类型，不卸载代码。
+- `RegisteredWidgets() []string`：返回当前名称的字典序副本，调用方不能修改注册表。
+- `PluginWidget(name string, properties PluginProperties, args ...any) Widget`：声明插件
+  节点；`args` 只接受 `Widget` 子节点与通用 `Opt`，其他类型 panic。插件解析和 builder
+  展开发生在布局/diff/native commit 之前。
+- `WidgetPlugin`：包含必填 `Build`，以及可选 `Measure`、App 级 `Init/Close` 和
+  实例级 `OnMount/OnUpdate/OnUnmount`。
+
+## 19.2 类型名与类型化 properties
+
+插件类型名区分大小写、进程内唯一，长度不超过 128，格式为
+`^[A-Za-z][A-Za-z0-9_.-]*$`。内建类型名（例如 `Button`、`Column`）和框架前缀
+`Plugin:` 保留；推荐第三方使用反向域名或项目命名空间（如 `com.example.chart`），避免
+依赖注册顺序争抢短名称。非法名称、保留名称、缺少 `Build` 和重复注册分别返回可由
+`errors.Is` 判定的错误。
+
+属性不使用 `map[string]any` 逃逸口，而由 `PluginString`、`PluginInt`、
+`PluginBool`、`PluginFloat` 构造不可变 `PluginProperty`，再交给
+`NewPluginProperties`。属性名采用与类型名相同的格式和 128 字符上限。重名属性最后一个
+值生效，`Keys()` 仍保留名称首次出现的稳定顺序；`Keys()`、传入/传出上下文和节点保存
+均作防御性复制。插件用 `String/Int/Bool/Float(name)` 读取，缺失或类型不匹配时
+`ok=false`。属性构造器收到非法名称，或调用方绕过构造器提交无效零值属性时 panic，
+用于尽早暴露编程错误。
+
+当前只承诺上述四种标量属性。复杂数据应由插件在其公开包中定义稳定、可比较的标量编码
+或拆分字段，不应把可变 slice/map/原生对象藏进框架 Props。
+
+## 19.3 builder 与组合语义
+
+`Build(PluginBuildContext) (Widget, error)` 收到只读上下文：`Type`、节点 `Key`、
+防御性复制的 `Properties`、调用方声明的 `Children` 副本，以及受限的
+`PluginContext`。builder 必须返回一个非 nil 的公开 `Widget` 根；调用方子节点是否以及
+如何组合进结果，由插件自行决定。框架把返回值递归展开为唯一子树，因此一个插件可以组合
+另一个已注册插件，但递归展开深度超过 64 会返回 `ErrPluginCycle`。插件不得构造或依赖
+`internal/widget.Node`、`internal/diff.Element`、Renderer、LCL/VCL 对象或原生句柄。
+
+展开后的插件节点保留为透明 Element，下面恰有 builder 的唯一根子树。这让 Inspector、
+Key 和实例生命周期仍能观察插件边界，同时原生后端只看见已有的内建 Widget。插件更新时
+再次执行 builder，后续复用与 patch 完全交给普通 reconciliation。透明身份由框架在注册
+解析成功后写入 `internal/widget.Node` 的不可导出 marker，diff 不信任公开 `Node.Type` 的
+`Plugin:` 字符串前缀；手工伪造类型不会绕过注册/展开边界。
+
+## 19.4 DIP Measure 与布局
+
+插件默认尺寸等于 builder 子树在当前 `BoxConstraints` 下的布局尺寸，偏移为 `(0,0)`。
+可选 `Measure(PluginMeasureContext) (PluginLayout, error)` 在子树完成布局后调用，输入
+包括 `Constraints`、`ChildSize`、类型、Key、properties 和 capability 上下文；全部尺寸
+与坐标均为 DIP。返回的 `PluginLayout.Size` 决定透明插件框，`ChildOffset` 将 builder
+子树相对插件框左上角平移。
+
+布局顺序固定为：先测 builder 子树 → 调用 `Measure` → 应用插件节点的通用
+`Width/Height` Opt（正值覆盖 Measure 对应轴）→ 用当前 constraints 再次
+`Constrain` → 应用 `ChildOffset`。Measure 不创建第二棵子树，也不能访问原生测量 API；
+插件必须接受最终尺寸被约束钳制。当前不会自动裁剪、居中或校正越界/负偏移，插件负责让
+返回尺寸与偏移自洽。
+
+## 19.5 App 与实例生命周期
+
+生命周期分两层：
+
+- **App 级**：某 App 第一次在准备阶段遇到某类型时，取得注册 descriptor 并调用一次
+  `Init(PluginContext)`；同一 App 后续实例复用该 runtime。`App.Close()` 先卸载整棵
+  Element 树，再按成功 Init/首次使用的逆序调用各插件 `Close`，最后释放注册占用。
+  `Close` 幂等且并发安全，插件 Close 失败或 panic 不阻止其余插件关闭，错误最终聚合。
+- **实例级**：插件透明 Element 首次提交后调用 `OnMount`，可复用更新时调用
+  `OnUpdate`，卸载时调用 `OnUnmount`；上下文包含 Type、Key、properties 和 capability。
+  实例钩子没有返回资源句柄，状态与资源由插件按 App/Key 自行管理；Key 必须由调用方按
+  D3 提供稳定业务身份。
+
+若 `Init` 失败，该 runtime 不进入 App，也不会调用对应 `Close`。若同次准备中新取得的
+插件在后续 Build/Measure 失败，框架只对本次新增 runtime 按逆序 Close 并释放占用；此前
+成功 render 已在 App 中使用的插件继续存活。应用必须在 Renderer 消息循环结束前调用
+`App.Close()`，保证 unmount/Close 仍可经 Renderer 在 UI 线程执行；关闭后 Mount/Render 返回
+`ErrAppClosed`。`App.Close()` 不得在 build/render 栈或用户/插件实例的
+Mount/Update/Unmount 生命周期回调内同步调用；提交尚未结束时调用会返回
+`ErrAppCloseDuringRender`，App 保持可用，调用方应在回调返回后再关闭。
+
+## 19.6 可选 Renderer capability
+
+`PluginContext` 不公开 Renderer，只能通过类型安全令牌
+`LookupCapability[T](ctx, capability)` 读取具名只读能力。框架预定义：
+
+- `RendererDPI Capability[int]`：当前 DPI；默认后端/Mock 通常为 96 或实际 DPI。
+- `RendererBackend Capability[string]`：后端标识；当前 LCL 后端为 `"lcl"`，Mock
+  为 `"mock"`。
+
+第三方可用 `NewCapability[T]("example.chart.export")` 声明点分命名令牌；名称长度不
+超过 160，必须含命名空间分隔。后端仅通过可选的窄 provider 提供值，基础 Renderer
+接口不膨胀。能力缺失或运行时类型不匹配统一返回 `ok=false`，插件必须提供安全退化路径，
+不得把 capability 存在性当作跨后端保证。capability 不得返回可变原生对象或允许绕过
+声明式提交的句柄。
+
+框架在每个插件回调开始前经后端可选的 `PluginCapabilitySnapshot() map[string]any`
+一次捕获能力，并复制为该 `PluginContext` 私有的不可变快照。`LookupCapability` 只读该
+快照，不会再次调用 Renderer；因此插件可保存上下文并跨 goroutine 读取，App 关闭后也只会
+得到历史标量值，不会触碰已销毁的后端。DPI 等动态能力在下一次插件回调创建的新上下文中
+刷新，旧上下文保持原值。provider 返回值只接受 nil、bool、string、整数与浮点标量；map、
+slice、指针、函数、Renderer、原生对象、句柄或其他可变后端状态会按能力缺失丢弃。框架再
+对顶层 map 作复制，因此公开上下文没有可变后端引用。
+
+## 19.7 错误、事务与并发边界
+
+公开哨兵错误包括 `ErrPluginInvalid`、`ErrPluginReserved`、
+`ErrPluginAlreadyRegistered`、`ErrPluginNotRegistered`、`ErrPluginInUse`、
+`ErrPluginPanic`、`ErrPluginCycle`、`ErrAppClosed` 和 `ErrAppCloseDuringRender`。插件错误包装为
+`*PluginError{Name, Stage, Err}`；Stage 为 `register`、`unregister`、`resolve`、`init`、
+`build`、`measure`、`mount`、`update`、`unmount` 或 `close`，可同时用 `errors.As`
+取得上下文、用 `errors.Is` 判断原因。
+所有插件回调 panic 都在边界 recover 并包装为 `ErrPluginPanic`。
+
+事务边界按阶段区分：
+
+- resolve、Init、Build、Measure 属于 **prepare**。任何失败都发生在 diff/native commit
+  前，本次不产生半提交 mutation，并回滚本次新取得的插件 runtime。
+- Mount/Update/Unmount 属于 **commit/卸载** 生命周期。此时原生 mutation 可能已经发生，
+  错误不能回滚已提交 UI；框架捕获后写入 `App.LastError()`，同步 Render 也会返回本次
+  观察到的错误。
+- App Close 收集卸载阶段的 `LastError` 并聚合全部插件 Close 错误；无论错误或 panic 都
+  继续释放注册占用。成功的新 render 会清除旧的 `LastError`。
+
+进程注册表由读写锁保护；并发同名注册至多一个成功，查询返回副本。成功 Init 的每个 App
+增加该类型使用计数，存在活跃 App 时 `UnregisterWidget` 返回 `ErrPluginInUse`。App 内
+render 由 `renderMu` 串行化；直接 `Mount/Render` 不自动 marshal，调用方必须遵守 App 的
+UI 线程纪律，State 失效路径由 `RunOnUI` marshal，`App.Close` 也经 `RunOnUI` 执行。
+native 后端的 `RunOnUI` 在当前线程已经是 UI 主线程时内联执行，因此窗体 `OnClose` 置
+closed 门后，当前主线程回调仍可完成 `App.Close`；非主线程在 closed 后直接丢弃任务，不再
+调用 `RunOnMainThreadSync`。这个关闭期例外不放宽上述 render/实例生命周期的重入限制。
+插件回调自身的共享状态、多个 App 间状态及其启动的 goroutine 仍由插件负责同步。注册表线程
+安全不意味着任意线程可以触碰 UI。
+
+## 19.8 D1-D7 对照
+
+- **D1 三棵树/canUpdate**：插件声明节点、透明 Element 和 builder 原生子树边界明确；
+  Type/Key 不变时复用，改变时只替换目标节点。
+- **D2 属性 patch**：插件 properties 驱动 builder 产生普通 Widget，diff 只提交实际变化；
+  插件无直接 Renderer 写入口。
+- **D3 稳定 Key**：插件实例身份沿用 `flux.Key`；列表/重排场景必须使用模型 key，不能用
+  index 或每次 render 生成的随机值。
+- **D4 UI 线程**：插件回调跟随 App render/close 的执行边界；直接 Mount/Render 必须在
+  UI 线程调用，State 失效和 Close 使用 `RunOnUI`，后台工作经既有 `Async`/State
+  marshalling 回到 UI。
+- **D5 自定义布局**：Measure 与偏移只用 DIP constraints/Size/Point，不暴露原生 Align
+  或物理像素几何。
+- **D6 绑定隔离**：第三方仅 import 根包公开 API；Renderer 能力走具名只读窄接口，不能
+  import `internal/*` 或 LCL/VCL。
+- **D7 测试不变量**：插件属性变化应只 patch builder 子树（D7a）；稳定 Key 重排不得迁移
+  实例/焦点（D7b）；同一插件树再次 render 必须零 native mutation（D7c，实例 Update
+  回调本身不属于 native mutation）。
+
+## 19.9 兼容政策与已知限制
+
+`RegisterWidget`、`PluginWidget`、`WidgetPlugin` 各上下文、类型化 properties、
+capability 令牌和上述错误语义属于公开插件 SDK。`v0.1.x` 补丁版本不删除/改名公开符号，
+不改变既有回调顺序、名称规则、DIP/事务语义或哨兵错误判定；只允许 bug 修复和保持源码兼容
+的增补。预 1.0 的 minor 版本仍可能 breaking，但必须在 changelog 标注并提供迁移说明；
+1.0 后遵循 SemVer。插件必须用具名字段构造 `WidgetPlugin`，不要依赖公开 struct 的字段顺序，
+以便后续增加可选回调或上下文字段。
+自定义 capability 应使用所有者命名空间；后端是否实现它不构成 SDK 稳定承诺。`internal/*`、
+`Plugin:` 编码、`_pluginRuntime` 等内部 Props 以及 LCL 对象均不属于兼容面。
+
+当前限制：仅支持进程内静态链接和逻辑注销；没有插件发现、依赖/版本解析、沙箱、权限、
+签名、动态卸载、跨进程隔离或热替换；注册表为进程全局且不能按 App 覆盖同名类型；properties
+仅有四种标量；builder 每次 render 可重执行，插件应保持纯且快速；Measure 为单一 builder
+子树的后置测量，不能创建多原生根或原生自绘控件；实例回调错误不提供 UI 回滚。需要真正的
+新原生控件、绘制 surface 或后端 setter 时，应先设计新的公开窄能力或内建控件，不能借插件
+绕过 D5/D6。
 
 ---
 
-# 20. 项目结构
+# 20. 分页容器（P7.2c）
+
+## 20.1 公开 API 与受控选择
+
+LCL v1.0.3 提供 `TPageControl`/`TTabSheet`，没有独立的 `TTabControl`。
+FluxVCL 因此只公开一个 `PageControl` 抽象，不提供语义重复的 `TabControl` 别名：
+
+```go
+PageControl(
+    TabPage("概览", Text("内容"), Key("overview")),
+    TabPage("编辑", Input(Key("editor")), Key("editor")),
+    SelectedIndex(1),
+    OnSelectionChange(func(index int) { /* 写回 State */ }),
+)
+```
+
+`TabPage(title, child, opts...)` 要求恰好一个非空 `child` 和非空稳定 `Key`；同一
+`PageControl` 内 Key 必须唯一。`PageControl` 的子节点只能是 `TabPage`。页面列表为空时
+`SelectedIndex=-1`；非空列表默认索引为 `0`；声明的索引统一钳制到 `[-1, pageCount-1]`。
+移除 `SelectedIndex` 回落到同一默认值（空列表 `-1`，否则 `0`）。选择是受控状态：原生
+页签点击触发 `OnSelectionChange`，程序化 patch 不触发该回调，避免 State 回写形成事件环。
+用户切页会把选择标记为待校正；即使下一次 render 仍声明同一索引，框架也会重施该值，
+因此回调可以通过不接受新索引来维持受控选择，而不会因属性值“未变化”漏掉 patch。
+公开构造器先做快速参数检查；App 在插件 builder 全部展开后再次校验整棵树并规范化索引，
+因此手写 Node 或插件不能绕过直系子节点、Key、唯一子树、标题和索引类型约束。校验失败
+发生在 diff/native commit 前，本次新增的插件 runtime 同步回滚，不产生半提交 mutation。
+
+## 20.2 三棵树与 native parent
+
+每个 `TabPage` 都是独立的真实原生 parent（LCL `TTabSheet`），页内普通控件直接挂到
+对应 `TabSheet`；`Column`/`Row`/`Component` 和插件等透明节点只继承该页面句柄，不能把
+子控件提升到 `PageControl` 或 Window。inactive 页面只切换可见页，不设 `TabVisible=false`
+也不销毁 HWND，因此 Element、输入焦点、caret 和 IME 状态持续保留。
+
+页面按 Key reconciliation。重排调用原生页索引同步，页面及其子树句柄原地复用；插入/删除
+只影响目标页面。`TabPage` 只能直接挂到 `PageControl`，普通控件不能绕过页面直接挂到
+`PageControl`；Mock 与 LCL 后端都执行同一防御。同步期间以可嵌套 guard 屏蔽旧、新容器的
+原生 `OnChange`，只有用户选择才向 Flux 回调。
+
+分页操作通过 `render.PageController` 可选窄接口实现，基础 `render.Renderer` 不增加页面
+专属方法；Mock 和 LCL 后端均实现该能力，缺失能力时 diff 安全退化。
+
+## 20.3 布局与已知限制
+
+`PageControl` 参与普通 DIP constraints，默认尺寸为 `320x220 DIP`，显式 `Width/Height`
+优先。布局使用固定的水平总 inset `8 DIP` 与垂直表头/边框预算 `32 DIP`，所有页面内容
+填充剩余客户区；页面子树坐标相对于页面客户区 `(0,0)`。极小约束下客户区尺寸钳为零，
+不产生负 bounds。`TabPage` 自身
+几何由 LCL/widgetset 的 `TCM_AdjustRect` 管理，Flux 不再以普通 `SetBounds` 覆盖它；不同
+主题/DPI 下表头实际像素可能与固定 DIP 预算有细微差异，这是当前 v1.0.3 后端限制。
+
+连续切页、resize、DPI 变化和 keyed 重排均不应创建/销毁页面或页内控件。Inspector 会显示
+`PageControl -> TabPage -> 子树` 层级及各节点的原生 parent。
+
+---
+
+# 21. 项目结构
 
 ```text
 fluxvcl/
@@ -740,7 +984,7 @@ fluxvcl/
 
 ---
 
-# 21. 开发路线
+# 22. 开发路线
 
 ## Phase 1
 
@@ -776,7 +1020,7 @@ fluxvcl/
 
 ---
 
-# 22. 最终定位
+# 23. 最终定位
 
 FluxVCL 不追求替代 VCL/LCL。
 

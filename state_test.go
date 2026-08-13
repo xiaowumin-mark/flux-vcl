@@ -184,6 +184,55 @@ func TestComboBoxExplicitControlledState(t *testing.T) {
 	}
 }
 
+// TestPageControlExplicitControlledState 验证用户切页只通过类型化回调写 State，
+// 随后的受控 SelectedIndex patch 原地更新，不重建页面或页内输入控件。
+func TestPageControlExplicitControlledState(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	selected := flux.NewState(0)
+	status := flux.NewState("first")
+
+	if err := app.Mount(func() flux.Widget {
+		return flux.Window(flux.Column(
+			flux.PageControl(
+				flux.TabPage("first", flux.Input(flux.Key("first-input")), flux.Key("first")),
+				flux.TabPage("second", flux.Input(flux.Key("second-input")), flux.Key("second")),
+				flux.Key("pages"),
+				flux.SelectedIndex(selected.Get()),
+				flux.OnSelectionChange(func(index int) {
+					selected.Set(index)
+					status.Set([]string{"first", "second"}[index])
+				}),
+			),
+			flux.Text(flux.Bind(status), flux.Key("status")),
+		))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pc := findByKey(t, app.Root(), "pages")
+	firstPage := findByKey(t, app.Root(), "first").Handle
+	secondPage := findByKey(t, app.Root(), "second").Handle
+	firstInput := findByKey(t, app.Root(), "first-input").Handle
+	secondInput := findByKey(t, app.Root(), "second-input").Handle
+	base := len(m.Ops())
+
+	m.FirePageSelectionChange(pc.Handle, 1)
+	if selected.Get() != 1 || status.Get() != "second" || m.PageSelectedIndex(pc.Handle) != 1 {
+		t.Fatalf("切页 State 未收敛：selected=%d status=%q native=%d",
+			selected.Get(), status.Get(), m.PageSelectedIndex(pc.Handle))
+	}
+	if findByKey(t, app.Root(), "first").Handle != firstPage ||
+		findByKey(t, app.Root(), "second").Handle != secondPage ||
+		findByKey(t, app.Root(), "first-input").Handle != firstInput ||
+		findByKey(t, app.Root(), "second-input").Handle != secondInput {
+		t.Fatal("受控切页重建了页面或页内控件")
+	}
+	ops := m.Ops()[base:]
+	if countOps(ops, render.OpCreate) != 0 || countOps(ops, render.OpDestroy) != 0 {
+		t.Fatalf("受控切页不应创建/销毁：%+v", ops)
+	}
+}
+
 // TestRadioButtonExplicitControlledState 验证 RadioButton 沿用显式受控模式：
 // 原生事件只通知调用方，调用方写入 State 后由下一次 render 回写 Checked。
 func TestRadioButtonExplicitControlledState(t *testing.T) {

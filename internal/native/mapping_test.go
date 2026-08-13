@@ -119,3 +119,22 @@ func TestEventTypeString(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizePageIndex(t *testing.T) {
+	tests := []struct {
+		count int
+		index int
+		want  int
+	}{
+		{count: 0, index: 0, want: -1},
+		{count: 2, index: -2, want: -1},
+		{count: 2, index: -1, want: -1},
+		{count: 2, index: 0, want: 0},
+		{count: 2, index: 9, want: 1},
+	}
+	for _, test := range tests {
+		if got := normalizePageIndex(test.count, test.index); got != test.want {
+			t.Errorf("normalizePageIndex(%d, %d)=%d，期望 %d", test.count, test.index, got, test.want)
+		}
+	}
+}

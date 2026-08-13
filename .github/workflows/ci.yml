@@ -66,6 +66,16 @@ jobs:
         run: |
           .\scripts\build.ps1 -Target inspector
           .\scripts\smoke.ps1 -Target inspector -Screenshot "$env:GITHUB_WORKSPACE\bin\inspector-smoke.png"
+      - name: Build & Smoke (plugin-badge, P7.2)
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -Target plugin-badge
+          .\scripts\smoke.ps1 -Target plugin-badge -Screenshot "$env:GITHUB_WORKSPACE\bin\plugin-badge-smoke.png"
+      - name: Build & Smoke (page-control, P7.2c)
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1 -Target page-control
+          .\scripts\smoke.ps1 -Target page-control -Screenshot "$env:GITHUB_WORKSPACE\bin\page-control-smoke.png"
       - name: Upload smoke screenshot
         if: always()
         uses: actions/upload-artifact@v4

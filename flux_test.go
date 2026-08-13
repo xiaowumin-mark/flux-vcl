@@ -1,6 +1,7 @@
 package flux_test
 
 import (
+	"fmt"
 	"testing"
 
 	flux "github.com/xiaowumin-mark/flux-vcl"
@@ -37,6 +38,238 @@ func TestConstructorsBuildNode(t *testing.T) {
 			t.Errorf("%s.Text = %q，期望 %q", c.name, n.Props.String("Text"), c.text)
 		}
 	}
+}
+
+func TestPageControlConstructors(t *testing.T) {
+	pageA := flux.TabPage("A", flux.Input(flux.Key("input-a")), flux.Key("a"))
+	pageB := flux.TabPage("B", flux.Text("B", flux.Key("text-b")), flux.Key("b"))
+	n := flux.PageControl(pageA, pageB, flux.SelectedIndex(9)).Create()
+	if n.Type != "PageControl" || len(n.Children) != 2 {
+		t.Fatalf("PageControl = type %q children=%d", n.Type, len(n.Children))
+	}
+	if got := n.Props.Int("SelectedIndex"); got != 1 {
+		t.Fatalf("SelectedIndex = %d，期望钳制到 1", got)
+	}
+	if n.Children[0].Props.String("Text") != "A" || n.Children[1].Props.String("Text") != "B" {
+		t.Fatalf("页面标题未保留: %q / %q", n.Children[0].Props.String("Text"), n.Children[1].Props.String("Text"))
+	}
+	if n.Children[0].Key != "a" || len(n.Children[0].Children) != 1 {
+		t.Fatalf("页面 identity/唯一子树错误: key=%q children=%d", n.Children[0].Key, len(n.Children[0].Children))
+	}
+	if got := flux.PageControl().Create().Props.Int("SelectedIndex"); got != -1 {
+		t.Fatalf("空 PageControl SelectedIndex = %d，期望 -1", got)
+	}
+}
+
+func TestPageControlRejectsInvalidPages(t *testing.T) {
+	assertPanic := func(name string, fn func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Errorf("%s 未 panic", name)
+			}
+		}()
+		fn()
+	}
+	assertPanic("缺少 Key", func() { flux.TabPage("A", flux.Text("x")) })
+	assertPanic("错误子类型", func() { flux.PageControl(flux.Text("x")) })
+	page := flux.TabPage("A", flux.Text("x", flux.Key("x")), flux.Key("a"))
+	assertPanic("重复 Key", func() { flux.PageControl(page, flux.TabPage("B", flux.Text("y"), flux.Key("a"))) })
+}
+
+func TestPageControlMockIdentityAndSelection(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	build := func(index int, order ...string) flux.Widget {
+		pages := make([]flux.Widget, 0, len(order))
+		for _, key := range order {
+			pages = append(pages, flux.TabPage(key, flux.Input(flux.Key("input-"+key)), flux.Key(key)))
+		}
+		args := make([]any, 0, len(pages)+1)
+		for _, page := range pages {
+			args = append(args, page)
+		}
+		args = append(args, flux.SelectedIndex(index))
+		return flux.Window(flux.PageControl(args...))
+	}
+	app.Render(build(0, "a", "b", "c"))
+	pc := findByType(t, app.Root(), "PageControl")
+	if pc == nil {
+		t.Fatal("未找到 PageControl")
+	}
+	pageHandles := m.Pages(pc.Handle)
+	if len(pageHandles) != 3 || m.PageSelectedIndex(pc.Handle) != 0 {
+		t.Fatalf("初始页面状态 handles=%v selected=%d", pageHandles, m.PageSelectedIndex(pc.Handle))
+	}
+	aInput := findByKey(t, app.Root(), "input-a").Handle
+	bInput := findByKey(t, app.Root(), "input-b").Handle
+	base := len(m.Ops())
+	app.Render(build(2, "c", "a", "b"))
+	if got := countOps(m.Ops()[base:], render.OpCreate) + countOps(m.Ops()[base:], render.OpDestroy); got != 0 {
+		t.Fatalf("页面重排不应创建/销毁，mutation=%v", m.Ops()[base:])
+	}
+	if findByKey(t, app.Root(), "input-a").Handle != aInput || findByKey(t, app.Root(), "input-b").Handle != bInput {
+		t.Fatal("页面重排迁移了页内控件 identity")
+	}
+	if got := m.PageSelectedIndex(pc.Handle); got != 2 {
+		t.Fatalf("重排后 SelectedIndex=%d，期望 2", got)
+	}
+}
+
+func TestPageControlControlledEventRemovalAndTitlePatch(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	selected := -2
+	build := func(title string, index int, onSelection func(int)) flux.Widget {
+		args := []any{
+			flux.TabPage(title, flux.Input(flux.Key("input-a")), flux.Key("a")),
+			flux.TabPage("B", flux.Input(flux.Key("input-b")), flux.Key("b")),
+			flux.SelectedIndex(index),
+		}
+		if onSelection != nil {
+			args = append(args, flux.OnSelectionChange(onSelection))
+		}
+		return flux.Window(flux.PageControl(args...))
+	}
+
+	if err := app.Render(build("A", 0, func(index int) { selected = index })); err != nil {
+		t.Fatal(err)
+	}
+	pc := findByType(t, app.Root(), "PageControl")
+	pageA := findByKey(t, app.Root(), "a")
+	inputA := findByKey(t, app.Root(), "input-a")
+	if pc == nil || pageA == nil || inputA == nil {
+		t.Fatal("首次挂载缺少分页 Element")
+	}
+
+	base := len(m.Ops())
+	m.FirePageSelectionChange(pc.Handle, 1)
+	if selected != 1 || m.PageSelectedIndex(pc.Handle) != 1 {
+		t.Fatalf("用户选择未分派：callback=%d selected=%d", selected, m.PageSelectedIndex(pc.Handle))
+	}
+	if len(m.Ops()) != base {
+		t.Fatalf("用户选择不应伪造程序化 mutation：%+v", m.Ops()[base:])
+	}
+
+	pageHandle, inputHandle := pageA.Handle, inputA.Handle
+	base = len(m.Ops())
+	if err := app.Render(build("A renamed", 1, func(index int) { selected = index })); err != nil {
+		t.Fatal(err)
+	}
+	ops := m.Ops()[base:]
+	if countOps(ops, render.OpCreate)+countOps(ops, render.OpDestroy) != 0 {
+		t.Fatalf("标题/选择 patch 不应重建：%+v", ops)
+	}
+	if findByKey(t, app.Root(), "a").Handle != pageHandle || findByKey(t, app.Root(), "input-a").Handle != inputHandle {
+		t.Fatal("标题 patch 改变了页面或页内控件 identity")
+	}
+	if !hasOp(ops, render.OpSetText, pageHandle, "", "A renamed") {
+		t.Fatalf("标题 patch 未原地更新 TabPage：%+v", ops)
+	}
+
+	if err := app.Render(build("A renamed", 1, nil)); err != nil {
+		t.Fatal(err)
+	}
+	selected = -2
+	m.FirePageSelectionChange(pc.Handle, 0)
+	if selected != -2 {
+		t.Fatal("移除 OnSelectionChange 后仍触发旧回调")
+	}
+}
+
+func TestPageControlAddRemovePagesAndIndexClamp(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	build := func(index int, order ...string) flux.Widget {
+		args := make([]any, 0, len(order)+1)
+		for _, key := range order {
+			args = append(args, flux.TabPage(key, flux.Input(flux.Key("input-"+key)), flux.Key(key)))
+		}
+		args = append(args, flux.SelectedIndex(index))
+		return flux.Window(flux.PageControl(args...))
+	}
+
+	if err := app.Render(build(1, "a", "b")); err != nil {
+		t.Fatal(err)
+	}
+	pc := findByType(t, app.Root(), "PageControl")
+	pageA := findByKey(t, app.Root(), "a").Handle
+	inputA := findByKey(t, app.Root(), "input-a").Handle
+
+	base := len(m.Ops())
+	if err := app.Render(build(9, "a", "c")); err != nil {
+		t.Fatal(err)
+	}
+	ops := m.Ops()[base:]
+	if countOps(ops, render.OpCreate) != 2 || countOps(ops, render.OpDestroy) != 2 {
+		t.Fatalf("替换一页应只创建/销毁该页及唯一子树：%+v", ops)
+	}
+	if findByKey(t, app.Root(), "a").Handle != pageA || findByKey(t, app.Root(), "input-a").Handle != inputA {
+		t.Fatal("增删页面破坏了保留页 identity")
+	}
+	if got := m.PageSelectedIndex(pc.Handle); got != 1 {
+		t.Fatalf("页面数变化后越界索引=%d，期望钳制到 1", got)
+	}
+	if pages := m.Pages(pc.Handle); len(pages) != 2 || pages[0] != pageA || pages[1] != findByKey(t, app.Root(), "c").Handle {
+		t.Fatalf("页面顺序未同步：%v", pages)
+	}
+
+	base = len(m.Ops())
+	if err := app.Render(build(-1)); err != nil {
+		t.Fatal(err)
+	}
+	ops = m.Ops()[base:]
+	if countOps(ops, render.OpCreate) != 0 || countOps(ops, render.OpDestroy) != 4 {
+		t.Fatalf("清空页面应只销毁两页及其子树：%+v", ops)
+	}
+	if got := m.PageSelectedIndex(pc.Handle); got != -1 {
+		t.Fatalf("空 PageControl SelectedIndex=%d，期望 -1", got)
+	}
+}
+
+type pageCapabilitylessRenderer struct{ render.Renderer }
+
+func TestPageControlMissingRendererCapabilityIsSafe(t *testing.T) {
+	m := render.NewMock()
+	r := pageCapabilitylessRenderer{Renderer: m}
+	app := flux.NewApp(r)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("Renderer 缺少 PageController 时不应 panic：%v", recovered)
+		}
+	}()
+	if err := app.Render(flux.Window(flux.PageControl(
+		flux.TabPage("A", flux.Text("content"), flux.Key("a")),
+		flux.SelectedIndex(0),
+		flux.OnSelectionChange(func(int) {}),
+	))); err != nil {
+		t.Fatal(err)
+	}
+	if findByType(t, app.Root(), "PageControl") == nil || findByKey(t, app.Root(), "a") == nil {
+		t.Fatal("能力缺失时 Element 树仍应完整挂载")
+	}
+}
+
+func hasOp(ops []render.Op, typ render.OpType, handle render.Handle, key string, value any) bool {
+	for _, op := range ops {
+		if op.Type == typ && op.Handle == handle && op.Key == key && fmt.Sprint(op.Value) == fmt.Sprint(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func findByType(t *testing.T, e *diff.Element, typ string) *diff.Element {
+	t.Helper()
+	if e.Type == typ {
+		return e
+	}
+	for _, c := range e.Children {
+		if found := findByType(t, c, typ); found != nil {
+			return found
+		}
+	}
+	return nil
 }
 
 // TestOptionsApply OnClick/Key/Width/Height 正确写入节点。

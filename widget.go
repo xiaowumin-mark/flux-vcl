@@ -18,3 +18,5 @@ type Node = widget.Node
 type widgetNode struct{ n *Node }
 
 func (w widgetNode) Create() *Node { return w.n }
+
+func widgetNewNode(t string) *Node { return widget.NewNode(t) }

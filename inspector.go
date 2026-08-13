@@ -200,7 +200,7 @@ func (a *App) snapshotInspectorTree(diags []NodeDiag, overflows []LayoutDiag, re
 			}
 		}
 		n.Native.ID = uint64(e.Handle)
-		n.Native.Shared = diff.IsTransparent(e.Type)
+		n.Native.Shared = diff.IsTransparent(e)
 		if info, ok := nativeSnapshot[e.Handle]; ok && !n.Native.Shared {
 			n.Native.Type = info.Type
 			n.Native.ParentID = uint64(info.Parent)
@@ -226,7 +226,7 @@ func snapshotProps(props *widget.Props) []InspectorProperty {
 	}
 	out := make([]InspectorProperty, 0, props.Len())
 	for _, key := range props.Keys() {
-		if key == "_bind" {
+		if key == "_bind" || key == "_pluginRuntime" {
 			continue
 		}
 		value, _ := props.Get(key)
@@ -289,6 +289,8 @@ func inspectorValue(value any) string {
 		return fmt.Sprintf("{content:%d step:%d}", v.Content, v.Step)
 	case render.ScrollTarget, render.Ref:
 		return "<" + rv.Type().String() + ">"
+	case PluginProperties:
+		return "[" + strings.Join(v.Keys(), ", ") + "]"
 	default:
 		return "<" + rv.Type().String() + ">"
 	}

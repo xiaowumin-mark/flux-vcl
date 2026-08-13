@@ -25,6 +25,13 @@ const layoutGap = 4
 // 行内容宽度 = 视口宽 − 该占位，避免内容落到滚动条之下（Phase 6）。
 const listScrollbarStrip = 17
 
+const (
+	pageControlDefaultWidth  = 320
+	pageControlDefaultHeight = 220
+	pageControlChromeWidth   = 8
+	pageControlChromeHeight  = 32
+)
+
 // LayoutDiag 是一次 render 布局的溢出诊断（Phase 3.7 inspector 数据源之一）。
 // OverflowW/H 为容器尺寸超出约束的量（0 表示该轴未溢出）。
 type LayoutDiag struct {
@@ -52,6 +59,7 @@ type layoutDiags struct {
 	list          []LayoutDiag // 溢出诊断（LastLayoutDiags）
 	overflowNodes []*Node
 	nodes         []NodeDiag // 全节点诊断（Inspect）
+	err           error
 }
 
 func (d *layoutDiags) overflow(n *Node, ow, oh int) {
@@ -116,7 +124,15 @@ type flexKid struct {
 // layoutTree 布局一棵子树，返回其在约束 c 下的内容尺寸，并把绝对 frame 写入
 // 每个节点的 Props["Bounds"]。pos 为绝对坐标（窗体客户区坐标系）。
 func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags) Size {
+	if d != nil && d.err != nil {
+		return Size{}
+	}
 	var sz Size
+	if runtime, ok := pluginRuntimeForNode(n); ok {
+		sz = layoutPlugin(n, r, c, pos, d, runtime)
+		d.record(n, c, sz)
+		return sz
+	}
 	switch n.Type {
 	case "Window":
 		cw, ch := r.ClientSize()
@@ -174,6 +190,13 @@ func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 	case "ProgressBar":
 		sz = leafSize(180, 20, n, c)
 		setBounds(n, pos, sz)
+	case "PageControl":
+		sz = layoutPageControl(n, r, c, pos, d)
+	case "TabPage":
+		// TabPage 只能由 PageControl 布局；独立出现时安全退化为零尺寸，避免把
+		// 页面内容错误地放进窗体坐标系。公开构造器已保证唯一子树。
+		sz = leafSize(0, 0, n, c)
+		setBounds(n, pos, sz)
 	case "ScrollBox":
 		sz = layoutScrollBox(n, r, c, pos, d)
 	case "ListView":
@@ -192,6 +215,61 @@ func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 		setBounds(n, pos, sz)
 	}
 	d.record(n, c, sz)
+	return sz
+}
+
+func pluginRuntimeForNode(n *Node) (*pluginRuntime, bool) {
+	if n == nil || n.Props == nil {
+		return nil, false
+	}
+	value, exists := n.Props.Get("_pluginRuntime")
+	if !exists {
+		return nil, false
+	}
+	runtime, ok := value.(*pluginRuntime)
+	return runtime, ok && runtime != nil
+}
+
+func layoutPlugin(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags, runtime *pluginRuntime) Size {
+	if len(n.Children) != 1 {
+		if d != nil {
+			d.err = &PluginError{Name: runtime.name, Stage: "measure", Err: fmt.Errorf("%w: builder 必须产生唯一子树", ErrPluginInvalid)}
+		}
+		return Size{}
+	}
+	child := n.Children[0]
+	childSize := layoutTree(child, r, c, pos, d)
+	if d != nil && d.err != nil {
+		return Size{}
+	}
+	layout := PluginLayout{Size: childSize}
+	if runtime.descriptor.Measure != nil {
+		ctx := PluginMeasureContext{
+			PluginContext: runtime.context(),
+			Type:          runtime.name, Key: n.Key,
+			Properties: pluginPropertiesFromProps(n.Props), Constraints: c, ChildSize: childSize,
+		}
+		if err := pluginCall(runtime.name, "measure", func() error {
+			var measureErr error
+			layout, measureErr = runtime.descriptor.Measure(ctx)
+			return measureErr
+		}); err != nil {
+			if d != nil {
+				d.err = err
+			}
+			return Size{}
+		}
+	}
+	w, h := layout.Size.W, layout.Size.H
+	if value := n.Props.Int("Width"); value > 0 {
+		w = value
+	}
+	if value := n.Props.Int("Height"); value > 0 {
+		h = value
+	}
+	sz := c.Constrain(w, h)
+	setPos(child, Point{X: pos.X + layout.ChildOffset.X, Y: pos.Y + layout.ChildOffset.Y})
+	setBounds(n, pos, sz)
 	return sz
 }
 
@@ -270,6 +348,27 @@ func comboBoxIntrinsicSize(items []string, r render.Renderer) (int, int) {
 	return maxW, h
 }
 
+// layoutPageControl 以稳定 DIP 预算扣除原生页签表头与边框。各 TabPage 的唯一
+// 子树都使用相同的紧客户区约束，并从页面自己的 (0,0) 客户区原点开始；inactive
+// 页同样参与布局和保留，不通过 Visible/TabVisible 卸载。
+func layoutPageControl(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags) Size {
+	sz := leafSize(pageControlDefaultWidth, pageControlDefaultHeight, n, c)
+	contentW := max(0, sz.W-pageControlChromeWidth)
+	contentH := max(0, sz.H-pageControlChromeHeight)
+	pageConstraints := Tight(contentW, contentH)
+	for _, page := range n.Children {
+		if page == nil || page.Type != "TabPage" || len(page.Children) != 1 || page.Children[0] == nil {
+			continue
+		}
+		child := page.Children[0]
+		childSize := layoutTree(child, r, pageConstraints, Point{}, d)
+		setBounds(page, Point{}, childSize)
+		d.record(page, pageConstraints, childSize)
+	}
+	setBounds(n, pos, sz)
+	return sz
+}
+
 // leafSize 用 Width/Height Opt 覆盖 intrinsic 尺寸后钳制到约束（D5 constrain）。
 func leafSize(w, h int, n *Node, c BoxConstraints) Size {
 	if v := n.Props.Int("Width"); v > 0 {
@@ -301,8 +400,12 @@ func setPos(n *Node, pos Point) {
 	case "Column", "Row", "Expanded", "Flexible", "Component", "ListViewRow":
 		offsetSubtree(n, pos.X-br.X, pos.Y-br.Y)
 	default:
-		br.X, br.Y = pos.X, pos.Y
-		n.Props.Set("Bounds", br)
+		if _, plugin := pluginRuntimeForNode(n); plugin {
+			offsetSubtree(n, pos.X-br.X, pos.Y-br.Y)
+		} else {
+			br.X, br.Y = pos.X, pos.Y
+			n.Props.Set("Bounds", br)
+		}
 	}
 }
 
@@ -311,7 +414,8 @@ func setPos(n *Node, pos Point) {
 // 自身，SetBounds 需相对自身）。ListView（Phase 6）同为真实容器：行 slot 在
 // 局部坐标空间布局（0..vh），父级定位只平移 ListView 自身 Bounds。
 func realContainer(t string) bool {
-	return t == "Window" || t == "ScrollBox" || t == "ListView"
+	return t == "Window" || t == "ScrollBox" || t == "ListView" ||
+		t == "PageControl" || t == "TabPage"
 }
 
 // offsetSubtree 平移节点及其子树的 Bounds（dx/dy）。遇真实容器边界停止 ——

@@ -138,6 +138,68 @@ func TestProgressBarAndRadioButtonIntrinsicSize(t *testing.T) {
 	}
 }
 
+func TestPageControlLayoutUsesLocalClientCoordinates(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	if err := app.Render(flux.Window(flux.Column(
+		flux.Text("before"),
+		flux.PageControl(
+			flux.TabPage("A", flux.Column(
+				flux.Input(flux.Key("input-a")),
+				flux.Text("below", flux.Key("below-a")),
+			), flux.Key("a")),
+			flux.TabPage("B", flux.Input(flux.Key("input-b")), flux.Key("b")),
+			flux.Key("pages"), flux.Width(240), flux.Height(140),
+		),
+	))); err != nil {
+		t.Fatal(err)
+	}
+
+	pages := boundsOf(findByKey(t, app.Root(), "pages"))
+	pageA := boundsOf(findByKey(t, app.Root(), "a"))
+	pageB := boundsOf(findByKey(t, app.Root(), "b"))
+	inputA := boundsOf(findByKey(t, app.Root(), "input-a"))
+	inputB := boundsOf(findByKey(t, app.Root(), "input-b"))
+	belowA := boundsOf(findByKey(t, app.Root(), "below-a"))
+	if pages != (render.Rect{X: 0, Y: 24, W: 240, H: 140}) {
+		t.Fatalf("PageControl Bounds=%+v，期望显式尺寸并位于前置 Text 下方", pages)
+	}
+	wantPage := render.Rect{W: 232, H: 108}
+	if pageA != wantPage || pageB != wantPage {
+		t.Fatalf("TabPage 客户区错误：a=%+v b=%+v want=%+v", pageA, pageB, wantPage)
+	}
+	if inputA != (render.Rect{W: 180, H: 28}) {
+		t.Errorf("透明 Column 内页首控件未使用页面局部坐标：%+v", inputA)
+	}
+	if belowA != (render.Rect{Y: 32, W: 40, H: 20}) {
+		t.Errorf("页内 Column 布局错误：%+v", belowA)
+	}
+	if inputB != (render.Rect{W: 232, H: 108}) {
+		t.Errorf("单控件页面未填充客户区：%+v", inputB)
+	}
+}
+
+func TestPageControlLayoutClampsNarrowClientArea(t *testing.T) {
+	m := render.NewMock()
+	app := flux.NewApp(m)
+	if err := app.Render(flux.Window(flux.PageControl(
+		flux.TabPage("tiny", flux.Input(flux.Key("tiny-input")), flux.Key("tiny")),
+		flux.Key("pages"), flux.Width(7), flux.Height(10),
+	))); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := boundsOf(findByKey(t, app.Root(), "pages")); got.W != 7 || got.H != 10 {
+		t.Fatalf("窄 PageControl Bounds=%+v", got)
+	}
+	if got := boundsOf(findByKey(t, app.Root(), "tiny")); got.W != 0 || got.H != 0 {
+		t.Errorf("窄 TabPage 客户区不得为负：%+v", got)
+	}
+	if got := boundsOf(findByKey(t, app.Root(), "tiny-input")); got.W != 0 || got.H != 0 {
+		t.Errorf("窄页面子控件不得为负：%+v", got)
+	}
+}
+
 // Window client 400x300：Column 内 B 非 flex 高 20，Expanded A 分到 300-20-gap4=276。
 func TestFlexExpandedFillsFreeSpace(t *testing.T) {
 	m := render.NewMock()

@@ -303,6 +303,43 @@ func TestInspectorObservesTypedControlEvents(t *testing.T) {
 	}
 }
 
+func TestInspectorPageControlHierarchyAndNativeParents(t *testing.T) {
+	mock := render.NewMock()
+	app := flux.NewApp(mock)
+	if err := app.Render(flux.Window(flux.PageControl(
+		flux.TabPage("direct", flux.Input(flux.Key("direct-input")), flux.Key("direct")),
+		flux.TabPage("transparent", flux.Column(
+			flux.Input(flux.Key("nested-input")),
+		), flux.Key("transparent")),
+		flux.Key("pages"),
+	))); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := app.InspectorSnapshot()
+	pages := inspectorFind(snapshot.Root, "pages")
+	direct := inspectorFind(snapshot.Root, "direct")
+	transparent := inspectorFind(snapshot.Root, "transparent")
+	directInput := inspectorFind(snapshot.Root, "direct-input")
+	nestedInput := inspectorFind(snapshot.Root, "nested-input")
+	if pages == nil || direct == nil || transparent == nil || directInput == nil || nestedInput == nil {
+		t.Fatal("Inspector 缺少 PageControl -> TabPage -> 子树层级")
+	}
+	if pages.Native.Type != "MockPageControl" || direct.Native.Type != "MockTabPage" ||
+		transparent.Native.Type != "MockTabPage" {
+		t.Fatalf("分页 native 类型错误：pages=%+v direct=%+v transparent=%+v",
+			pages.Native, direct.Native, transparent.Native)
+	}
+	if direct.Native.ParentID != pages.Native.ID || transparent.Native.ParentID != pages.Native.ID {
+		t.Fatalf("TabPage native parent 错误：pages=%d direct=%d transparent=%d",
+			pages.Native.ID, direct.Native.ParentID, transparent.Native.ParentID)
+	}
+	if directInput.Native.ParentID != direct.Native.ID || nestedInput.Native.ParentID != transparent.Native.ID {
+		t.Fatalf("页内控件 native parent 错误：direct=%d/%d nested=%d/%d",
+			directInput.Native.ParentID, direct.Native.ID, nestedInput.Native.ParentID, transparent.Native.ID)
+	}
+}
+
 func TestInspectorObservesScrollEvent(t *testing.T) {
 	mock := render.NewMock()
 	app := flux.NewApp(mock)
@@ -361,5 +398,35 @@ func TestInspectorHistoryIsBounded(t *testing.T) {
 	}
 	if events := history.Events(); len(events) != 2 || events[0].Sequence != 2 {
 		t.Fatalf("有界事件历史 = %+v", events)
+	}
+}
+
+// TestInspectorClosePublishesUnmountedSnapshot verifies that Close publishes
+// the destroy commit and invalidates the cached Element/native tree together.
+func TestInspectorClosePublishesUnmountedSnapshot(t *testing.T) {
+	mock := render.NewMock()
+	app := flux.NewApp(mock)
+	history := flux.NewInspectorHistory(10)
+	app.ObserveInspector(history)
+
+	if err := app.Render(flux.Window(flux.Text("closing", flux.Key("value")))); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	before := len(history.Commits())
+	if err := app.Close(); err != nil {
+		t.Fatalf("App.Close: %v", err)
+	}
+	if root := app.Root(); root != nil {
+		t.Errorf("Close 后 App.Root=%+v，期望 nil", root)
+	}
+	if root := app.InspectorSnapshot().Root; root != nil {
+		t.Errorf("Close 后 InspectorSnapshot.Root=%+v，期望 nil", root)
+	}
+	commits := history.Commits()
+	if len(commits) != before+1 {
+		t.Fatalf("Close 后提交数=%d，期望 %d", len(commits), before+1)
+	}
+	if closeCommit := commits[len(commits)-1]; closeCommit.Stats.Destroy == 0 {
+		t.Errorf("Close 提交=%+v，期望包含 destroy mutation", closeCommit)
 	}
 }

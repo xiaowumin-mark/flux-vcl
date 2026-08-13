@@ -23,12 +23,24 @@ type Node struct {
 	Props    *Props
 	Children []*Node
 	Key      string
+	plugin   bool
 }
 
 // NewNode 创建带空 Props 的节点（Props 恒非 nil，保证属性 diff 稳定）。
 func NewNode(t string) *Node {
 	return &Node{Type: t, Props: NewProps()}
 }
+
+// MarkPlugin 标记已经由根包注册表成功解析的插件节点。该状态不通过公开 Node
+// 字段暴露，避免任意 Type 字符串伪装成透明插件节点。
+func MarkPlugin(n *Node) {
+	if n != nil {
+		n.plugin = true
+	}
+}
+
+// IsPlugin 报告节点是否带有框架写入的已解析插件标记。
+func IsPlugin(n *Node) bool { return n != nil && n.plugin }
 
 // Add 追加子节点并返回自身（内部链式构造用）。
 func (n *Node) Add(c *Node) *Node {

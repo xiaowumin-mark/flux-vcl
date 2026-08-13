@@ -1,6 +1,9 @@
 package render
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // Mock 是 Renderer 的内存实现，用于无头测试（0.6 无头测试驱动雏形）。
 //
@@ -26,6 +29,7 @@ type Mock struct {
 	selectable map[Handle]*mockSelectable // 下拉选择控件的状态与回调（Selectable 测试面）
 	progress   map[Handle]*mockProgress   // 进度控件的范围和值（Progressable 测试面）
 	radioGroup map[Handle]int             // 单选控件原生组编号（RadioGroupable 测试面）
+	pages      map[Handle]*mockPages      // 分页容器的页面顺序、受控索引与回调
 }
 
 // mockScroll 记录 ListView 滚动配置/位置（Phase 6）。与真实滚动条不同，mock 不
@@ -56,6 +60,13 @@ type mockProgress struct {
 	value   int
 }
 
+type mockPages struct {
+	pages    []Handle
+	desired  int
+	selected int
+	onSelect func(int)
+}
+
 // NewMock 创建空的 Mock。
 func NewMock() *Mock { return &Mock{clientW: 400, clientH: 300} }
 
@@ -78,6 +89,7 @@ func (m *Mock) Destroy(h Handle) {
 	delete(m.checked, h)
 	delete(m.selectable, h)
 	delete(m.progress, h)
+	delete(m.pages, h)
 	delete(m.radioGroup, h)
 	delete(m.handlers, h)
 	delete(m.scrolls, h)
@@ -87,12 +99,34 @@ func (m *Mock) Destroy(h Handle) {
 
 func (m *Mock) SetParent(child, parent Handle) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	childType, childExists := m.widgetType[child]
+	if !childExists {
+		panic(fmt.Sprintf("render.Mock: 未知子控件 %d", child))
+	}
+	if parent == 0 {
+		if childType == "TabPage" {
+			panic("render.Mock: TabPage 只能直接属于 PageControl")
+		}
+		return
+	}
+	parentType, parentExists := m.widgetType[parent]
+	if !parentExists {
+		panic(fmt.Sprintf("render.Mock: 未知父控件 %d", parent))
+	}
+	isPage := childType == "TabPage"
+	isPageControl := parentType == "PageControl"
+	if isPage != isPageControl {
+		if isPage {
+			panic("render.Mock: TabPage 只能直接属于 PageControl")
+		}
+		panic("render.Mock: PageControl 只能直接挂载 TabPage")
+	}
 	if m.parents == nil {
 		m.parents = make(map[Handle]Handle)
 	}
 	m.parents[child] = parent
 	m.ops = append(m.ops, Op{Type: OpAppendChild, Handle: child, Parent: parent})
-	m.mu.Unlock()
 }
 
 func (m *Mock) SetBounds(h Handle, b Rect) {
@@ -422,6 +456,114 @@ func (m *Mock) FireSelectionChange(h Handle, index int) {
 	}
 }
 
+func (m *Mock) ensurePages(h Handle) *mockPages {
+	if m.pages == nil {
+		m.pages = make(map[Handle]*mockPages)
+	}
+	if m.pages[h] == nil {
+		m.pages[h] = &mockPages{desired: -1, selected: -1}
+	}
+	return m.pages[h]
+}
+
+func normalizePageIndex(count, index int) int {
+	if count == 0 {
+		return -1
+	}
+	if index < -1 {
+		return -1
+	}
+	if index >= count {
+		return count - 1
+	}
+	return index
+}
+
+// SyncPages 记录 PageControl 当前按 Element 顺序排列的 TabPage 句柄，并在页面
+// 全部就绪后应用先前缓存的受控索引。
+func (m *Mock) SyncPages(parent Handle, pages []Handle) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.widgetType[parent] != "PageControl" {
+		panic(fmt.Sprintf("render.Mock: 分页父控件 %d 非 PageControl", parent))
+	}
+	seen := make(map[Handle]struct{}, len(pages))
+	for _, page := range pages {
+		if m.widgetType[page] != "TabPage" {
+			panic(fmt.Sprintf("render.Mock: PageControl 子控件 %d 非 TabPage", page))
+		}
+		if _, exists := seen[page]; exists {
+			panic(fmt.Sprintf("render.Mock: PageControl 页面句柄 %d 重复", page))
+		}
+		seen[page] = struct{}{}
+	}
+	p := m.ensurePages(parent)
+	p.pages = append([]Handle(nil), pages...)
+	p.selected = normalizePageIndex(len(p.pages), p.desired)
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: parent, Key: "Pages", Value: append([]Handle(nil), pages...)})
+}
+
+// SetPageSelectedIndex 缓存并应用 PageControl 的受控索引。程序化设置不会触发回调。
+func (m *Mock) SetPageSelectedIndex(parent Handle, index int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.widgetType[parent] != "PageControl" {
+		return
+	}
+	p := m.ensurePages(parent)
+	p.desired = index
+	p.selected = normalizePageIndex(len(p.pages), index)
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: parent, Key: "SelectedIndex", Value: p.selected})
+}
+
+// OnPageSelectionChange 保存 PageControl 的用户选择回调；nil 表示解绑。
+func (m *Mock) OnPageSelectionChange(parent Handle, fn func(int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.widgetType[parent] != "PageControl" {
+		return
+	}
+	m.ensurePages(parent).onSelect = fn
+	m.ops = append(m.ops, Op{Type: OpSetEvent, Handle: parent, Key: "OnSelectionChange", Value: fn})
+}
+
+// Pages 返回 PageControl 的页面句柄顺序副本（测试断言用）。
+func (m *Mock) Pages(parent Handle) []Handle {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p := m.pages[parent]; p != nil {
+		return append([]Handle(nil), p.pages...)
+	}
+	return []Handle{}
+}
+
+// PageSelectedIndex 返回 PageControl 当前选中索引（测试断言用）。
+func (m *Mock) PageSelectedIndex(parent Handle) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p := m.pages[parent]; p != nil {
+		return p.selected
+	}
+	return -1
+}
+
+// FirePageSelectionChange 模拟用户切换 PageControl 页签，回调在锁外执行。
+func (m *Mock) FirePageSelectionChange(parent Handle, index int) {
+	m.mu.Lock()
+	if m.widgetType[parent] != "PageControl" {
+		m.mu.Unlock()
+		return
+	}
+	p := m.ensurePages(parent)
+	p.selected = normalizePageIndex(len(p.pages), index)
+	index = p.selected
+	fn := p.onSelect
+	m.mu.Unlock()
+	if fn != nil {
+		fn(index)
+	}
+}
+
 // TextExtent 模拟 intrinsic 测量：mock 无字体，返回按字符数的稳定伪值
 // （宽=len*8、高=20，与 Phase 1 占位一致，保证布局测试断言稳定）。
 // 布局引擎的真实测量在 LCL 适配层实现（design.md §6.2）。
@@ -477,6 +619,14 @@ func (m *Mock) ApplyNative(h Handle, fn func(obj any)) {
 func (m *Mock) RunOnUI(fn func()) {
 	if fn != nil {
 		fn()
+	}
+}
+
+// PluginCapabilitySnapshot 返回插件可安全保存和跨 goroutine 读取的只读能力快照。
+func (m *Mock) PluginCapabilitySnapshot() map[string]any {
+	return map[string]any{
+		"flux.renderer.dpi":     96,
+		"flux.renderer.backend": "mock",
 	}
 }
 
