@@ -276,7 +276,7 @@ Flutter 的原话：`Widget.canUpdate(old,new) = old.runtimeType==new.runtimeTyp
 
 - 纯 Go 零 CGO（Windows），`GOARCH` 与 DLL 位数严格匹配；`-buildmode=exe`；`-ldflags "-H=windowsgui"`；空导入 `winappres` 供 manifest/图标。
 - **module 路径 `github.com/fluxvcl/flux-vcl` 未被占用**（proxy.golang.org 404、org 未注册），可安全使用。
-- Go 版本策略：工具链已是 ~1.27rc2（2026-08），而 govcl v1.2.10 go.mod 为 go 1.13 —— CI 每轮必须验证冻结绑定在现行 Go 上可构建。
+- Go 版本策略：工具链已是 ~1.27rc3（2026-08），而 govcl v1.2.10 go.mod 为 go 1.13 —— CI 每轮必须验证冻结绑定在现行 Go 上可构建。
 
 ### 7.2 单 EXE / DLL 分发
 

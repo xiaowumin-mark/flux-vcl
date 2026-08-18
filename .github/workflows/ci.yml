@@ -6,80 +6,121 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: Unit tests
+  compatibility:
+    name: Go ${{ matrix.go-version }} headless
     runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ['1.22.x', '1.23.x', '1.24.x', '1.25.x', '1.26.x', '1.27.0-rc.3']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.25.x'
+          go-version: ${{ matrix.go-version }}
           cache-dependency-path: go.sum
-      - name: Go test
-        run: go test ./...
+      - name: Verify modules
+        run: go mod verify
+      - name: Headless tests
+        run: go test -count=1 ./...
+
+  quality:
+    name: Vet, race & benchmark compile
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.27.0-rc.3'
+          cache-dependency-path: go.sum
+      - name: Whitespace check
+        run: git diff --check HEAD^ HEAD
+      - name: Go format
+        shell: pwsh
+        run: |
+          $unformatted = @(gofmt -l .)
+          if ($unformatted.Count -ne 0) {
+            $unformatted | ForEach-Object { Write-Host "::error file=$_::gofmt required" }
+            exit 1
+          }
+      - name: Module graph is tidy
+        run: go mod tidy -diff
       - name: Go vet
         run: go vet ./...
+      - name: Race tests
+        run: go test -race -count=1 ./...
+      - name: Benchmark smoke
+        run: go test . -run '^$' -bench 'Benchmark(ControlMount|ControlPurePropertyPatch|PageSwitch|VirtualListScrollPatch)$' -benchtime=1x
 
-  build-and-smoke:
-    name: Build & Smoke (Windows GUI)
+  native-probe:
+    name: Native LCL probe
     runs-on: windows-latest
-    needs: test
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.27.0-rc.3'
           cache-dependency-path: go.sum
-      # CI 无本地 ref/ 副本（被 gitignore），从 designer 内嵌 zip 获取 DLL
-      - name: Fetch libenergy DLL
+      - name: Fetch verified libenergy DLL
         shell: pwsh
         run: .\scripts\fetch-libenergy.ps1
-      - name: Build
-        shell: pwsh
-        run: .\scripts\build.ps1
-      - name: Smoke test (basic)
-        shell: pwsh
-        run: .\scripts\smoke.ps1 -Screenshot "$env:GITHUB_WORKSPACE\bin\basic-smoke.png"
-      - name: Build & Smoke (events, Phase 4)
+      - name: Run non-race native probes
         shell: pwsh
         run: |
-          .\scripts\build.ps1 -Target events
-          .\scripts\smoke.ps1 -Target events -Screenshot "$env:GITHUB_WORKSPACE\bin\events-smoke.png"
-      - name: Build & Smoke (phase5, advanced features)
+          $env:FVCL_LIBENERGY_DLL = (Resolve-Path .\ref\designer-lib\libenergy-amd64.dll).Path
+          go test -count=1 -v ./internal/native -run '^TestRadioButtonNative'
+
+  build-and-smoke:
+    name: Smoke ${{ matrix.target }}
+    runs-on: windows-latest
+    needs: [compatibility, quality, native-probe]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - basic
+          - layout
+          - events
+          - phase5
+          - form-controls
+          - virtual-list
+          - inspector
+          - plugin-badge
+          - page-control
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.27.0-rc.3'
+          cache-dependency-path: go.sum
+      - name: Fetch verified libenergy DLL
         shell: pwsh
-        run: |
-          .\scripts\build.ps1 -Target phase5
-          .\scripts\smoke.ps1 -Target phase5 -Screenshot "$env:GITHUB_WORKSPACE\bin\phase5-smoke.png"
-      - name: Build & Smoke (form-controls, widget baseline)
+        run: .\scripts\fetch-libenergy.ps1
+      - name: Build ${{ matrix.target }}
         shell: pwsh
-        run: |
-          .\scripts\build.ps1 -Target form-controls
-          .\scripts\smoke.ps1 -Target form-controls -Screenshot "$env:GITHUB_WORKSPACE\bin\form-controls-smoke.png"
-      - name: "Build & Smoke (virtual-list, Phase 6: 10万行虚拟化 + 多窗口)"
+        run: .\scripts\build.ps1 -Target '${{ matrix.target }}'
+      - name: Smoke ${{ matrix.target }}
         shell: pwsh
-        run: |
-          .\scripts\build.ps1 -Target virtual-list
-          .\scripts\smoke.ps1 -Target virtual-list -Screenshot "$env:GITHUB_WORKSPACE\bin\virtual-list-smoke.png"
-      - name: Build & Smoke (inspector, P7.1)
-        shell: pwsh
-        run: |
-          .\scripts\build.ps1 -Target inspector
-          .\scripts\smoke.ps1 -Target inspector -Screenshot "$env:GITHUB_WORKSPACE\bin\inspector-smoke.png"
-      - name: Build & Smoke (plugin-badge, P7.2)
-        shell: pwsh
-        run: |
-          .\scripts\build.ps1 -Target plugin-badge
-          .\scripts\smoke.ps1 -Target plugin-badge -Screenshot "$env:GITHUB_WORKSPACE\bin\plugin-badge-smoke.png"
-      - name: Build & Smoke (page-control, P7.2c)
-        shell: pwsh
-        run: |
-          .\scripts\build.ps1 -Target page-control
-          .\scripts\smoke.ps1 -Target page-control -Screenshot "$env:GITHUB_WORKSPACE\bin\page-control-smoke.png"
+        run: .\scripts\smoke.ps1 -Target '${{ matrix.target }}' -Screenshot "$env:GITHUB_WORKSPACE\bin\${{ matrix.target }}-smoke.png"
       - name: Upload smoke screenshot
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: smoke-screenshots
-          path: bin/*-smoke.png
-          if-no-files-found: warn
+          name: smoke-${{ matrix.target }}
+          path: bin/${{ matrix.target }}-smoke.png
+          if-no-files-found: error
+          retention-days: 14

@@ -511,11 +511,20 @@ func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
 	case "Text":
 		rc.applyProp(e, key, "") // 挂载默认：空文本
 		return true
+	case "_bind":
+		// 绑定依赖只供 App 收集 State 订阅；真实 native 解绑由对应公开
+		// 属性（例如 Scroll）处理，不能按依赖值类型重复分派事件。
+		return false
 	default:
 		switch v.(type) {
 		case func(render.Event), func(string): // 事件移除：解绑（native SetEvent nil 分支）
 			rc.r.SetEvent(e.Handle, key, nil)
 			rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+		case render.ScrollTarget:
+			if s, ok := rc.r.(render.Scrollable); ok {
+				s.OnScroll(e.Handle, nil)
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+			}
 		case func(bool):
 			if c, ok := rc.r.(render.Checkable); ok {
 				c.OnCheckedChange(e.Handle, nil)

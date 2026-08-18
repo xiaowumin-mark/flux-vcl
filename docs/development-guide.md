@@ -33,7 +33,7 @@
 
 | 项 | 要求 | 说明 |
 |---|---|---|
-| Go | 1.22+ | `go.mod` 锁 `go 1.22`；CI 用 1.25.x，覆盖 1.22–1.27 |
+| Go | 1.22+ | `go.mod` 锁 `go 1.22`；CI 覆盖 1.22–1.26 与当前 1.27 RC |
 | 绑定依赖 | `github.com/energye/lcl v1.0.3` | **版本必须与 `libenergy-amd64.dll` 严格一致**（见 `docs/phase0-e2-libenergy-mapping.md`），升级需同步替换 DLL 并记录 |
 | 运行时 DLL | `libenergy-amd64.dll` | 构建脚本复制到 exe 旁；可用 `FVCL_LIBENERGY_DLL` 指定路径 |
 | 资源生成 | go-winres | 生成 `rsrc_windows_amd64.syso`（manifest/icon/version） |
@@ -98,7 +98,13 @@
 - **文件**：`<被测文件>_test.go`（如 `state_test.go`、`inspector_test.go`），跨特性收尾测试用功能域名（如 `phase5_test.go`、`scroll_inspect_test.go`）。
 - **并发**：涉及 goroutine / 跨线程 marshalling 的测试必须用 `go test -race` 通过（如 Phase 2 的 5 goroutine 并发 Set）。
 - **覆盖**：新功能必须带测试；修 bug 先加复现测试再修。
-- **CI 红线**：`go test ./...` + `go vet ./...` 全绿；冒烟示例（basic/events/phase5/form-controls/virtual-list/inspector/plugin-badge）由 CI 构建 + 截图验证。
+- **CI 红线**：Go 1.22–1.26 与当前 1.27rc3 的 `go test ./...`、1.27rc3 工具链
+  `go vet ./...` 与
+  `go test -race ./...` 全绿；DLL 到位且非 race 时 native probe 不得跳过；全部公开
+  examples 由 Windows CI 独立构建/冒烟并上传经像素检查的非空截图。
+- **性能基线**：基准必须 `-benchmem` 并记录环境、mutation 数和样本结果；耗时用于
+  固定环境的趋势比较，不给共享 runner 设置绝对阈值。当前记录见
+  [performance-baseline.md](performance-baseline.md)。
 
 ---
 

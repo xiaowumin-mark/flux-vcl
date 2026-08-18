@@ -154,11 +154,15 @@ func TestComboBoxExplicitControlledState(t *testing.T) {
 	selected := flux.NewState(-1)
 
 	app.Mount(func() flux.Widget {
-		return flux.Window(flux.ComboBox(
-			flux.Key("combo"),
-			flux.Items([]string{"red", "green", "blue"}),
-			flux.SelectedIndex(selected.Get()),
-			flux.OnSelectionChange(func(index int) { selected.Set(index) }),
+		return flux.Window(flux.Column(
+			flux.ComboBox(
+				flux.Key("combo"),
+				flux.Items([]string{"red", "green", "blue"}),
+				flux.SelectedIndex(selected.Get()),
+				flux.OnSelectionChange(func(index int) { selected.Set(index) }),
+			),
+			// 显式受控状态仍需订阅 App；回显同时证明回调后的 build 确实执行。
+			flux.Text(flux.Bind(selected), flux.Key("selected-value")),
 		))
 	})
 	h := findByKey(t, app.Root(), "combo").Handle
@@ -174,6 +178,9 @@ func TestComboBoxExplicitControlledState(t *testing.T) {
 	}
 	if got := m.SelectedIndex(h); got != 2 {
 		t.Errorf("受控回写后 SelectedIndex = %d，期望 2", got)
+	}
+	if got := el.Props.Int("SelectedIndex"); got != 2 {
+		t.Errorf("受控回写后 Element SelectedIndex = %d，期望 2", got)
 	}
 	ops := m.Ops()[base:]
 	if n := countOps(ops, render.OpCreate); n != 0 {

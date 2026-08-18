@@ -23,6 +23,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+$expectedDllSha256 = "2D13987CB5505D56C24D073F5CE8C1CE981A9BD1BD78D8BDE16C8EDBD8641300"
 
 # ---------- 1. 定位 libenergy DLL ----------
 $dllCandidates = @(
@@ -37,12 +38,17 @@ if ($dllCandidates.Count -eq 0) {
     exit 2
 }
 $dll = $dllCandidates[0]
-Write-Host "[build] DLL: $dll"
+$actualDllSha256 = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToUpperInvariant()
+if ($actualDllSha256 -ne $expectedDllSha256) {
+    throw "libenergy-amd64.dll SHA-256 不匹配：actual=$actualDllSha256 expected=$expectedDllSha256 path=$dll"
+}
+Write-Host "[build] DLL: $dll (SHA-256 verified)"
 
 # ---------- 2. 生成 Windows 资源（manifest/icon/version -> *.syso） ----------
 Push-Location (Join-Path $root "examples\$Target")
 try {
-    go run github.com/tc-hib/go-winres@latest make --arch $Arch
+    # 固定工具版本，避免 @latest 漂移改变发布资源或在 CI 中突然失效。
+    go run github.com/tc-hib/go-winres@v0.3.3 make --arch $Arch
     if ($LASTEXITCODE -ne 0) { throw "go-winres make 失败" }
 } finally { Pop-Location }
 

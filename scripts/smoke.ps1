@@ -296,8 +296,29 @@ function Assert-PageControlSnapshot {
     }
 }
 
-Get-Process $Target -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Milliseconds 300
+function Get-CounterButton {
+    param([IntPtr]$Window)
+
+    $script:counterButtons = New-Object System.Collections.Generic.List[IntPtr]
+    $callback = [W+WEnum]{ param($h,$l)
+        $className = New-Object System.Text.StringBuilder 256
+        [W]::GetClassNameW($h, $className, 256) | Out-Null
+        if ($className.ToString() -eq "Button") {
+            $caption = New-Object System.Text.StringBuilder 256
+            [W]::GetWindowTextW($h, $caption, 256) | Out-Null
+            $counter = 0
+            if ([int]::TryParse($caption.ToString(), [ref]$counter)) {
+                $script:counterButtons.Add($h) | Out-Null
+            }
+        }
+        return $true
+    }
+    [W]::EnumChildWindows($Window, $callback, [IntPtr]::Zero) | Out-Null
+    if ($script:counterButtons.Count -ne 1) {
+        throw "[smoke] FAIL: expected exactly one numeric counter Button, found $($script:counterButtons.Count)"
+    }
+    return $script:counterButtons[0]
+}
 
 $p = Start-Process -FilePath $exe -PassThru
 Write-Host "[smoke] started pid=$($p.Id) exe=$exe"
@@ -326,17 +347,9 @@ for ($i = 0; $i -lt 30; $i++) {
 if ($hwnd -eq [IntPtr]::Zero) { Write-Host "[smoke] FAIL: window not found"; exit 1 }
 Write-Host "[smoke] window found hwnd=$hwnd"
 
-# 找按钮（EnumChildWindows，class=Button）
-$cbBtn = [W+WEnum]{ param($h,$l)
-    $cs = New-Object System.Text.StringBuilder 256
-    [W]::GetClassNameW($h, $cs, 256) | Out-Null
-    if ($cs.ToString() -eq "Button") { $script:btn = $h }
-    return $true
-}
-$script:btn = [IntPtr]::Zero
-[W]::EnumChildWindows($hwnd, $cbBtn, [IntPtr]::Zero) | Out-Null
-if ($script:btn -eq [IntPtr]::Zero) { Write-Host "[smoke] FAIL: button not found"; exit 1 }
-$btn = $script:btn
+# CheckBox/RadioButton 也使用 Win32 Button class；只接受唯一数字 Caption 的
+# smoke counter，避免枚举顺序把表单控件误当作点击目标。
+$btn = Get-CounterButton $hwnd
 
 $b0 = New-Object System.Text.StringBuilder 256
 [W]::GetWindowTextW($btn, $b0, 256) | Out-Null
@@ -427,13 +440,10 @@ if ($Target -eq "inspector") {
     }
 
     for ($click = 0; $click -lt 2; $click++) {
-        $script:btn = [IntPtr]::Zero
-        [W]::EnumChildWindows($hwnd, $cbBtn, [IntPtr]::Zero) | Out-Null
-        if ($script:btn -eq [IntPtr]::Zero) { Write-Host "[smoke] FAIL: rebuilt button not found"; exit 1 }
-        Send-WindowMessage $script:btn 0x00F5 | Out-Null
+        $btn = Get-CounterButton $hwnd
+        Send-WindowMessage $btn 0x00F5 | Out-Null
         Start-Sleep -Milliseconds 300
     }
-    $btn = $script:btn
     $b3 = New-Object System.Text.StringBuilder 256
     [W]::GetWindowTextW($btn, $b3, 256) | Out-Null
     if ($b3.ToString() -ne "3") {
@@ -473,35 +483,22 @@ if ($Target -eq "inspector") {
     Write-Host "[smoke] PASS: Inspector event and rebuild views verified"
 
     if ($Screenshot) {
-        $bmp = $null
-        $g = $null
         try {
-            Add-Type -AssemblyName System.Windows.Forms
-            Add-Type -AssemblyName System.Drawing
-            $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-            $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-            $bmp.Save($Screenshot, [System.Drawing.Imaging.ImageFormat]::Png)
-            Write-Host "[smoke] screenshot saved: $Screenshot"
+            $captureEvidence = Save-WindowScreenshot `
+                -Handle $script:inspectorHwnd `
+                -Path $Screenshot `
+                -AllowScreenFallback $true
+            Write-Host "[smoke] screenshot saved: $Screenshot ($captureEvidence)"
         } catch {
-            Write-Host "[smoke] WARN screenshot failed (headless?): $_"
-        } finally {
-            try {
-                if ($null -ne $g) { $g.Dispose() }
-            } finally {
-                if ($null -ne $bmp) { $bmp.Dispose() }
-            }
+            Write-Host "[smoke] FAIL: Inspector screenshot is not valid: $_"
+            exit 1
         }
     }
 
     # 关闭工具窗后目标 App 仍应可交互，证明关闭只影响 Inspector。
     [W]::PostMessage($script:inspectorHwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
     Start-Sleep -Milliseconds 300
-    $script:btn = [IntPtr]::Zero
-    [W]::EnumChildWindows($hwnd, $cbBtn, [IntPtr]::Zero) | Out-Null
-    if ($script:btn -eq [IntPtr]::Zero) { Write-Host "[smoke] FAIL: target button missing after Inspector close"; exit 1 }
-    $btn = $script:btn
+    $btn = Get-CounterButton $hwnd
     Send-WindowMessage $btn 0x00F5 | Out-Null
     Start-Sleep -Milliseconds 300
     $b4 = New-Object System.Text.StringBuilder 256
@@ -519,17 +516,30 @@ if ($Target -eq "inspector") {
             -AllowScreenFallback:($Target -ne "page-control")
         Write-Host "[smoke] screenshot saved: $Screenshot ($captureEvidence)"
     } catch {
-        if ($Target -eq "page-control") {
-            Write-Host "[smoke] FAIL: PageControl screenshot is not valid: $_"
-            exit 1
-        }
-        Write-Host "[smoke] WARN screenshot failed (headless?): $_"
+        Write-Host "[smoke] FAIL: screenshot is not valid: $_"
+        exit 1
+    }
+}
+
+if ($Screenshot) {
+    if (-not (Test-Path -LiteralPath $Screenshot -PathType Leaf) -or
+        (Get-Item -LiteralPath $Screenshot).Length -le 0) {
+        Write-Host "[smoke] FAIL: screenshot artifact is missing or empty: $Screenshot"
+        exit 1
     }
 }
 
 [W]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null   # WM_CLOSE
-if ($p.WaitForExit(8000)) { Write-Host "[smoke] PASS: process exited cleanly (code $($p.ExitCode))" }
-else { Write-Host "[smoke] FAIL: process did not exit"; Stop-Process -Id $p.Id -Force; exit 1 }
+if (-not $p.WaitForExit(8000)) {
+    Write-Host "[smoke] FAIL: process did not exit"
+    Stop-Process -Id $p.Id -Force
+    exit 1
+}
+if ($p.ExitCode -ne 0) {
+    Write-Host "[smoke] FAIL: process exited with code $($p.ExitCode)"
+    exit 1
+}
+Write-Host "[smoke] PASS: process exited cleanly (code 0)"
 
 Write-Host "[smoke] RESULT: PASS"
 } finally {

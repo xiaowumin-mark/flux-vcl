@@ -495,7 +495,7 @@ State 驱动更新，以及窗口关闭后无异常。
 
 ## Phase 7 — 工程化与生态 · 目标：可用、可信、可发布
 
-> **状态：进行中（7.1 Inspector、7.2 插件系统与 7.2c 分页容器已完成，2026-08-13）。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
+> **状态：进行中（7.1、7.2、7.2c 与 7.3a 基线门已完成，更新于 2026-08-18）。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
 > 指为 Inspector、插件验证与 7GUIs 首发示例补齐必要的内建控件和机制，不等于包装
 > energye/lcl 的全部控件。菜单、对话框、TreeView、图像/媒体、托盘等不属于 v0.1.0
 > 发布阻塞项，后续按真实用例或插件生态增量加入。
@@ -507,7 +507,7 @@ State 驱动更新，以及窗口关闭后无异常。
 | 7.1 | Inspector | Widget/Element/native 树、属性、布局、实际事件和 mutation 查看（design.md §18）；高亮任何原生控件重建。 | ✅ 完成 |
 | 7.2 | 插件系统 | `RegisterWidget` 注册、生命周期、布局与可选 Renderer 能力（design.md §19）；内建控件与第三方 builder 双轨隔离。 | ✅ 完成 |
 | 7.2c | 控件扩充批次 2 | 插件模型定案后实现 `PageControl/TabPage` 结构性容器，验证每页子树与 native parent 模型。 | ✅ 完成 |
-| 7.3 | 测试与 CI 强化 | 分 7.3a 基线门和 7.3b 发布门；D7 覆盖全量已发布控件、Windows 冒烟/截图、性能基准。 | ⬜ 未开始 |
+| 7.3 | 测试与 CI 强化 | 分 7.3a 基线门和 7.3b 发布门；D7 覆盖全量已发布控件、Windows 冒烟/截图、性能基准。 | 🟨 7.3a 完成；7.3b 待 7.5/7.6 |
 | 7.4 | 打包 | 安装器、DPI manifest/版本资源、DLL 版本校验、单 EXE 方案评估。 | ⬜ 未开始 |
 | 7.5 | 产品化与控件扩充批次 3 | 中英双语文档、全量示例、7GUIs；按示例机制逐项实现 `Slider`、`StringGrid`（native `TStringGrid`）、`Canvas/PaintBox`。 | ⬜ 未开始 |
 | 7.6 | Accessibility / i18n | 高对比度、键盘导航、焦点顺序、可访问名称/UIA 能力清单、国际化资源。 | ⬜ 未开始 |
@@ -653,6 +653,20 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 > UI 视觉验收证据。结论仅覆盖 7.2 插件系统；7.2c 分页容器按上方独立完成记录验收。
 
 #### 7.3 测试与 CI 强化
+
+> **7.3a 基线门已完成（2026-08-18）**：`control_contract_test.go` 固定 18 个内建公开
+> 控件的 inventory、mount、纯属性 patch 零重建和无事件同树零 mutation 基线；
+> 可配置 native 控件另测移除重置/事件解绑，具交互语义控件另测 State 回写，
+> `PluginWidget` 的 D7/生命周期由 `plugin_test.go` 独立覆盖。矩阵补出并修复了
+> `ListView` 移除 `ScrollOffset` 后旧原生回调残留及重复解绑的问题。CI 在 Go
+> 1.22–1.26 与当前 1.27rc3 上跑无头测试，并增加
+> vet/race、DLL 哈希验证、DLL 到位后的 non-race native probe，以及 9 个公开 examples
+> 的独立 Windows build/smoke/像素有效截图 artifact。控件挂载、纯属性 patch、Page
+> 切换和十万行列表更新基准及首份样本见 [performance-baseline.md](./performance-baseline.md)。
+> 本地逐项复跑 9 个公开 examples 均通过 build/smoke、专属交互断言与退出码 0，
+> 9 张像素有效 PNG 均非空（9,202–46,650 bytes）。
+> **7.3b 仍待 7.5/7.6**：`StringGrid` 更新、`Canvas/PaintBox` invalidate、全部 7GUIs
+> 以及键盘/高对比度/i18n 复测必须在对应实现完成后进入最终发布矩阵。
 
 - **7.3a**：批次 1/2 + 既有控件统一跑 mount、patch 不重建、移除重置、事件解绑、同树零 mutation、State 回写。
 - **7.3b**：批次 3、7.6 与全部 7GUIs 纳入同一矩阵；容器额外测 keyed 重排/native parent，绘制额外测 invalidate 不重建，并复跑键盘/高对比度/i18n smoke。

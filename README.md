@@ -113,6 +113,8 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 
 **P7.2c 分页容器 ✅ 完成**：公开 `PageControl` + `TabPage`（不虚构不存在的 `TabControl`），支持稳定页面 Key、受控 `SelectedIndex`、`OnSelectionChange`、每页独立 native parent、inactive 页面保活和 keyed 重排零重建。布局以 `8×32 DIP` 预算扣除页签边框/表头后填充页面客户区；`examples/page-control` 的 Windows smoke 连续切换并重排页面，校验 PageControl、TabSheet parent 与 Edit HWND 不变，同时保存经像素检查的目标窗口截图。Win32/LCL 的页签实际像素仍由 widgetset 主题/DPI 决定。
 
+**P7.3a 测试与 CI 基线门 ✅ 完成**：18 个内建公开控件进入统一 inventory、mount、原地 patch 与 D7c 基线，可配置 native 控件覆盖属性移除/事件解绑，具交互语义控件覆盖 State 回写；`PluginWidget` 的 D7/生命周期由插件测试独立覆盖。CI 覆盖 Go 1.22–1.26 与当前 1.27rc3、vet/race、真实 DLL native probe，并对全部 9 个公开示例分别执行 Windows build/smoke 与像素有效截图上传。控件挂载、纯属性 patch、Page 切换和十万行虚拟列表基准见 [性能基线](docs/performance-baseline.md)。7.3b 仍等待 7.5 的批次 3/全部 7GUIs 与 7.6，不提前标记完成。
+
 | 子任务 | 状态 |
 |---|---|
 | 6.1 ListView + 稳定 key（`ListView(count, itemH, builder)` + slot key=`row-i` 控件池复用；行内容不带数据 key） | ✅ `flux.ListView` + diff/layout `ListViewRow` 透明分支 |
@@ -154,6 +156,11 @@ app.Mount(func() flux.Widget {
 
 # 无头冒烟（验证窗口出现、按钮点击生效、干净退出）
 .\scripts\smoke.ps1
+
+# 全量质量门与性能样本（性能只记录趋势，不设脆弱绝对阈值）
+go test -race ./...
+go vet ./...
+go test . -run '^$' -bench Benchmark -benchmem
 
 # 或手动运行
 .\bin\basic.exe

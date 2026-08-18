@@ -136,7 +136,10 @@ chore/ci-windows-smoke
 - **标题** = 一条提交信息（`type(scope): subject`）。
 - **正文**：动机（为什么）、影响面（改了哪些包 / 是否动 API）、测试（新增了哪些无头测试、是否手动冒烟）。
 - 关联 issue：`Closes #123`。
-- 触发 CI：`go test ./...` + `go vet ./...` + 构建冒烟（basic/events/phase5/form-controls/virtual-list/inspector/plugin-badge/page-control）。
+- 触发 CI：`go test ./...` + `go vet ./...` + 构建冒烟（basic/layout/events/phase5/form-controls/virtual-list/inspector/plugin-badge/page-control）。
+- CI 还会在 Go 1.22–1.26 与当前 1.27rc3 上跑无头测试，在 1.27rc3 跑 `-race`，并在已校验 DLL
+  到位后执行 native probe；全部 9 个公开示例（含 layout/page-control）必须产出
+  经像素校验的非空截图 artifact。
 - 触及 API 或行为：必须同步更新 `design.md` / `README.md`。
 
 ---
@@ -162,3 +165,4 @@ chore/ci-windows-smoke
 | [docs/naming-conventions.md](docs/naming-conventions.md) | 命名规范：example / 包文件 / 标识符 / 资源 / 提交词汇 |
 | [docs/design.md](docs/design.md) | 架构与设计（三棵树、布局、State、事件、主题…） |
 | [docs/development-plan.md](docs/development-plan.md) | Phase 0–7 计划、架构基线决策 D1–D7 与验收标准 |
+| [docs/performance-baseline.md](docs/performance-baseline.md) | 发布性能样本、复跑命令与趋势比较规则 |
