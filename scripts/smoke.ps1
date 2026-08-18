@@ -2,8 +2,9 @@
 .SYNOPSIS
   FluxVCL 无头冒烟脚本（Phase 0.3，0.5 CI 复用）。
 
-  启动目标 exe，用 Win32 API 验证：主窗口出现 -> 按钮存在 -> 模拟点击 ->
-  按钮数字恰好 +1（点击生效）-> 目标专用断言 -> WM_CLOSE 后进程干净退出。
+  启动目标 exe，用 Win32 API 验证主窗口、真实业务交互、可选截图和干净退出。
+  既有示例继续使用唯一数字按钮；7GUIs 使用各自的业务级专用断言，不向产品
+  界面插入测试专用控件。
 
   注意：LCL 的 TLabel 无独立 HWND（自绘在父窗体表面），冒烟通过按钮文本
   观测"点击生效"，这也是 FluxVCL 需要记住的工程约束。PageControl 目标还会
@@ -46,18 +47,38 @@ public static class W {
     [DllImport("user32.dll")]
     public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")]
+    public static extern bool IsWindowEnabled(IntPtr h);
+    [DllImport("user32.dll")]
     public static extern IntPtr GetParent(IntPtr h);
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr h, out RECT rect);
     [DllImport("user32.dll")]
+    public static extern bool GetClientRect(IntPtr h, out RECT rect);
+    [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetFocus(IntPtr h);
+    [DllImport("user32.dll")]
+    public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(IntPtr h);
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
     [DllImport("user32.dll")]
     public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr h, out uint processId);
     [DllImport("user32.dll", SetLastError=true)]
+    public static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO info);
+    [DllImport("user32.dll", SetLastError=true)]
     public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr wp, IntPtr lp,
         uint flags, uint timeout, out UIntPtr result);
+    [DllImport("user32.dll", EntryPoint="SendMessageW", SetLastError=true)]
+    public static extern IntPtr SendMessageSelection(IntPtr h, uint m, out uint start, out uint end);
     [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW", CharSet=CharSet.Unicode,
         SetLastError=true)]
     public static extern IntPtr SendMessageTimeoutText(IntPtr h, uint m, IntPtr wp, StringBuilder lp,
@@ -66,6 +87,18 @@ public static class W {
     public static extern bool PostMessage(IntPtr h, uint m, IntPtr wp, IntPtr lp);
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct GUITHREADINFO {
+        public int cbSize;
+        public uint flags;
+        public IntPtr hwndActive;
+        public IntPtr hwndFocus;
+        public IntPtr hwndCapture;
+        public IntPtr hwndMenuOwner;
+        public IntPtr hwndMoveSize;
+        public IntPtr hwndCaret;
+        public RECT rcCaret;
+    }
 }
 '@
 
@@ -323,6 +356,508 @@ function Get-CounterButton {
     return $script:counterButtons[0]
 }
 
+function Get-ChildWindowSnapshot {
+    param([IntPtr]$Window)
+
+    $script:smokeChildWindows = New-Object System.Collections.Generic.List[object]
+    $callback = [W+WEnum]{ param($h,$l)
+        $className = New-Object System.Text.StringBuilder 256
+        [W]::GetClassNameW($h, $className, 256) | Out-Null
+        $rect = New-Object W+RECT
+        [W]::GetWindowRect($h, [ref]$rect) | Out-Null
+        $script:smokeChildWindows.Add([PSCustomObject]@{
+            Handle = $h
+            Class = $className.ToString()
+            Text = ""
+            Rect = $rect
+            Visible = [W]::IsWindowVisible($h)
+            Enabled = [W]::IsWindowEnabled($h)
+        }) | Out-Null
+        return $true
+    }
+    [W]::EnumChildWindows($Window, $callback, [IntPtr]::Zero) | Out-Null
+    $windows = @($script:smokeChildWindows.ToArray())
+    foreach ($child in $windows) {
+        # GetWindowTextW cannot retrieve another process's Edit contents reliably.
+        # WM_GETTEXT executes in the owning GUI thread and reflects controlled patches.
+        $child.Text = Get-ChildWindowText $child.Handle
+    }
+    return $windows
+}
+
+function Get-UniqueChildWindow {
+    param(
+        [IntPtr]$Window,
+        [string]$ClassName,
+        [string]$Text = ""
+    )
+
+    $matches = @(Get-ChildWindowSnapshot $Window | Where-Object {
+        $_.Class -eq $ClassName -and (-not $Text -or $_.Text -eq $Text)
+    })
+    if ($matches.Count -ne 1) {
+        throw "[smoke] FAIL: expected one child class='$ClassName' text='$Text', found $($matches.Count)"
+    }
+    return $matches[0]
+}
+
+function Get-ChildWindowText {
+    param([IntPtr]$Handle)
+
+    $capacity = 4096
+    $text = New-Object System.Text.StringBuilder $capacity
+    Send-WindowTextMessage $Handle 0x000D ([IntPtr]$capacity) $text | Out-Null # WM_GETTEXT
+    return $text.ToString()
+}
+
+function Set-ChildFocus {
+    param(
+        [IntPtr]$Window,
+        [IntPtr]$Handle
+    )
+
+    [uint32]$targetProcess = 0
+    $targetThread = [W]::GetWindowThreadProcessId($Handle, [ref]$targetProcess)
+    $currentThread = [W]::GetCurrentThreadId()
+    $attached = $false
+    if ($currentThread -ne $targetThread) {
+        $attached = [W]::AttachThreadInput($currentThread, $targetThread, $true)
+    }
+    try {
+        [W]::SetForegroundWindow($Window) | Out-Null
+        [W]::SetFocus($Handle) | Out-Null
+    } finally {
+        if ($attached) {
+            [W]::AttachThreadInput($currentThread, $targetThread, $false) | Out-Null
+        }
+    }
+}
+
+function Get-FocusedWindow {
+    param([IntPtr]$Handle)
+
+    [uint32]$targetProcess = 0
+    $targetThread = [W]::GetWindowThreadProcessId($Handle, [ref]$targetProcess)
+    $info = New-Object W+GUITHREADINFO
+    $info.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($info)
+    if (-not [W]::GetGUIThreadInfo($targetThread, [ref]$info)) {
+        $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "[smoke] FAIL: GetGUIThreadInfo failed for hwnd=$Handle error=$errorCode"
+    }
+    return $info.hwndFocus
+}
+
+function Assert-EditFocusAndCaret {
+    param(
+        [object]$Edit,
+        [string]$Context
+    )
+
+    $focused = Get-FocusedWindow $Edit.Handle
+    if ($focused -ne $Edit.Handle) {
+        throw "[smoke] FAIL: $Context moved focus from hwnd=$($Edit.Handle) to hwnd=$focused"
+    }
+    [uint32]$start = 0
+    [uint32]$end = 0
+    [W]::SendMessageSelection($Edit.Handle, 0x00B0, [ref]$start, [ref]$end) | Out-Null # EM_GETSEL
+    $length = (Get-ChildWindowText $Edit.Handle).Length
+    if ($start -ne $length -or $end -ne $length) {
+        throw "[smoke] FAIL: $Context moved the caret/selection: start=$start end=$end textLength=$length"
+    }
+}
+
+function Replace-EditTextWithASCII {
+    param(
+        [IntPtr]$Window,
+        [object]$Edit,
+        [string]$Text
+    )
+
+    $x = [int](($Edit.Rect.Left + $Edit.Rect.Right) / 2)
+    $y = [int](($Edit.Rect.Top + $Edit.Rect.Bottom) / 2)
+    Invoke-ScreenClick $Window $x $y
+    Start-Sleep -Milliseconds 100
+    Set-ChildFocus $Window $Edit.Handle
+    $localX = [int](($Edit.Rect.Right - $Edit.Rect.Left) / 2)
+    $localY = [int](($Edit.Rect.Bottom - $Edit.Rect.Top) / 2)
+    $point = [IntPtr](($localY -shl 16) -bor ($localX -band 0xFFFF))
+    Send-WindowMessage $Edit.Handle 0x0201 ([IntPtr]1) $point | Out-Null # WM_LBUTTONDOWN
+    Send-WindowMessage $Edit.Handle 0x0202 ([IntPtr]0) $point | Out-Null # WM_LBUTTONUP
+    Send-WindowMessage $Edit.Handle 0x00B1 ([IntPtr]0) ([IntPtr](-1)) | Out-Null # EM_SETSEL all
+    foreach ($character in $Text.ToCharArray()) {
+        $code = [int][char]$character
+        if ($character -ge 'a' -and $character -le 'z') {
+            $code = [int][char]([char]::ToUpperInvariant($character))
+        } elseif ($character -eq '-') {
+            $code = 0xBD # VK_OEM_MINUS
+        } elseif ($character -lt '0' -or $character -gt '9') {
+            throw "Replace-EditTextWithASCII does not support '$character'"
+        }
+        Send-WindowMessage $Edit.Handle 0x0102 ([IntPtr]$code) | Out-Null # WM_CHAR
+    }
+}
+
+function Invoke-ScreenClick {
+    param(
+        [IntPtr]$Window,
+        [int]$X,
+        [int]$Y
+    )
+
+    [W]::SetForegroundWindow($Window) | Out-Null
+    $windowRect = New-Object W+RECT
+    if (-not [W]::GetWindowRect($Window, [ref]$windowRect)) {
+        throw "[smoke] FAIL: GetWindowRect failed before pointer input"
+    }
+    $titleX = [int](($windowRect.Left + $windowRect.Right) / 2)
+    $titleY = $windowRect.Top + 10
+    if (-not [W]::SetCursorPos($titleX, $titleY)) {
+        throw "[smoke] FAIL: SetCursorPos failed for title activation"
+    }
+    [W]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 70
+    [W]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 200
+    if (-not [W]::SetCursorPos($X, $Y)) {
+        throw "[smoke] FAIL: SetCursorPos failed for ($X,$Y)"
+    }
+    Start-Sleep -Milliseconds 100
+    [W]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero) # MOUSEEVENTF_LEFTDOWN
+    Start-Sleep -Milliseconds 70
+    [W]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero) # MOUSEEVENTF_LEFTUP
+}
+
+function Assert-CounterInteraction {
+    param([IntPtr]$Window)
+
+    $button = Get-UniqueChildWindow $Window "Button" "Count"
+    $initial = Get-ChildWindowText $Window
+    if ($initial -notlike "*7GUIs Counter (0)") {
+        throw "[smoke] FAIL: Counter initial title='$initial' (want count 0)"
+    }
+    foreach ($expected in @(1, 2)) {
+        Send-WindowMessage $button.Handle 0x00F5 | Out-Null # BM_CLICK
+        Start-Sleep -Milliseconds 250
+        $title = Get-ChildWindowText $Window
+        if ($title -notlike "*7GUIs Counter ($expected)") {
+            throw "[smoke] FAIL: Counter title='$title' after click (want count $expected)"
+        }
+    }
+    Write-Host "[smoke] PASS: Counter State update 0 -> 1 -> 2 verified"
+}
+
+function Assert-TemperatureInteraction {
+    param([IntPtr]$Window)
+
+    $edits = @(Get-ChildWindowSnapshot $Window |
+        Where-Object { $_.Class -eq "Edit" -and $_.Visible } |
+        Sort-Object { $_.Rect.Left })
+    if ($edits.Count -ne 2) {
+        throw "[smoke] FAIL: Temperature Converter expected 2 edits, found $($edits.Count)"
+    }
+    Replace-EditTextWithASCII $Window $edits[0] "100"
+    Start-Sleep -Milliseconds 350
+    $celsius = Get-ChildWindowText $edits[0].Handle
+    $fahrenheit = Get-ChildWindowText $edits[1].Handle
+    if ($celsius -ne "100" -or $fahrenheit -ne "212") {
+        throw "[smoke] FAIL: Temperature conversion produced '$celsius' C / '$fahrenheit' F (want 100/212)"
+    }
+    Assert-EditFocusAndCaret $edits[0] "valid Celsius rerender"
+    Replace-EditTextWithASCII $Window $edits[0] "x"
+    Start-Sleep -Milliseconds 250
+    if ((Get-ChildWindowText $edits[1].Handle) -ne "212") {
+        throw "[smoke] FAIL: invalid Celsius input overwrote the last valid Fahrenheit value"
+    }
+    Assert-EditFocusAndCaret $edits[0] "invalid Celsius rerender"
+    Write-Host "[smoke] PASS: Temperature conversion, invalid input, focus, and caret verified"
+}
+
+function Assert-FlightBookerInteraction {
+    param([IntPtr]$Window)
+
+    $combos = @(Get-ChildWindowSnapshot $Window | Where-Object { $_.Class -like "LCLComboBox*" })
+    if ($combos.Count -ne 1) {
+        throw "[smoke] FAIL: Flight Booker expected one LCL ComboBox, found $($combos.Count)"
+    }
+    $combo = $combos[0]
+    $book = Get-UniqueChildWindow $Window "Button" "Book"
+    $edits = @(Get-ChildWindowSnapshot $Window |
+        Where-Object { $_.Class -eq "Edit" -and $_.Visible -and $_.Text -match '^\d{4}-\d{2}-\d{2}$' } |
+        Sort-Object { $_.Rect.Top })
+    if ($edits.Count -ne 2 -or -not $edits[0].Enabled -or $edits[1].Enabled -or -not $book.Enabled) {
+        throw "[smoke] FAIL: Flight Booker initial one-way enabled state is invalid"
+    }
+
+    $comboX = [int](($combo.Rect.Left + $combo.Rect.Right) / 2)
+    $comboY = [int](($combo.Rect.Top + $combo.Rect.Bottom) / 2)
+    Invoke-ScreenClick $Window $comboX $comboY
+    Set-ChildFocus $Window $combo.Handle
+    Send-WindowMessage $combo.Handle 0x0100 ([IntPtr]0x28) | Out-Null # WM_KEYDOWN/VK_DOWN
+    Send-WindowMessage $combo.Handle 0x0101 ([IntPtr]0x28) | Out-Null # WM_KEYUP/VK_DOWN
+    Send-WindowMessage $combo.Handle 0x0100 ([IntPtr]0x0D) | Out-Null # WM_KEYDOWN/VK_RETURN
+    Send-WindowMessage $combo.Handle 0x0101 ([IntPtr]0x0D) | Out-Null # WM_KEYUP/VK_RETURN
+    Start-Sleep -Milliseconds 350
+    $edits = @(Get-ChildWindowSnapshot $Window |
+        Where-Object { $_.Class -eq "Edit" -and $_.Visible -and $_.Text -match '^\d{4}-\d{2}-\d{2}$' } |
+        Sort-Object { $_.Rect.Top })
+    $book = Get-UniqueChildWindow $Window "Button" "Book"
+    if ($edits.Count -ne 2 -or -not $edits[1].Enabled -or -not $book.Enabled) {
+        $comboIndex = [int](Send-WindowMessage $combo.Handle 0x0147) # CB_GETCURSEL
+        $editStates = @($edits | ForEach-Object { "$($_.Text):$($_.Enabled)" }) -join ','
+        throw "[smoke] FAIL: selecting return flight did not enable its date field and Book; combo=$comboIndex edits=$editStates book=$($book.Enabled)"
+    }
+
+    Replace-EditTextWithASCII $Window $edits[0] "x"
+    Start-Sleep -Milliseconds 300
+    $book = Get-UniqueChildWindow $Window "Button" "Book"
+    if ($book.Enabled) {
+        throw "[smoke] FAIL: invalid outbound date did not disable Book"
+    }
+    Write-Host "[smoke] PASS: Flight type, validation, and controlled Enabled behavior verified"
+}
+
+function Assert-TimerInteraction {
+    param([IntPtr]$Window)
+
+    $track = Get-UniqueChildWindow $Window "msctls_trackbar32"
+    $progress = Get-UniqueChildWindow $Window "msctls_progress32"
+    $reset = Get-UniqueChildWindow $Window "Button" "Reset"
+
+    # Home is a real TrackBar keyboard action. Merely observing TBM_GETPOS would be a
+    # false positive because the native control can move without Flux State writeback.
+    # The controlled duration becomes 0.1 s only when OnValueChange runs, making the
+    # ProgressBar converge to 100 within this short deadline.
+    Send-WindowMessage $track.Handle 0x0100 ([IntPtr]0x24) | Out-Null # WM_KEYDOWN/VK_HOME
+    Send-WindowMessage $track.Handle 0x0101 ([IntPtr]0x24) | Out-Null # WM_KEYUP/VK_HOME
+    Start-Sleep -Milliseconds 350
+    $position = [int](Send-WindowMessage $track.Handle 0x0400) # TBM_GETPOS
+    $completed = [int](Send-WindowMessage $progress.Handle 0x0408) # PBM_GETPOS
+    if ($position -ne 1 -or $completed -ne 100) {
+        throw "[smoke] FAIL: Timer Slider callback did not control duration: position=$position progress=$completed (want 1/100)"
+    }
+
+    Send-WindowMessage $reset.Handle 0x00F5 | Out-Null # BM_CLICK
+    $resetProgress = [int](Send-WindowMessage $progress.Handle 0x0408)
+    if ($resetProgress -gt 10) {
+        throw "[smoke] FAIL: Timer Reset did not clear progress immediately: $resetProgress"
+    }
+    Start-Sleep -Milliseconds 300
+    $replayed = [int](Send-WindowMessage $progress.Handle 0x0408)
+    if ($replayed -ne 100) {
+        throw "[smoke] FAIL: Timer did not complete again after Reset: $resetProgress->$replayed"
+    }
+    Write-Host "[smoke] PASS: Timer Slider State callback, Reset, and animation verified"
+}
+
+function Assert-GridInteraction {
+    param(
+        [IntPtr]$Window,
+        [string]$GridTarget
+    )
+
+    $grid = Get-UniqueChildWindow $Window "Window"
+    $dpi = [int][W]::GetDpiForWindow($grid.Handle)
+    if ($dpi -le 0) { $dpi = 96 }
+    $scale = $dpi / 96.0
+
+    if ($GridTarget -eq "7guis-crud") {
+        $x = $grid.Rect.Left + [int][Math]::Round(75 * $scale)
+        $y = $grid.Rect.Top + [int][Math]::Round(60 * $scale)
+        $expected = @("Max", "Mustermann")
+    } else {
+        $x = $grid.Rect.Left + [int][Math]::Round(102 * $scale)
+        $y = $grid.Rect.Top + [int][Math]::Round(36 * $scale)
+        $expected = @("=A1+2")
+    }
+    Write-Host "[smoke] Grid input target hwnd=$($grid.Handle) dpi=$dpi point=$x,$y"
+
+    $observed = @()
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        Invoke-ScreenClick $Window $x $y
+        Start-Sleep -Milliseconds 500
+        Send-WindowMessage $Window 0x0000 | Out-Null # WM_NULL: drain queued UI work before reading HWND text
+        $observed = @(Get-ChildWindowSnapshot $Window |
+            Where-Object { $_.Class -eq "Edit" } |
+            ForEach-Object { $_.Text })
+        $missing = @($expected | Where-Object { $observed -notcontains $_ })
+        if ($missing.Count -eq 0) { break }
+    }
+    $missing = @($expected | Where-Object { $observed -notcontains $_ })
+    if ($missing.Count -ne 0) {
+        throw "[smoke] FAIL: $GridTarget native Grid selection did not update controlled inputs; texts='$($observed -join '|')'"
+    }
+    if ($GridTarget -eq "7guis-cells") {
+        [W]::SetFocus($grid.Handle) | Out-Null
+        Send-WindowMessage $grid.Handle 0x0100 ([IntPtr]0x71) | Out-Null # WM_KEYDOWN/VK_F2
+        Send-WindowMessage $grid.Handle 0x0101 ([IntPtr]0x71) | Out-Null # WM_KEYUP/VK_F2
+        Start-Sleep -Milliseconds 200
+        $children = @(Get-ChildWindowSnapshot $Window)
+        $formula = @($children | Where-Object { $_.Class -eq "Edit" -and $_.Text -eq "=A1+2" })
+        $inplace = @($children | Where-Object { $_.Class -eq "Edit" -and $_.Text -eq "3" })
+        if ($formula.Count -ne 1 -or $inplace.Count -ne 1) {
+            throw "[smoke] FAIL: Cells could not identify formula/in-place editors after B1 selection"
+        }
+
+        Send-WindowMessage $inplace[0].Handle 0x00B1 ([IntPtr]0) ([IntPtr](-1)) | Out-Null # EM_SETSEL all
+        Send-WindowMessage $inplace[0].Handle 0x0102 ([IntPtr]0x37) | Out-Null # WM_CHAR '7'
+        Start-Sleep -Milliseconds 150
+        $formulaX = [int](($formula[0].Rect.Left + $formula[0].Rect.Right) / 2)
+        $formulaY = [int](($formula[0].Rect.Top + $formula[0].Rect.Bottom) / 2)
+        Invoke-ScreenClick $Window $formulaX $formulaY # focus loss commits the in-place edit
+        Start-Sleep -Milliseconds 400
+        $formulaText = Get-ChildWindowText $formula[0].Handle
+        if ($formulaText -ne "7") {
+            throw "[smoke] FAIL: Cells native Grid edit did not reach controlled formula State: '$formulaText'"
+        }
+        Write-Host "[smoke] PASS: Cells native TStringGrid selection and edit callbacks verified"
+        return
+    }
+    Write-Host "[smoke] PASS: $GridTarget native TStringGrid selection callback verified"
+}
+
+function Measure-CentralBitmapDifference {
+    param(
+        [string]$BeforePath,
+        [string]$AfterPath
+    )
+
+    Add-Type -AssemblyName System.Drawing
+    $before = $null
+    $after = $null
+    try {
+        $before = [Drawing.Bitmap]::new($BeforePath)
+        $after = [Drawing.Bitmap]::new($AfterPath)
+        if ($before.Width -ne $after.Width -or $before.Height -ne $after.Height) {
+            throw "PaintBox screenshots changed dimensions"
+        }
+        $left = [int]($before.Width * 0.2)
+        $right = [int]($before.Width * 0.8)
+        $top = [int]($before.Height * 0.2)
+        $bottom = [int]($before.Height * 0.8)
+        $different = 0
+        for ($y = $top; $y -lt $bottom; $y++) {
+            for ($x = $left; $x -lt $right; $x++) {
+                if ($before.GetPixel($x, $y).ToArgb() -ne $after.GetPixel($x, $y).ToArgb()) {
+                    $different++
+                }
+            }
+        }
+        return $different
+    } finally {
+        if ($null -ne $before) { $before.Dispose() }
+        if ($null -ne $after) { $after.Dispose() }
+    }
+}
+
+function Assert-PaintInteraction {
+    param([IntPtr]$Window)
+
+    $undo = Get-UniqueChildWindow $Window "Button" "Undo"
+    $redo = Get-UniqueChildWindow $Window "Button" "Redo"
+    if ($undo.Enabled) {
+        throw "[smoke] FAIL: Circle Drawer Undo unexpectedly enabled before drawing"
+    }
+    if ($redo.Enabled) {
+        throw "[smoke] FAIL: Circle Drawer Redo unexpectedly enabled before drawing"
+    }
+
+    $beforePath = Join-Path ([IO.Path]::GetTempPath()) "flux-vcl-paint-$([Guid]::NewGuid()).before.png"
+    $afterPath = Join-Path ([IO.Path]::GetTempPath()) "flux-vcl-paint-$([Guid]::NewGuid()).after.png"
+    try {
+        Save-WindowScreenshot -Handle $Window -Path $beforePath -AllowScreenFallback $true | Out-Null
+        $client = New-Object W+RECT
+        if (-not [W]::GetClientRect($Window, [ref]$client)) {
+            throw "[smoke] FAIL: Circle Drawer GetClientRect failed"
+        }
+        $x = [int](($client.Right - $client.Left) / 2)
+        $y = [int](($client.Bottom - $client.Top) / 2)
+        $point = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
+        Send-WindowMessage $Window 0x0201 ([IntPtr]1) $point | Out-Null # WM_LBUTTONDOWN
+        Send-WindowMessage $Window 0x0202 ([IntPtr]0) $point | Out-Null # WM_LBUTTONUP
+        Start-Sleep -Milliseconds 500
+
+        $undo = Get-UniqueChildWindow $Window "Button" "Undo"
+        $redo = Get-UniqueChildWindow $Window "Button" "Redo"
+        if (-not $undo.Enabled) {
+            throw "[smoke] FAIL: Circle Drawer mouse event did not enable Undo"
+        }
+        if ($redo.Enabled) {
+            throw "[smoke] FAIL: Circle Drawer Redo became enabled before Undo"
+        }
+        Save-WindowScreenshot -Handle $Window -Path $afterPath -AllowScreenFallback $true | Out-Null
+        $different = Measure-CentralBitmapDifference $beforePath $afterPath
+        if ($different -lt 100) {
+            throw "[smoke] FAIL: PaintBox center did not visibly repaint (different samples=$different)"
+        }
+
+        Send-WindowMessage $undo.Handle 0x00F5 | Out-Null # BM_CLICK
+        Start-Sleep -Milliseconds 350
+        $undo = Get-UniqueChildWindow $Window "Button" "Undo"
+        $redo = Get-UniqueChildWindow $Window "Button" "Redo"
+        if ($undo.Enabled -or -not $redo.Enabled) {
+            throw "[smoke] FAIL: Circle Drawer Undo/Redo state is invalid after Undo"
+        }
+        $undoPath = Join-Path ([IO.Path]::GetTempPath()) "flux-vcl-paint-$([Guid]::NewGuid()).undo.png"
+        try {
+            Save-WindowScreenshot -Handle $Window -Path $undoPath -AllowScreenFallback $true | Out-Null
+            $restored = Measure-CentralBitmapDifference $beforePath $undoPath
+            if ($restored -ge 100) {
+                throw "[smoke] FAIL: PaintBox surface did not return after Undo (different samples=$restored)"
+            }
+        } finally {
+            Remove-Item -LiteralPath $undoPath -Force -ErrorAction SilentlyContinue
+        }
+
+        Send-WindowMessage $redo.Handle 0x00F5 | Out-Null # BM_CLICK
+        Start-Sleep -Milliseconds 350
+        $undo = Get-UniqueChildWindow $Window "Button" "Undo"
+        $redo = Get-UniqueChildWindow $Window "Button" "Redo"
+        if (-not $undo.Enabled -or $redo.Enabled) {
+            throw "[smoke] FAIL: Circle Drawer Redo did not restore the undo state"
+        }
+
+        $radiusEdit = Get-UniqueChildWindow $Window "Edit"
+        if (-not $radiusEdit.Enabled -or $radiusEdit.Text -ne "30") {
+            throw "[smoke] FAIL: Circle Drawer selected radius editor is invalid after Redo"
+        }
+        Replace-EditTextWithASCII $Window $radiusEdit "60"
+        Start-Sleep -Milliseconds 400
+        if ((Get-ChildWindowText $radiusEdit.Handle) -ne "60") {
+            throw "[smoke] FAIL: Circle Drawer radius edit did not reach controlled State"
+        }
+        $resizedPath = Join-Path ([IO.Path]::GetTempPath()) "flux-vcl-paint-$([Guid]::NewGuid()).resized.png"
+        try {
+            Save-WindowScreenshot -Handle $Window -Path $resizedPath -AllowScreenFallback $true | Out-Null
+            $resizedDifference = Measure-CentralBitmapDifference $afterPath $resizedPath
+            if ($resizedDifference -lt 100) {
+                throw "[smoke] FAIL: Circle Drawer radius update did not visibly repaint (different samples=$resizedDifference)"
+            }
+        } finally {
+            Remove-Item -LiteralPath $resizedPath -Force -ErrorAction SilentlyContinue
+        }
+
+        $secondX = $x + 180
+        if ($secondX -gt $client.Right - 80) { $secondX = $x - 180 }
+        $secondPoint = [IntPtr](($y -shl 16) -bor ($secondX -band 0xFFFF))
+        Send-WindowMessage $Window 0x0201 ([IntPtr]1) $secondPoint | Out-Null # WM_LBUTTONDOWN
+        Send-WindowMessage $Window 0x0202 ([IntPtr]0) $secondPoint | Out-Null # WM_LBUTTONUP
+        Start-Sleep -Milliseconds 400
+        $radiusEdit = Get-UniqueChildWindow $Window "Edit"
+        Replace-EditTextWithASCII $Window $radiusEdit "25"
+        Start-Sleep -Milliseconds 350
+        Send-WindowMessage $Window 0x0201 ([IntPtr]1) $point | Out-Null # select the first circle
+        Send-WindowMessage $Window 0x0202 ([IntPtr]0) $point | Out-Null
+        Start-Sleep -Milliseconds 400
+        if ((Get-ChildWindowText $radiusEdit.Handle) -ne "60") {
+            throw "[smoke] FAIL: Circle Drawer did not select the original circle or restore its radius"
+        }
+        Write-Host "[smoke] PASS: PaintBox create/select/radius, repaint, Undo, and Redo verified (different samples=$different/$resizedDifference)"
+    } finally {
+        Remove-Item -LiteralPath $beforePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $afterPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $p = Start-Process -FilePath $exe -PassThru
 Write-Host "[smoke] started pid=$($p.Id) exe=$exe"
 $hwnd = [IntPtr]::Zero
@@ -350,33 +885,50 @@ for ($i = 0; $i -lt 30; $i++) {
 if ($hwnd -eq [IntPtr]::Zero) { Write-Host "[smoke] FAIL: window not found"; exit 1 }
 Write-Host "[smoke] window found hwnd=$hwnd"
 
-# CheckBox/RadioButton 也使用 Win32 Button class；只接受唯一数字 Caption 的
-# smoke counter，避免枚举顺序把表单控件误当作点击目标。
-$btn = Get-CounterButton $hwnd
-
-$b0 = New-Object System.Text.StringBuilder 256
-[W]::GetWindowTextW($btn, $b0, 256) | Out-Null
-Write-Host "[smoke] button before click: '$($b0.ToString())'"
-
 $pageBaseline = $null
-if ($Target -eq "page-control") {
-    $pageBaseline = Get-PageControlSnapshot $hwnd
-    Assert-PageControlSnapshot $pageBaseline 0
+$sevenGuiTargets = @(
+    "7guis-counter", "7guis-temperature-converter", "7guis-flight-booker",
+    "7guis-timer", "7guis-crud", "7guis-circle-drawer", "7guis-cells"
+)
+$isSevenGui = $sevenGuiTargets -contains $Target
+if ($isSevenGui) {
+    switch ($Target) {
+        "7guis-counter" { Assert-CounterInteraction $hwnd }
+        "7guis-temperature-converter" { Assert-TemperatureInteraction $hwnd }
+        "7guis-flight-booker" { Assert-FlightBookerInteraction $hwnd }
+        "7guis-timer" { Assert-TimerInteraction $hwnd }
+        "7guis-crud" { Assert-GridInteraction $hwnd $Target }
+        "7guis-cells" { Assert-GridInteraction $hwnd $Target }
+        "7guis-circle-drawer" { Assert-PaintInteraction $hwnd }
+    }
+} else {
+    # Existing examples keep the historical unique numeric button contract. The
+    # 7GUIs targets above deliberately use business controls instead.
+    $btn = Get-CounterButton $hwnd
+
+    $b0 = New-Object System.Text.StringBuilder 256
+    [W]::GetWindowTextW($btn, $b0, 256) | Out-Null
+    Write-Host "[smoke] button before click: '$($b0.ToString())'"
+
+    if ($Target -eq "page-control") {
+        $pageBaseline = Get-PageControlSnapshot $hwnd
+        Assert-PageControlSnapshot $pageBaseline 0
+    }
+
+    Send-WindowMessage $btn 0x00F5 | Out-Null   # BM_CLICK
+    Start-Sleep -Milliseconds 500
+
+    $b1 = New-Object System.Text.StringBuilder 256
+    [W]::GetWindowTextW($btn, $b1, 256) | Out-Null
+    Write-Host "[smoke] button after click: '$($b1.ToString())'"
+    # 唯一 Button 的数字 Caption 由 State 驱动；严格验证点击后恰好 +1。
+    $beforeClick = 0
+    $afterClick = 0
+    if ([int]::TryParse($b0.ToString(), [ref]$beforeClick) -and
+        [int]::TryParse($b1.ToString(), [ref]$afterClick) -and
+        $afterClick -eq $beforeClick + 1) { Write-Host "[smoke] PASS: click handled" }
+    else { Write-Host "[smoke] FAIL: click not handled"; exit 1 }
 }
-
-Send-WindowMessage $btn 0x00F5 | Out-Null   # BM_CLICK
-Start-Sleep -Milliseconds 500
-
-$b1 = New-Object System.Text.StringBuilder 256
-[W]::GetWindowTextW($btn, $b1, 256) | Out-Null
-Write-Host "[smoke] button after click: '$($b1.ToString())'"
-# 唯一 Button 的数字 Caption 由 State 驱动；严格验证点击后恰好 +1。
-$beforeClick = 0
-$afterClick = 0
-if ([int]::TryParse($b0.ToString(), [ref]$beforeClick) -and
-    [int]::TryParse($b1.ToString(), [ref]$afterClick) -and
-    $afterClick -eq $beforeClick + 1) { Write-Host "[smoke] PASS: click handled" }
-else { Write-Host "[smoke] FAIL: click not handled"; exit 1 }
 
 if ($Target -eq "page-control") {
     # 三次连续切换同时反转 keyed 页序。选中数字索引 0->1->0->1，业务页面

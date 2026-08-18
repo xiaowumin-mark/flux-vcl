@@ -28,12 +28,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/energye/lcl/lcl"
-
 	flux "github.com/xiaowumin-mark/flux-vcl"
-	"github.com/xiaowumin-mark/flux-vcl/internal/diff"
-	"github.com/xiaowumin-mark/flux-vcl/internal/native"
-	"github.com/xiaowumin-mark/flux-vcl/internal/render"
+	"github.com/xiaowumin-mark/flux-vcl/native"
 )
 
 func main() {
@@ -66,9 +62,9 @@ func main() {
 	// findBounds 按稳定 key 从 Element 树读取该控件最近一次布局槽位（DIP）。
 	// 动画以槽位为起点，每帧 SetBounds 覆盖原生几何；下次 render 时布局不变则
 	// diff 不发 SetBounds（D2 逃逸口 + 布局零 mutation 协同），动画位置保持。
-	findBounds := func(key string) (render.Rect, bool) {
-		var walk func(e *diff.Element) *diff.Element
-		walk = func(e *diff.Element) *diff.Element {
+	findBounds := func(key string) (flux.Rect, bool) {
+		var walk func(e *flux.Element) *flux.Element
+		walk = func(e *flux.Element) *flux.Element {
 			if e.Key == key {
 				return e
 			}
@@ -81,14 +77,14 @@ func main() {
 		}
 		e := walk(app.Root())
 		if e == nil {
-			return render.Rect{}, false
+			return flux.Rect{}, false
 		}
 		if v, ok := e.Props.Get("Bounds"); ok {
-			if b, ok := v.(render.Rect); ok {
+			if b, ok := v.(flux.Rect); ok {
 				return b, true
 			}
 		}
-		return render.Rect{}, false
+		return flux.Rect{}, false
 	}
 
 	// slide 启动方块滑动动画（5.1）：ElasticOut 回弹，从布局槽位滑到窗体右缘。
@@ -108,7 +104,7 @@ func main() {
 		}
 		stopAnim = app.Animate(700*time.Millisecond, flux.ElasticOut, func(v float64) {
 			x := base.X + int(float64(endX-base.X)*v)
-			app.SetBounds("box", render.Rect{X: x, Y: base.Y, W: base.W, H: base.H})
+			app.SetBounds("box", flux.Rect{X: x, Y: base.Y, W: base.W, H: base.H})
 		})
 	}
 
@@ -187,5 +183,5 @@ func main() {
 		)
 	})
 
-	lcl.Application.Run()
+	native.Run()
 }

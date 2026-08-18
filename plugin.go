@@ -379,7 +379,7 @@ var builtInWidgetTypes = map[string]struct{}{
 	"Window": {}, "Column": {}, "Row": {}, "Expanded": {}, "Flexible": {},
 	"Component": {}, "ScrollBox": {}, "ListView": {}, "ListViewRow": {},
 	"Text": {}, "Button": {}, "Input": {}, "Memo": {}, "CheckBox": {},
-	"ComboBox": {}, "RadioButton": {}, "ProgressBar": {},
+	"ComboBox": {}, "RadioButton": {}, "ProgressBar": {}, "Slider": {}, "StringGrid": {}, "PaintBox": {},
 	"PageControl": {}, "TabPage": {},
 }
 

@@ -16,10 +16,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/energye/lcl/lcl"
 	flux "github.com/xiaowumin-mark/flux-vcl"
 	"github.com/xiaowumin-mark/flux-vcl/inspector"
-	"github.com/xiaowumin-mark/flux-vcl/internal/native"
+	"github.com/xiaowumin-mark/flux-vcl/native"
 )
 
 func main() {
@@ -65,5 +64,5 @@ func main() {
 	})
 
 	inspector.Open(app)
-	lcl.Application.Run()
+	native.Run()
 }

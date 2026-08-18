@@ -69,19 +69,58 @@ type Renderer struct {
 	next           render.Handle
 	form           lcl.IControl
 	formRef        *engForm
-	measureBmp     lcl.IBitmap                   // 共享测量画布（布局在 diff 前，控件未创建）
-	measureCache   map[string][2]int32           // 文本测量缓存（字体随 DPI 变化时失效）
-	dpi            int32                         // 当前显示器 DPI（0=未查询，invalidateDPI 清零强制重查）
-	canvasDpi      int32                         // 测量 bitmap DC 的 DPI（进程内固定，缓存一次；0=未查询）
-	resizeFn       func(w, h int)                // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
-	closeFn        func()                        // OnClose 回调（demo 停止后台轮询）
-	closed         atomic.Bool                   // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
-	pendingDestroy []lcl.IControl                // D4 延后销毁队列：render 完成时 DrainDestroy 统一 Free
-	scrolls        map[render.Handle]*listScroll // Phase 6 ListView 滚动状态（Scrollable 实现）
-	radios         map[render.Handle]*radioState // RadioButton 的逻辑分组元数据（不依赖缺失的 LCL setter）
-	radioHosts     map[radioHostKey]*radioHost   // (原生父句柄, RadioButton 句柄) → 隔离用 TPanel
-	pendingHosts   []*radioHost                  // 已脱离逻辑父级、待普通控件释放后销毁的内部 Panel
-	pages          map[render.Handle]*pageState  // PageControl 的受控选择、页面顺序与事件状态
+	measureBmp     lcl.IBitmap                    // 共享测量画布（布局在 diff 前，控件未创建）
+	measureCache   map[string][2]int32            // 文本测量缓存（字体随 DPI 变化时失效）
+	dpi            int32                          // 当前显示器 DPI（0=未查询，invalidateDPI 清零强制重查）
+	canvasDpi      int32                          // 测量 bitmap DC 的 DPI（进程内固定，缓存一次；0=未查询）
+	resizeFn       func(w, h int)                 // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
+	closeFn        func()                         // OnClose 回调（demo 停止后台轮询）
+	closed         atomic.Bool                    // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
+	pendingDestroy []lcl.IControl                 // D4 延后销毁队列：render 完成时 DrainDestroy 统一 Free
+	scrolls        map[render.Handle]*listScroll  // Phase 6 ListView 滚动状态（Scrollable 实现）
+	radios         map[render.Handle]*radioState  // RadioButton 的逻辑分组元数据（不依赖缺失的 LCL setter）
+	radioHosts     map[radioHostKey]*radioHost    // (原生父句柄, RadioButton 句柄) → 隔离用 TPanel
+	pendingHosts   []*radioHost                   // 已脱离逻辑父级、待普通控件释放后销毁的内部 Panel
+	pages          map[render.Handle]*pageState   // PageControl 的受控选择、页面顺序与事件状态
+	texts          map[render.Handle]*textState   // Input/Memo 的程序化 SetText 应用门
+	sliders        map[render.Handle]*sliderState // Slider 的程序化应用门与值变化回调
+	paints         map[render.Handle]*paintState  // PaintBox 的稳定命令快照与原生绘制 surface
+	grids          map[render.Handle]*gridState   // StringGrid 的受控矩阵、选择与编辑事件状态
+	gridPollTimer  lcl.ITimer                     // Grid 选择轮询器；窗体拥有，空闲时禁用并复用
+	gridPollStop   func()                         // 当前启用周期的幂等停止函数；nil 表示空闲
+}
+
+type textState struct {
+	applying bool
+}
+
+type sliderState struct {
+	applying bool
+	onChange func(int)
+}
+
+type paintState struct {
+	control  lcl.IPaintBox
+	commands []render.PaintCommand
+}
+
+type gridEdit struct {
+	cell  render.GridCell
+	value string
+}
+
+type gridState struct {
+	control   lcl.IStringGrid
+	size      render.GridSize
+	headers   []string
+	widths    []int
+	cells     [][]string
+	editable  bool
+	selection render.GridSelection
+	applying  bool
+	onSelect  func(render.GridCell)
+	onEdit    func(render.GridCell, string)
+	pending   *gridEdit
 }
 
 type pageState struct {
@@ -90,6 +129,12 @@ type pageState struct {
 	onSelect func(int)
 	pages    []render.Handle
 }
+
+var (
+	_ render.SliderController = (*Renderer)(nil)
+	_ render.PaintController  = (*Renderer)(nil)
+	_ render.GridController   = (*Renderer)(nil)
+)
 
 // radioState 保存 RadioButton 的 Flux 逻辑父级、坐标和受控属性。TRadioButton 在
 // energye/lcl v1.0.3 中没有 GroupIndex setter，因此每个控件使用一个内部 TPanel
@@ -151,6 +196,8 @@ func NewRenderer() *Renderer {
 func (r *Renderer) Create(widgetType string) render.Handle {
 	var c lcl.IControl
 	var ls *listScroll // ListView 的滚动状态（switch 内构建，h 分配后登记）
+	var paint *paintState
+	var grid *gridState
 	switch widgetType {
 	case "Window":
 		c = r.form
@@ -170,6 +217,36 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 		c = lcl.NewRadioButton(r.form)
 	case "ProgressBar":
 		c = lcl.NewProgressBar(r.form)
+	case "Slider":
+		slider := lcl.NewTrackBar(r.form)
+		slider.SetAlign(types.AlNone)
+		slider.SetOrientation(types.TrHorizontal)
+		slider.SetTickStyle(types.TsNone)
+		c = slider
+	case "PaintBox":
+		box := lcl.NewPaintBox(r.form)
+		box.SetAlign(types.AlNone)
+		paint = &paintState{control: box, commands: []render.PaintCommand{}}
+		box.SetOnPaint(func(_ lcl.IObject) {
+			render.Guard("paint.OnPaint", func() { r.paint(paint) })
+		})
+		c = box
+	case "StringGrid":
+		control := lcl.NewStringGrid(r.form)
+		control.SetAlign(types.AlNone)
+		control.SetFixedCols(0)
+		control.SetFixedRows(0)
+		control.SetColCount(1)
+		control.SetRowCount(1)
+		grid = &gridState{
+			control: control,
+			size:    render.GridSize{Columns: 1},
+			cells:   [][]string{},
+			selection: render.GridSelection{
+				Cell: render.GridCell{Row: -1, Column: -1},
+			},
+		}
+		c = control
 	case "PageControl":
 		page := lcl.NewPageControl(r.form)
 		page.SetAlign(types.AlNone)
@@ -223,6 +300,30 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 			r.pages = make(map[render.Handle]*pageState)
 		}
 		r.pages[h] = &pageState{selected: -1}
+	}
+	if widgetType == "Input" || widgetType == "Memo" {
+		if r.texts == nil {
+			r.texts = make(map[render.Handle]*textState)
+		}
+		r.texts[h] = &textState{}
+	}
+	if widgetType == "Slider" {
+		if r.sliders == nil {
+			r.sliders = make(map[render.Handle]*sliderState)
+		}
+		r.sliders[h] = &sliderState{}
+	}
+	if paint != nil {
+		if r.paints == nil {
+			r.paints = make(map[render.Handle]*paintState)
+		}
+		r.paints[h] = paint
+	}
+	if grid != nil {
+		if r.grids == nil {
+			r.grids = make(map[render.Handle]*gridState)
+		}
+		r.grids[h] = grid
 	}
 	return h
 }
@@ -301,6 +402,7 @@ func (r *Renderer) Destroy(h render.Handle) {
 		r.removeRadioFromHost(h, radio)
 		delete(r.radios, h)
 	}
+	grid, wasGrid := r.grids[h]
 	c := r.controls[h]
 	if c == nil || c == r.form {
 		return // 主窗体不显式 Free
@@ -315,6 +417,19 @@ func (r *Renderer) Destroy(h render.Handle) {
 	}
 	delete(r.controls, h)
 	delete(r.pages, h)
+	delete(r.texts, h)
+	delete(r.sliders, h)
+	delete(r.paints, h)
+	delete(r.grids, h)
+	if wasGrid {
+		grid.onSelect = nil
+		grid.onEdit = nil
+		grid.pending = nil
+		grid.control.SetOnAfterSelection(nil)
+		grid.control.SetOnSetEditText(nil)
+		grid.control.SetOnEditingDone(nil)
+		r.stopGridSelectionPollerIfIdle()
+	}
 	delete(r.scrolls, h) // ListView 滚动状态随控件销毁；滚动条由视口 owner 级联 Free
 	r.pendingDestroy = append(r.pendingDestroy, c)
 }
@@ -528,6 +643,12 @@ func (r *Renderer) SetEnabled(h render.Handle, enabled bool) {
 func (r *Renderer) SetText(h render.Handle, text string) {
 	c := r.controls[h]
 	if ed, ok := c.(lcl.ICustomEdit); ok {
+		state := r.texts[h]
+		if state != nil {
+			previous := state.applying
+			state.applying = true
+			defer func() { state.applying = previous }()
+		}
 		ed.SetText(text)
 	} else {
 		c.SetCaption(text)
@@ -551,6 +672,74 @@ func (r *Renderer) SetColor(h render.Handle, color render.Color) {
 func (r *Renderer) SetFontColor(h render.Handle, color render.Color) {
 	if f := r.controls[h].Font(); f != nil {
 		f.SetColor(colorToTColor(color))
+	}
+}
+
+// SetPaintCommands 替换 PaintBox 的不可变命令快照；invalidate 由调用方通过
+// InvalidatePaint 独立控制。
+func (r *Renderer) SetPaintCommands(h render.Handle, commands []render.PaintCommand) {
+	paint := r.paints[h]
+	if paint == nil {
+		return
+	}
+	if err := render.ValidatePaintCommands(commands); err != nil {
+		panic(fmt.Sprintf("native: invalid PaintCommands for control %d: %v", h, err))
+	}
+	paint.commands = render.ClonePaintCommands(commands)
+}
+
+// InvalidatePaint 在不重建 TPaintBox 的情况下请求一次 WM_PAINT。
+func (r *Renderer) InvalidatePaint(h render.Handle) {
+	if paint := r.paints[h]; paint != nil {
+		paint.control.Invalidate()
+	}
+}
+
+// paint 在 TPaintBox.OnPaint 内执行当前命令快照。LCL Canvas 使用物理像素，
+// 因此所有 DIP 命令都在这里按 PaintBox 当前显示器 DPI 转换。
+func (r *Renderer) paint(paint *paintState) {
+	if paint == nil || paint.control == nil {
+		return
+	}
+	canvas := paint.control.Canvas()
+	if canvas == nil {
+		return
+	}
+	dpi := r.dpiAt()
+	brush := canvas.BrushToBrush()
+	pen := canvas.PenToPen()
+	for _, command := range paint.commands {
+		switch command.Kind {
+		case render.PaintClear:
+			brush.SetStyle(types.BsSolid)
+			brush.SetColor(colorToTColor(command.Color))
+			canvas.FillRectWithIntX4(0, 0, paint.control.ClientWidth(), paint.control.ClientHeight())
+		case render.PaintCircle:
+			if command.FillColor == 0 {
+				brush.SetStyle(types.BsClear)
+			} else {
+				brush.SetStyle(types.BsSolid)
+				brush.SetColor(colorToTColor(command.FillColor))
+			}
+			if command.StrokeColor == 0 {
+				pen.SetStyle(types.PsClear)
+			} else {
+				pen.SetStyle(types.PsSolid)
+				pen.SetColor(colorToTColor(command.StrokeColor))
+				width := render.DIPToPX(command.StrokeWidth, dpi)
+				if width < 1 {
+					width = 1
+				}
+				pen.SetWidth(int32(width))
+			}
+			x := render.DIPToPX(command.X, dpi)
+			y := render.DIPToPX(command.Y, dpi)
+			radius := render.DIPToPX(command.Radius, dpi)
+			canvas.EllipseWithIntX4(
+				int32(x-radius), int32(y-radius),
+				int32(x+radius), int32(y+radius),
+			)
+		}
 	}
 }
 
@@ -719,7 +908,9 @@ type checkableControl interface {
 
 // progressControl 是 TProgressBar 暴露的最小范围和值能力。
 type progressControl interface {
+	Min() int32
 	SetMin(int32)
+	Max() int32
 	SetMax(int32)
 	SetPosition(int32)
 }
@@ -803,7 +994,15 @@ func (r *Renderer) SetMinimum(h render.Handle, minimum int) {
 	if !ok {
 		return
 	}
-	c.SetMin(int32(minimum))
+	r.withSliderApplying(h, func() {
+		// Win32 clamps a new minimum to the current maximum. Expand the upper
+		// bound first when a controlled range moves wholly above the old range;
+		// the ordered Maximum patch immediately applies the final upper bound.
+		if value := int32(minimum); value > c.Max() {
+			c.SetMax(value)
+		}
+		c.SetMin(int32(minimum))
+	})
 }
 
 // SetMaximum 设置 ProgressBar 的最大值。
@@ -812,7 +1011,7 @@ func (r *Renderer) SetMaximum(h render.Handle, maximum int) {
 	if !ok {
 		return
 	}
-	c.SetMax(int32(maximum))
+	r.withSliderApplying(h, func() { c.SetMax(int32(maximum)) })
 }
 
 // SetValue 设置 ProgressBar 的当前位置。
@@ -821,7 +1020,420 @@ func (r *Renderer) SetValue(h render.Handle, value int) {
 	if !ok {
 		return
 	}
-	c.SetPosition(int32(value))
+	r.withSliderApplying(h, func() { c.SetPosition(int32(value)) })
+}
+
+func (r *Renderer) withSliderApplying(h render.Handle, fn func()) {
+	state := r.sliders[h]
+	if state == nil {
+		fn()
+		return
+	}
+	previous := state.applying
+	state.applying = true
+	defer func() { state.applying = previous }()
+	fn()
+}
+
+// SetSliderStep 设置 TrackBar 的方向键/行步长。鼠标拖动仍可产生范围内任意整数。
+func (r *Renderer) SetSliderStep(h render.Handle, step int) {
+	track, ok := r.controls[h].(lcl.ITrackBar)
+	if !ok {
+		return
+	}
+	track.SetLineSize(int32(step))
+}
+
+// OnSliderValueChange 绑定真实用户 TrackBar 变化；nil 清除绑定。程序化属性
+// 应用由 sliderState.applying 屏蔽，避免受控值回写形成事件环。
+func (r *Renderer) OnSliderValueChange(h render.Handle, fn func(int)) {
+	track, ok := r.controls[h].(lcl.ITrackBar)
+	state := r.sliders[h]
+	if !ok || state == nil {
+		return
+	}
+	state.onChange = fn
+	if fn == nil {
+		track.SetOnChange(nil)
+		return
+	}
+	track.SetOnChange(func(_ lcl.IObject) {
+		if state.applying || state.onChange == nil {
+			return
+		}
+		value := int(track.Position())
+		render.Guard("event.OnValueChange", func() { state.onChange(value) })
+	})
+}
+
+func (r *Renderer) withGridApplying(grid *gridState, fn func()) {
+	if grid == nil || fn == nil {
+		return
+	}
+	previous := grid.applying
+	grid.applying = true
+	defer func() { grid.applying = previous }()
+	fn()
+}
+
+func gridFixedRows(grid *gridState) int {
+	if grid != nil && len(grid.headers) > 0 {
+		return 1
+	}
+	return 0
+}
+
+func emptyNativeGridCells(size render.GridSize) [][]string {
+	values := make([][]string, size.Rows)
+	for row := range values {
+		values[row] = make([]string, size.Columns)
+	}
+	return values
+}
+
+func defaultGridSelection(size render.GridSize) render.GridSelection {
+	selection := render.GridSelection{Cell: render.GridCell{Row: -1, Column: -1}}
+	if size.Rows > 0 {
+		selection.Cell = render.GridCell{}
+	}
+	return selection
+}
+
+func discardGridEdit(grid *gridState) {
+	if grid != nil {
+		grid.pending = nil
+	}
+}
+
+func (r *Renderer) applyGridShape(grid *gridState) {
+	fixedRows := gridFixedRows(grid)
+	physicalRows := grid.size.Rows + fixedRows
+	if physicalRows < 1 {
+		physicalRows = 1
+	}
+	// FixedRows 不能大于 RowCount。缩小时先放开固定行，扩张时先建立物理行。
+	if int(grid.control.FixedRows()) > fixedRows {
+		grid.control.SetFixedRows(int32(fixedRows))
+	}
+	grid.control.SetColCount(int32(grid.size.Columns))
+	grid.control.SetRowCount(int32(physicalRows))
+	grid.control.SetFixedRows(int32(fixedRows))
+}
+
+func (r *Renderer) applyGridWidths(grid *gridState) {
+	dpi := int(r.currentDPI())
+	for column := 0; column < grid.size.Columns; column++ {
+		width := 96
+		if len(grid.widths) == grid.size.Columns {
+			width = grid.widths[column]
+		}
+		grid.control.SetColWidths(int32(column), int32(render.DIPToPX(width, dpi)))
+	}
+}
+
+func (r *Renderer) applyGridContents(grid *gridState) {
+	fixedRows := gridFixedRows(grid)
+	if fixedRows == 1 {
+		for column, value := range grid.headers {
+			grid.control.SetCells(int32(column), 0, value)
+		}
+	}
+	for row := 0; row < grid.size.Rows; row++ {
+		for column := 0; column < grid.size.Columns; column++ {
+			grid.control.SetCells(int32(column), int32(row+fixedRows), grid.cells[row][column])
+		}
+	}
+	if grid.size.Rows == 0 && fixedRows == 0 {
+		for column := 0; column < grid.size.Columns; column++ {
+			grid.control.SetCells(int32(column), 0, "")
+		}
+	}
+}
+
+func (r *Renderer) applyGridEditable(grid *gridState) {
+	options := grid.control.Options()
+	if grid.editable {
+		options = options.Include(int32(types.GoEditing))
+	} else {
+		options = options.Exclude(int32(types.GoEditing))
+	}
+	grid.control.SetOptions(options)
+	grid.control.SetAutoEdit(grid.editable)
+}
+
+func (r *Renderer) applyGridSelection(grid *gridState) {
+	options := grid.control.Options()
+	if grid.selection.RowOnly {
+		options = options.Include(int32(types.GoRowSelect))
+	} else {
+		options = options.Exclude(int32(types.GoRowSelect))
+	}
+	grid.control.SetOptions(options)
+	if grid.size.Rows == 0 {
+		return
+	}
+	grid.control.SetColRow(types.Point(
+		int32(grid.selection.Cell.Column),
+		int32(grid.selection.Cell.Row+gridFixedRows(grid)),
+	))
+}
+
+// SetGridSize 设置 StringGrid 的逻辑行列数，并在原生边界折算可选表头行。
+func (r *Renderer) SetGridSize(h render.Handle, size render.GridSize) {
+	grid := r.grids[h]
+	if grid == nil {
+		return
+	}
+	if size.Rows < 0 || size.Columns <= 0 {
+		panic(fmt.Sprintf("native: invalid GridSize for control %d: %+v", h, size))
+	}
+	discardGridEdit(grid)
+	grid.size = size
+	grid.cells = emptyNativeGridCells(size)
+	if len(grid.headers) != 0 && len(grid.headers) != size.Columns {
+		grid.headers = []string{}
+	}
+	if len(grid.widths) != 0 && len(grid.widths) != size.Columns {
+		grid.widths = []int{}
+	}
+	if !render.ValidGridSelection(size, grid.selection) {
+		grid.selection = defaultGridSelection(size)
+	}
+	r.withGridApplying(grid, func() {
+		r.applyGridShape(grid)
+		r.applyGridWidths(grid)
+		r.applyGridContents(grid)
+		r.applyGridEditable(grid)
+		r.applyGridSelection(grid)
+	})
+}
+
+// SetGridHeaders 设置可选表头；表头不计入 GridSize.Rows。
+func (r *Renderer) SetGridHeaders(h render.Handle, headers []string) {
+	grid := r.grids[h]
+	if grid == nil {
+		return
+	}
+	if len(headers) != 0 && len(headers) != grid.size.Columns {
+		panic(fmt.Sprintf("native: Headers length %d does not match %d columns", len(headers), grid.size.Columns))
+	}
+	discardGridEdit(grid)
+	grid.headers = append([]string(nil), headers...)
+	if len(grid.headers) == 0 {
+		grid.headers = []string{}
+	}
+	r.withGridApplying(grid, func() {
+		r.applyGridShape(grid)
+		r.applyGridContents(grid)
+		r.applyGridSelection(grid)
+	})
+}
+
+// SetGridColumnWidths 设置每列的 DIP 宽度；空 slice 使用 96 DIP 默认值。
+func (r *Renderer) SetGridColumnWidths(h render.Handle, widths []int) {
+	grid := r.grids[h]
+	if grid == nil {
+		return
+	}
+	if len(widths) != 0 && len(widths) != grid.size.Columns {
+		panic(fmt.Sprintf("native: ColumnWidths length %d does not match %d columns", len(widths), grid.size.Columns))
+	}
+	for _, width := range widths {
+		if width <= 0 {
+			panic("native: ColumnWidths must be > 0")
+		}
+	}
+	grid.widths = append([]int(nil), widths...)
+	if len(grid.widths) == 0 {
+		grid.widths = []int{}
+	}
+	r.withGridApplying(grid, func() { r.applyGridWidths(grid) })
+}
+
+// SetGridCells 替换受控字符串矩阵；输入会在 native 边界再次深复制。
+func (r *Renderer) SetGridCells(h render.Handle, cells [][]string) {
+	grid := r.grids[h]
+	if grid == nil {
+		return
+	}
+	if err := render.ValidateGridCells(grid.size, cells); err != nil {
+		panic(fmt.Sprintf("native: invalid Cells for control %d: %v", h, err))
+	}
+	discardGridEdit(grid)
+	grid.cells = render.CloneGridCells(cells)
+	r.withGridApplying(grid, func() { r.applyGridContents(grid) })
+}
+
+// SetGridEditable 设置是否启用 TStringGrid 原生编辑器。
+func (r *Renderer) SetGridEditable(h render.Handle, editable bool) {
+	grid := r.grids[h]
+	if grid == nil {
+		return
+	}
+	discardGridEdit(grid)
+	grid.editable = editable
+	r.withGridApplying(grid, func() { r.applyGridEditable(grid) })
+}
+
+// SetGridSelection 设置受控逻辑选择，并切换单元格或整行模式。
+func (r *Renderer) SetGridSelection(h render.Handle, selection render.GridSelection) {
+	grid := r.grids[h]
+	if grid == nil {
+		return
+	}
+	if !render.ValidGridSelection(grid.size, selection) {
+		panic(fmt.Sprintf("native: invalid GridSelection for control %d: %+v", h, selection))
+	}
+	discardGridEdit(grid)
+	grid.selection = selection
+	r.withGridApplying(grid, func() { r.applyGridSelection(grid) })
+}
+
+func (r *Renderer) emitGridSelection(grid *gridState) {
+	if r.closed.Load() || grid == nil || grid.applying || grid.onSelect == nil {
+		return
+	}
+	cell := render.GridCell{
+		Row:    int(grid.control.Row()) - gridFixedRows(grid),
+		Column: int(grid.control.Col()),
+	}
+	if !render.ValidGridSelection(grid.size, render.GridSelection{Cell: cell}) ||
+		cell == grid.selection.Cell {
+		return
+	}
+	grid.selection.Cell = cell
+	render.Guard("event.OnCellSelect", func() { grid.onSelect(cell) })
+}
+
+func (r *Renderer) ensureGridSelectionPoller() {
+	if r.gridPollStop != nil {
+		return
+	}
+	if r.gridPollTimer == nil {
+		timer := lcl.NewTimer(r.form)
+		timer.SetEnabled(false)
+		timer.SetInterval(16)
+		timer.SetOnTimer(func(_ lcl.IObject) {
+			if r.closed.Load() {
+				return
+			}
+			render.Guard("grid.selectionPoll", func() {
+				handles := make([]render.Handle, 0, len(r.grids))
+				for handle, grid := range r.grids {
+					if grid != nil && grid.onSelect != nil {
+						handles = append(handles, handle)
+					}
+				}
+				for _, handle := range handles {
+					if grid := r.grids[handle]; grid != nil {
+						r.emitGridSelection(grid)
+					}
+				}
+			})
+		})
+		r.gridPollTimer = timer
+	}
+	r.gridPollTimer.SetEnabled(true)
+	stopped := false
+	r.gridPollStop = func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		if r.gridPollTimer != nil {
+			r.gridPollTimer.SetEnabled(false)
+		}
+	}
+}
+
+func (r *Renderer) hasGridSelectionSubscriber() bool {
+	for _, grid := range r.grids {
+		if grid != nil && grid.onSelect != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Renderer) stopGridSelectionPollerIfIdle() {
+	if !r.hasGridSelectionSubscriber() {
+		r.stopGridSelectionPoller()
+	}
+}
+
+func (r *Renderer) releaseGridSelectionPoller() {
+	r.stopGridSelectionPoller()
+	if r.gridPollTimer != nil {
+		// TTimer 由 form 持有并随 form teardown 释放。这里只解除 Go 回调，
+		// 避免 OnClose 从 timer 用户回调重入时在当前派发栈内 Free。
+		r.gridPollTimer.SetOnTimer(nil)
+		r.gridPollTimer = nil
+	}
+}
+
+func (r *Renderer) stopGridSelectionPoller() {
+	if r.gridPollStop == nil {
+		return
+	}
+	stop := r.gridPollStop
+	r.gridPollStop = nil
+	stop()
+}
+
+// OnGridCellSelect 绑定逻辑单元格选择；nil 会从 TStringGrid 解除事件。
+func (r *Renderer) OnGridCellSelect(h render.Handle, fn func(render.GridCell)) {
+	grid := r.grids[h]
+	if grid == nil {
+		return
+	}
+	grid.onSelect = fn
+	if fn == nil {
+		grid.control.SetOnAfterSelection(nil)
+		r.stopGridSelectionPollerIfIdle()
+		return
+	}
+	r.ensureGridSelectionPoller()
+	// LCL 的 OnAfterSelection 参数是移动前的坐标；提交后的焦点单元格必须从
+	// 控件读取。锁定 DLL 不会为真实鼠标/键盘稳定桥接该事件，Renderer 级单一
+	// 主线程轮询器会经过同一个去重出口，且不占用普通 Click/Mouse/Key 事件。
+	// 空闲时只禁用、重绑时复用同一 TTimer：用户回调可能同步触发 render 并在
+	// 当前 TTimer 回调栈中解绑/销毁 Grid，因此这里不能 Free 正在派发的对象。
+	grid.control.SetOnAfterSelection(func(_ lcl.IObject, _, _ int32) {
+		r.emitGridSelection(grid)
+	})
+}
+
+// OnGridCellEdit 绑定原生编辑提交；nil 会解除输入和提交两个事件。
+func (r *Renderer) OnGridCellEdit(h render.Handle, fn func(render.GridCell, string)) {
+	grid := r.grids[h]
+	if grid == nil {
+		return
+	}
+	grid.onEdit = fn
+	grid.pending = nil
+	if fn == nil {
+		grid.control.SetOnSetEditText(nil)
+		grid.control.SetOnEditingDone(nil)
+		return
+	}
+	grid.control.SetOnSetEditText(func(_ lcl.IObject, column, row int32, value string) {
+		if grid.applying || grid.onEdit == nil {
+			return
+		}
+		cell := render.GridCell{Row: int(row) - gridFixedRows(grid), Column: int(column)}
+		if !render.ValidGridSelection(grid.size, render.GridSelection{Cell: cell}) {
+			return
+		}
+		grid.pending = &gridEdit{cell: cell, value: value}
+	})
+	grid.control.SetOnEditingDone(func(_ lcl.IObject) {
+		if grid.applying || grid.onEdit == nil || grid.pending == nil {
+			return
+		}
+		edit := *grid.pending
+		grid.pending = nil
+		render.Guard("event.OnCellEdit", func() { grid.onEdit(edit.cell, edit.value) })
+	})
 }
 
 // comboBoxControl 是 TComboBox 暴露的最小选择能力。
@@ -1155,6 +1767,9 @@ func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 			panic(fmt.Sprintf("native: 控件 %d 不支持 OnChange", h))
 		}
 		ed.SetOnChange(func(_ lcl.IObject) {
+			if state := r.texts[h]; state != nil && state.applying {
+				return
+			}
 			render.Guard("event.OnChange", func() { fn.(func(string))(ed.Text()) })
 		})
 	default:
@@ -1254,6 +1869,7 @@ func (r *Renderer) OnClose(fn func()) {
 	r.closeFn = fn
 	r.formRef.SetOnClose(func(_ lcl.IObject, _ *types.TCloseAction) {
 		r.closed.Store(true)
+		r.releaseGridSelectionPoller()
 		if fn != nil {
 			render.Guard("OnClose", fn)
 		}
@@ -1382,6 +1998,20 @@ func (r *Renderer) invalidateDPI() {
 	r.dpi = 0
 }
 
+func (r *Renderer) refreshDPISensitiveControls() {
+	for _, grid := range r.grids {
+		grid := grid
+		if grid != nil {
+			r.withGridApplying(grid, func() { r.applyGridWidths(grid) })
+		}
+	}
+	for _, paint := range r.paints {
+		if paint != nil && paint.control != nil {
+			paint.control.Invalidate()
+		}
+	}
+}
+
 // canvasDPI 返回测量 bitmap DC 的 DPI。bitmap DC 的 DPI 与显示器相关但进程内固定
 // （不随 WM_DPICHANGED 变化），缓存一次即可。
 func (r *Renderer) canvasDPI() int32 {
@@ -1406,14 +2036,15 @@ func (r *Renderer) canvasDPI() int32 {
 // setupDPIHook 注册 WM_DPICHANGED 钩子。每条窗口消息先 InheritedWndProc 放行
 // （保留 LCL 默认：窗体按建议矩形 resize、字体随 widgetset 缩放；不会递归 ——
 // InheritedWndProc 直接走 Pascal 父类实现）。收到 WM_DPICHANGED 后：
-// 清 DPI 缓存（下次边界换算用新 DPI）+ 清文本测量缓存（字体可能已变）+
-// emitResize 触发全量 re-layout。
+// 清 DPI 缓存（下次边界换算用新 DPI）+ 清文本测量缓存（字体可能已变），
+// 重施 Grid 的 DIP 列宽并重绘 PaintBox，最后 emitResize 触发全量 re-layout。
 func (r *Renderer) setupDPIHook() {
 	r.formRef.SetOnWndProc(func(msg *types.TLMessage) {
 		r.formRef.InheritedWndProc(msg)
 		if msg.Msg == messages.WM_DPICHANGED {
 			r.invalidateDPI()
 			r.measureCache = make(map[string][2]int32)
+			r.refreshDPISensitiveControls()
 			r.emitResize()
 		}
 	})

@@ -14,6 +14,10 @@ import (
 // Close 必须由生命周期回调的调用方在回调返回后执行，避免同步等待当前提交。
 var ErrAppCloseDuringRender = errors.New("flux: 不能在 render 或生命周期回调中调用 App.Close")
 
+// Element 是 App 当前协调树中的已挂载元素。
+// 主要供 Inspector、诊断工具和测试只读查询；应用 UI 状态仍应保存在 State 中。
+type Element = diff.Element
+
 // App 管理一棵声明式 UI 树的 reconciliation 生命周期。
 //
 // 用法：NewApp(绑定层 renderer) → Mount(build)。build 是每次 render 调用的
@@ -23,7 +27,7 @@ var ErrAppCloseDuringRender = errors.New("flux: 不能在 render 或生命周期
 //	app := flux.NewApp(nativeAdapter)          // 绑定层 renderer
 //	app.Mount(func() flux.Widget { return flux.Window(flux.Text(flux.Bind(count))) })
 //
-// 绑定层 renderer 必须由 internal/native 的适配器创建（D6 隔离）。
+// 默认绑定层 renderer 由公开 native 包创建；应用不得导入 internal/native。
 type App struct {
 	r                     render.Renderer
 	rc                    *diff.Reconciler
@@ -48,7 +52,7 @@ type App struct {
 	inspectorPending      []InspectorCommit
 }
 
-// NewApp 创建 App。r 为绑定层 renderer（默认 LCL 适配见 internal/native）。
+// NewApp 创建 App。r 为绑定层 renderer（默认 LCL 适配由公开 native 包创建）。
 // 注册窗体 resize 回调 → invalidate（pending 合并 + renderMu 串行化，
 // resize 风暴安全）→ Window 布局用最新客户区尺寸。
 func NewApp(r render.Renderer) *App {
@@ -174,7 +178,7 @@ func (a *App) Close() error {
 }
 
 // Root 返回当前 Element 树根（Inspector / 测试用）。
-func (a *App) Root() *diff.Element { return a.rc.Root() }
+func (a *App) Root() *Element { return a.rc.Root() }
 
 // Animate 在 UI 线程上以 ~16ms（60fps）推进一次动画，直到 duration 结束。
 // onStep 每帧收到 curve 后的进度值（0..1，含终点 1.0）。返回停止函数（提前停止）。
@@ -211,7 +215,7 @@ func (a *App) Animate(duration time.Duration, curve Curve, onStep func(v float64
 //
 // key 必须是稳定身份（D3）：动画目标是跨 render 保持同一控件的场景，路径会随
 // 结构变动漂移，故不能用 FindByPath 定位（静态树/一次性寻址用 FindByPath）。
-func (a *App) SetBounds(key string, r render.Rect) {
+func (a *App) SetBounds(key string, r Rect) {
 	if e := a.rc.Lookup(key); e != nil && !diff.IsTransparent(e) && e.Type != "Window" && e.Type != "TabPage" {
 		a.r.SetBounds(e.Handle, r)
 		a.mu.Lock()
@@ -240,7 +244,7 @@ func (a *App) SetBounds(key string, r render.Rect) {
 //
 // 身份敏感的控件（列表行/动画目标/需 Source 区分的同型控件）请用 Key + SetBounds/
 // Root 定位 —— 路径是位置身份，结构重排后漂移。
-func (a *App) FindByPath(path string) *diff.Element {
+func (a *App) FindByPath(path string) *Element {
 	if r := a.rc.Root(); r != nil {
 		return r.FindByPath(path)
 	}

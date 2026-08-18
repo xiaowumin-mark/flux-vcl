@@ -16,6 +16,7 @@
 package diff
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -337,7 +338,11 @@ func canUpdate(old *Element, node *widget.Node) bool {
 // 返回是否存在"真实属性变化"（值非函数且非生命周期/_bind 隐藏键）——
 // OnUpdate 触发判定（Phase 4.3）。事件回调/生命周期钩子恒判变化（函数值），
 // 但它们不是配置更新，不计入。
-var orderedProps = []string{"Items", "SelectedIndex", "Minimum", "Maximum", "Value"}
+var orderedProps = []string{
+	"Items", "SelectedIndex",
+	"Minimum", "Maximum", "Step", "Value",
+	"GridSize", "Headers", "ColumnWidths", "Cells", "Editable", "GridSelection",
+}
 
 func orderedProp(key string) bool {
 	for _, candidate := range orderedProps {
@@ -366,15 +371,8 @@ func (rc *Reconciler) patchProps(e *Element, node *widget.Node) bool {
 		if orderedProp(key) {
 			continue
 		}
-		if rc.applyRemoved(e, key) {
+		if rc.applyRemoved(e, key, node.Props) {
 			changed = true
-		}
-	}
-	for _, key := range orderedProps {
-		for _, removedKey := range removedKeys {
-			if removedKey == key && rc.applyRemoved(e, key) {
-				changed = true
-			}
 		}
 	}
 	diffKeys := node.Props.Diff(e.Props)
@@ -390,9 +388,27 @@ func (rc *Reconciler) patchProps(e *Element, node *widget.Node) bool {
 		}
 		rc.applyProp(e, key, v)
 	}
-	// 受控组合属性按固定顺序应用，不能依赖 Props 的 map 遍历顺序。
+	// 受控组合属性按固定顺序逐项完成移除或更新，不能先处理全部移除再处理
+	// 全部更新。例如同一轮改变 GridSize 并移除 Cells 时，必须先下发新尺寸，
+	// 再按新尺寸生成空矩阵。
 	selectionPatched := false
 	for _, key := range orderedProps {
+		removedKey := false
+		for _, candidate := range removedKeys {
+			if candidate == key {
+				removedKey = true
+				break
+			}
+		}
+		if removedKey {
+			if rc.applyRemoved(e, key, node.Props) {
+				changed = true
+			}
+			if e.Type == "PageControl" && key == "SelectedIndex" {
+				selectionPatched = true
+			}
+			continue
+		}
 		changedKey := false
 		for _, diffKey := range diffKeys {
 			if diffKey == key {
@@ -462,7 +478,7 @@ func (rc *Reconciler) applyPageSelectedIndex(e *Element, props *widget.Props) {
 //
 // 返回是否构成真实配置变化（OnUpdate 触发判定）：事件/框架键的移除不算
 // （与 patchProps 的 func 排除一致）。
-func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
+func (rc *Reconciler) applyRemoved(e *Element, key string, next *widget.Props) bool {
 	if transparentElement(e) {
 		return false
 	}
@@ -502,11 +518,41 @@ func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
 	case "Maximum":
 		rc.applyProp(e, key, 100) // ProgressBar 挂载默认：最大值 100
 		return true
+	case "Step":
+		rc.applyProp(e, key, 1) // Slider 挂载默认：键盘步长 1
+		return true
 	case "Value":
 		rc.applyProp(e, key, 0) // ProgressBar 挂载默认：当前值 0
 		return true
 	case "GroupIndex":
 		rc.applyProp(e, key, 0) // RadioButton 挂载默认：组 0
+		return true
+	case "PaintCommands":
+		rc.applyProp(e, key, []render.PaintCommand{}) // PaintBox 默认：空命令并重绘
+		return true
+	case "GridSize":
+		rc.applyProp(e, key, render.GridSize{Columns: 1})
+		return true
+	case "Headers":
+		rc.applyProp(e, key, []string{})
+		return true
+	case "ColumnWidths":
+		rc.applyProp(e, key, []int{})
+		return true
+	case "Cells":
+		size := resetGridSize(next)
+		rc.applyProp(e, key, emptyGridCells(size))
+		return true
+	case "Editable":
+		rc.applyProp(e, key, false)
+		return true
+	case "GridSelection":
+		size := resetGridSize(next)
+		selection := render.GridSelection{Cell: render.GridCell{Row: -1, Column: -1}}
+		if size.Rows > 0 {
+			selection.Cell = render.GridCell{}
+		}
+		rc.applyProp(e, key, selection)
 		return true
 	case "Text":
 		rc.applyProp(e, key, "") // 挂载默认：空文本
@@ -516,6 +562,24 @@ func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
 		// 属性（例如 Scroll）处理，不能按依赖值类型重复分派事件。
 		return false
 	default:
+		if key == "OnValueChange" {
+			if s, ok := rc.r.(render.SliderController); ok {
+				s.OnSliderValueChange(e.Handle, nil)
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+			}
+			return false
+		}
+		if key == "OnCellSelect" || key == "OnCellEdit" {
+			if grid, ok := rc.r.(render.GridController); ok {
+				if key == "OnCellSelect" {
+					grid.OnGridCellSelect(e.Handle, nil)
+				} else {
+					grid.OnGridCellEdit(e.Handle, nil)
+				}
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: nil})
+			}
+			return false
+		}
 		switch v.(type) {
 		case func(render.Event), func(string): // 事件移除：解绑（native SetEvent nil 分支）
 			rc.r.SetEvent(e.Handle, key, nil)
@@ -543,6 +607,25 @@ func (rc *Reconciler) applyRemoved(e *Element, key string) bool {
 		}
 		return false
 	}
+}
+
+func resetGridSize(next *widget.Props) render.GridSize {
+	if next != nil {
+		if value, ok := next.Get("GridSize"); ok {
+			if size, valid := value.(render.GridSize); valid && size.Rows >= 0 && size.Columns > 0 {
+				return size
+			}
+		}
+	}
+	return render.GridSize{Columns: 1}
+}
+
+func emptyGridCells(size render.GridSize) [][]string {
+	cells := make([][]string, size.Rows)
+	for row := range cells {
+		cells[row] = make([]string, size.Columns)
+	}
+	return cells
 }
 
 // applyProp 按属性名分发到 Renderer 具体方法并记录 op。
@@ -614,6 +697,13 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Maximum", Value: maximum})
 			}
 		}
+	case "Step":
+		if step, ok := v.(int); ok {
+			if s, ok := rc.r.(render.SliderController); ok {
+				s.SetSliderStep(e.Handle, step)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Step", Value: step})
+			}
+		}
 	case "Value":
 		if value, ok := v.(int); ok {
 			if p, ok := rc.r.(render.Progressable); ok {
@@ -626,6 +716,70 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 			if g, ok := rc.r.(render.RadioGroupable); ok {
 				g.SetGroupIndex(e.Handle, groupIndex)
 				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "GroupIndex", Value: groupIndex})
+			}
+		}
+	case "GridSize":
+		if size, ok := v.(render.GridSize); ok {
+			if grid, ok := rc.r.(render.GridController); ok {
+				grid.SetGridSize(e.Handle, size)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: size})
+			}
+		}
+	case "Headers":
+		if headers, ok := v.([]string); ok {
+			if grid, ok := rc.r.(render.GridController); ok {
+				headers = copyItems(headers)
+				grid.SetGridHeaders(e.Handle, headers)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: headers})
+			}
+		}
+	case "ColumnWidths":
+		if widths, ok := v.([]int); ok {
+			if grid, ok := rc.r.(render.GridController); ok {
+				widths = append([]int(nil), widths...)
+				if len(widths) == 0 {
+					widths = []int{}
+				}
+				grid.SetGridColumnWidths(e.Handle, widths)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: widths})
+			}
+		}
+	case "Cells":
+		if cells, ok := v.([][]string); ok {
+			if grid, ok := rc.r.(render.GridController); ok {
+				cells = render.CloneGridCells(cells)
+				grid.SetGridCells(e.Handle, cells)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: cells})
+			}
+		}
+	case "Editable":
+		if editable, ok := v.(bool); ok {
+			if grid, ok := rc.r.(render.GridController); ok {
+				grid.SetGridEditable(e.Handle, editable)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: editable})
+			}
+		}
+	case "GridSelection":
+		if selection, ok := v.(render.GridSelection); ok {
+			if grid, ok := rc.r.(render.GridController); ok {
+				grid.SetGridSelection(e.Handle, selection)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: selection})
+			}
+		}
+	case "PaintCommands":
+		if e.Type != "PaintBox" {
+			break
+		}
+		if commands, ok := v.([]render.PaintCommand); ok {
+			if err := render.ValidatePaintCommands(commands); err != nil {
+				panic(fmt.Sprintf("diff: invalid PaintCommands for %s: %v", eventSource(e), err))
+			}
+			if surface, ok := rc.r.(render.PaintController); ok {
+				commands = render.ClonePaintCommands(commands)
+				surface.SetPaintCommands(e.Handle, commands)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "PaintCommands", Value: commands})
+				surface.InvalidatePaint(e.Handle)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "InvalidatePaint"})
 			}
 		}
 	case "Bounds":
@@ -730,6 +884,57 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 				}
 			} else if s, ok := rc.r.(render.Selectable); ok {
 				s.OnSelectionChange(e.Handle, wrap)
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
+			}
+		}
+	case "OnValueChange":
+		if fn, ok := v.(func(int)); ok {
+			if s, ok := rc.r.(render.SliderController); ok {
+				s.OnSliderValueChange(e.Handle, func(value int) {
+					render.Guard("event.OnValueChange", func() {
+						if rc.eventSink != nil {
+							rc.eventSink(EventDispatch{
+								Name: key, Path: e.Path, Source: eventSource(e), Value: value,
+							})
+						}
+						fn(value)
+					})
+				})
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
+			}
+		}
+	case "OnCellSelect":
+		if fn, ok := v.(func(render.GridCell)); ok {
+			if grid, ok := rc.r.(render.GridController); ok {
+				grid.OnGridCellSelect(e.Handle, func(cell render.GridCell) {
+					render.Guard("event.OnCellSelect", func() {
+						if rc.eventSink != nil {
+							rc.eventSink(EventDispatch{
+								Name: key, Path: e.Path, Source: eventSource(e), Value: cell,
+							})
+						}
+						fn(cell)
+					})
+				})
+				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
+			}
+		}
+	case "OnCellEdit":
+		if fn, ok := v.(func(render.GridCell, string)); ok {
+			if grid, ok := rc.r.(render.GridController); ok {
+				grid.OnGridCellEdit(e.Handle, func(cell render.GridCell, value string) {
+					render.Guard("event.OnCellEdit", func() {
+						if rc.eventSink != nil {
+							rc.eventSink(EventDispatch{
+								Name: key, Path: e.Path, Source: eventSource(e), Value: struct {
+									Cell  render.GridCell
+									Value string
+								}{Cell: cell, Value: value},
+							})
+						}
+						fn(cell, value)
+					})
+				})
 				rc.record(e, render.Op{Type: render.OpSetEvent, Handle: e.Handle, Key: key, Value: v})
 			}
 		}

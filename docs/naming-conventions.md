@@ -1,6 +1,6 @@
 # FluxVCL 命名规范
 
-> 版本：0.1 ｜ 日期：2026-08-09
+> 版本：0.1 ｜ 日期：2026-08-19
 > 配套文档：[贡献规范](../CONTRIBUTING.md)（提交信息 / 分支）、[开发规范](./development-guide.md)（风格 / 测试 / 文档）。
 
 ## 目录
@@ -20,7 +20,8 @@
 - **标识符英文，注释 / 文档 / 提交中文**。
 - 遵循 Go 惯例：导出 CamelCase（`Window`、`NewState`），私有 camelCase（`renderWidget`）。
 - 命名**语义化、简短**，与既有 API 保持一致；不另起风格、不缩写到不可读。
-- 面向用户的概念（Widget / Opt / State）命名要在 `flux` 根包统一暴露，内部实现藏于 `internal/`。
+- 面向用户的概念（Widget / Opt / State）命名要在 `flux` 根包统一暴露；默认后端只通过公开
+  `native` 包启动，具体实现藏于 `internal/`。
 
 ---
 
@@ -41,6 +42,13 @@
 | `examples/inspector` | P7.1 三层树、mutation、事件、布局与重建风险查看。 |
 | `examples/plugin-badge` | P7.2 第三方组合式 Badge 插件；`badge` 子包只依赖公开 SDK。 |
 | `examples/page-control` | P7.2c PageControl/TabPage 多页容器、稳定 Key 与 native parent。 |
+| `examples/7guis-counter` | 7GUIs Counter：State、Text、Button。 |
+| `examples/7guis-temperature-converter` | 7GUIs Temperature Converter：受控 Input 与数值换算。 |
+| `examples/7guis-flight-booker` | 7GUIs Flight Booker：ComboBox、校验与 Enabled。 |
+| `examples/7guis-timer` | 7GUIs Timer：动画、ProgressBar 与 Slider。 |
+| `examples/7guis-crud` | 7GUIs CRUD：StringGrid 选择、编辑与稳定行身份。 |
+| `examples/7guis-circle-drawer` | 7GUIs Circle Drawer：PaintBox、DIP 命中与 undo/redo。 |
+| `examples/7guis-cells` | 7GUIs Cells：StringGrid、公式解析与依赖增量更新。 |
 
 - **新增示例不再用 `phaseN`**；若需多特性合屏，按主特性命名。
 - 推荐名（按能力）：`animation` / `theme` / `async` / `component` / `scroll` / `dpi` / `virtual-list` / `multi-backend`…（`inspector` 已使用）
@@ -65,7 +73,8 @@ examples/<name>/
 3. **工程约束**：尤其 **smoke 交互约束**（哪个控件是冒烟的可观测信号、为什么）。
 4. **构建命令**：`scripts/build.ps1 -Target <name>` / `scripts/smoke.ps1 -Target <name>`。
 
-范式见 `examples/phase5/main.go`（约束写得很细：唯一按钮、可点击 Text 替代、冒烟断言逻辑）。
+通用计数信号范式见 `examples/phase5/main.go`；7GUIs 的业务专用交互见
+[`docs/7guis.md`](7guis.md)。
 
 ### 2.4 winres.json
 
@@ -80,8 +89,11 @@ examples/<name>/
 
 ### 2.5 smoke 约束
 
-- 纳入 CI 冒烟的示例：窗口内 `Button` 必须**唯一**，点击信号必须**可枚举断言**（smoke 按 class 枚举子控件读按钮文本，按钮文本变化 = 点击生效信号）。
-- 非按钮交互（如主题切换）用**可点击 `Text`**（`TLabel` 无独立 HWND，非 Button 类，不干扰冒烟）。
+- 基础/通用示例可使用唯一纯数字 `Button` 作为可枚举的 State 回写信号；这是通用
+  smoke 约定，不是所有示例的 UI 约束。
+- 7GUIs 使用业务专用 smoke：按 Win32 class/语义 Caption/几何位置定位真实业务控件，
+  并断言计数、换算、Enabled、进度、表格选择/编辑或绘制结果；不插入测试专用按钮。
+- 非按钮交互必须有可重复的业务可观测结果，不得只以注入消息成功代替回调/State 断言。
 - 冒烟截图统一命名：`bin/<target>-smoke.png`（CI 按此收集 artifact）。
 
 ---
@@ -91,6 +103,7 @@ examples/<name>/
 | 项 | 规则 | 现有 |
 |---|---|---|
 | 用户包 | 根包 `flux`（对外即框架名） | `flux.go` 等 |
+| 默认后端包 | 小写语义名，作为公开启动入口 | `native`（`Init` / `NewRenderer` / `Run`） |
 | 内部包 | 小写语义名，按层：widget / diff / render / native | `internal/widget` `internal/diff` `internal/render` `internal/native` |
 | 根包文件 | **全小写**语义短名，同类加后缀细分 | `event.go` / `event_opts.go`；`flux.go` `state.go` `theme.go` `box.go` `layout.go` `controls.go` |
 | 测试文件 | `<被测文件>_test.go`，跨特性收尾用功能域名 | `state_test.go`；`phase5_test.go` `scroll_inspect_test.go` |
@@ -101,22 +114,30 @@ examples/<name>/
 
 ### 4.1 控件构造器（导出，PascalCase，名词）
 
-`Window` / `Column` / `Row` / `ScrollBox` / `Text` / `Button` / `Input` / `Component`
+`Window` / `Column` / `Row` / `Component` / `Expanded` / `Flexible` / `Text` /
+`Button` / `Input` / `Memo` / `CheckBox` / `RadioButton` / `ComboBox` /
+`ProgressBar` / `Slider` / `StringGrid` / `PaintBox` / `ScrollBox` / `ListView` /
+`PageControl` / `TabPage`
 
-- 容器类（Column/Row/ScrollBox）可带布局子参数（`Expanded`/`Flexible`）；构造器接受 `...any`，混排子节点与 Opt。
+- `Window`、`Column`、`Row` 与 `PageControl` 接受 `...any`，按各自结构约束混排子节点与
+  Opt；`ScrollBox`、`TabPage` 采用单子节点签名，`Expanded` / `Flexible` 是布局包装节点。
 - **Node type 字符串与构造器同名**（PascalCase）：`"Window"` / `"Column"` / `"Row"`…（见 `widget.NewNode("Window")`）。
 
 ### 4.2 Opt（导出，PascalCase，动词 / 名词）
 
 - 事件 / 生命周期：`On<Event>` —— `OnClick` / `OnMouseDown` / `OnMouseMove` / `OnKeyDown` / `OnMount` / `OnUpdate` / `OnUnmount`。
 - 身份 / 几何 / 样式：`Key` / `Width` / `Height` / `Color` / `FontColor` / `Title` / `Expanded` / `Flexible`。
+- 批次 3 受控值：`Step` / `Cells` / `Headers` / `ColumnWidths` / `SelectedCell` /
+  `SelectedRow` / `Editable` / `OnValueChange` / `OnCellSelect` / `OnCellEdit`。
 - 布局对齐：`MainAxis(MainAxisCenter)` / `CrossAxis(...)` —— 对齐值也导出。
 - 绑定类 Opt：`Bind(state)` 返回绑定值（非 Opt 名后缀，但用法同参数）；`BindRef(ref)`。
 
 ### 4.3 State / 绑定 / App（导出）
 
 - `State[T]`（泛型类型）、`NewState[T](initial)`（构造函数）、`Bind(s)`（绑定）。
-- `NewApp(r render.Renderer)`、`App.Mount` / `App.Render` / `App.Close` / `App.LastError` / `App.Root` / `App.Animate` / `App.SetBounds` / `App.Inspect` / `App.LastLayoutDiags`。
+- `NewApp(r render.Renderer)`、`App.Mount` / `App.Render` / `App.Close` / `App.LastError` /
+  `App.Root` / `App.FindByPath` / `App.Animate` / `App.SetBounds` / `App.Inspect` /
+  `App.LastLayoutDiags` / `App.ObserveInspector` / `App.InspectorSnapshot`。
 - 顶层泛型函数：`Async[T](app, load, onSuccess, onError...)`（Go 方法不支持泛型，故为包级函数）。
 
 ### 4.4 常量（导出）
@@ -136,9 +157,16 @@ examples/<name>/
 - 字段：短名，几何用 DIP 的 `X/Y`，键盘 `Key`，IME 结果 `Text`，鼠标 `Button`，修饰键 `Mods`，控件标识 `Source`。
 - `Source` 格式：带 Key 时 `"<Type>#<Key>"`（如 `"Button#btn"`，稳定身份 D3）；未设 Key 时回落为 `"<Type>@<树路径>"`（隐式寻址，如 `"Button@Window/0/Column/1/Button"`，结构重排后漂移）。
 
-### 4.6 内部类型（internal/）
+### 4.6 公开默认后端（native）
 
-- `widget.Node` / `widget.Props` / `widget.Widget`；`diff.Element`；`render.Rect` / `render.Renderer` / `render.Mutation`；`native.NewRenderer`。
+- 包路径固定为 `github.com/xiaowumin-mark/flux-vcl/native`；公开入口为 `Init`、
+  `NewRenderer`、`Run` 与 `Renderer` 类型别名。
+- 示例和下游应用只导入该公开包，不导入 `internal/native`；具体 LCL 适配仍可独立演进。
+
+### 4.7 内部类型（internal/）
+
+- `widget.Node` / `widget.Props` / `widget.Widget`；`diff.Element`；`render.Rect` /
+  `render.Renderer` / `render.Mutation`；`internal/native.Renderer`。
 - 与绑定库的互操作类型（如 `EventType`、对齐枚举）在 `flux` 层 type alias 后暴露，外部不直接 import internal。
 
 ---

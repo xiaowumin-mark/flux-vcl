@@ -2,6 +2,8 @@
 
 基于 Go 的现代声明式 UI 框架，使用原生 Windows 控件。
 
+> 中文主文档 ｜ [English README](README.en.md)
+
 提供类似 Flutter / Vue / SwiftUI 的开发体验，同时保留桌面原生控件能力与底层可访问性。
 
 ```go
@@ -29,6 +31,14 @@ Window(
 - **线程纪律**：单一 UI 线程 + marshalling 调度器
 
 > 架构不变量（D1–D7）见 [docs/design.md](docs/design.md) 与 [docs/development-plan.md](docs/development-plan.md)。
+
+产品化文档入口：
+
+- [7GUIs 任务映射（中英双语）](docs/7guis.md)
+- [v0.1.0 候选 API 冻结清单](docs/api-v0.1.0.md)
+- [迁移指南](docs/migration.md) 与 [维护政策](docs/maintenance.md)
+- [可验证能力对比](docs/capability-comparison.md)
+- [CHANGELOG](CHANGELOG.md) 与 [发布检查表](RELEASE_CHECKLIST.md)
 
 ## 项目状态
 
@@ -113,9 +123,11 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 
 **P7.2c 分页容器 ✅ 完成**：公开 `PageControl` + `TabPage`（不虚构不存在的 `TabControl`），支持稳定页面 Key、受控 `SelectedIndex`、`OnSelectionChange`、每页独立 native parent、inactive 页面保活和 keyed 重排零重建。布局以 `8×32 DIP` 预算扣除页签边框/表头后填充页面客户区；`examples/page-control` 的 Windows smoke 连续切换并重排页面，校验 PageControl、TabSheet parent 与 Edit HWND 不变，同时保存经像素检查的目标窗口截图。Win32/LCL 的页签实际像素仍由 widgetset 主题/DPI 决定。
 
-**P7.3a 测试与 CI 基线门 ✅ 完成**：18 个内建公开控件进入统一 inventory、mount、原地 patch 与 D7c 基线，可配置 native 控件覆盖属性移除/事件解绑，具交互语义控件覆盖 State 回写；`PluginWidget` 的 D7/生命周期由插件测试独立覆盖。CI 覆盖 Go 1.22–1.26 与当前 1.27rc3、vet/race、真实 DLL native probe，并对全部 9 个公开示例分别执行 Windows build/smoke 与像素有效截图上传。控件挂载、纯属性 patch、Page 切换和十万行虚拟列表基准见 [性能基线](docs/performance-baseline.md)。7.3b 仍等待 7.5 的批次 3/全部 7GUIs 与 7.6，不提前标记完成。
+**P7.3a 测试与 CI 基线门 ✅ 完成**：该里程碑的 18 个内建公开控件进入统一 inventory、mount、原地 patch 与 D7c 基线，可配置 native 控件覆盖属性移除/事件解绑，具交互语义控件覆盖 State 回写；`PluginWidget` 的 D7/生命周期由插件测试独立覆盖。CI 覆盖 Go 1.22–1.26 与当前 1.27rc3、vet/race、真实 DLL native probe，并对当时的 9 个基线示例分别执行 Windows build/smoke 与像素有效截图上传。控件挂载、纯属性 patch、Page 切换和十万行虚拟列表基准见 [性能基线](docs/performance-baseline.md)。7.3b 仍等待 7.6，不提前标记完成。
 
 **P7.4 Windows 打包 🟨 实现完成，发布门待验证**：NSIS 3.11 生成 per-user 安装包，包含示例 EXE、严格匹配的 libenergy DLL、项目/Go/已确认第三方许可证、依赖来源锁、开始菜单入口和卸载器。构建会联检 `energye/lcl` module、designer commit/archive 与 DLL SHA-256，并从最终 EXE 反向验证 PerMonitorV2、Common Controls v6 和完整版本资源；`package-installer` job 已配置在全新 Windows VM 执行安装、交互启动、重装和无残留卸载。该 job 尚待提交后的首次 hosted CI 运行，且 opaque DLL 的完整静态组件许可清单仍待上游构建清单或精确源码审计，因此 7.4 暂不标全绿。v0.1.0 采用 exe + DLL，细节见 [Windows 打包文档](docs/packaging.md)。
+
+**P7.5 产品化与控件扩充批次 3 ✅ 完成**：公开内建控件契约已扩展到 21 个，新增受控水平 `Slider`、native `StringGrid` 与命令值驱动的 `PaintBox`。传入 `StringGrid` 的 `Cells` 必须是严格矩形，且行列数与构造器声明精确匹配，不补齐、不截断。Counter、Temperature Converter、Flight Booker、Timer、CRUD、Circle Drawer、Cells 七个 7GUIs 目标均有独立可运行示例、业务专用 smoke 和真实窗口截图；当前仓库共 16 个公开示例。当前 `Version` 仍为 `0.1.0-dev`，但 v0.1.0 候选公开面已冻结为首发基线；正式 SemVer 承诺从版本标签开始。P7.4 的 clean-VM/DLL 许可门和 P7.6 可访问性/i18n 门仍独立以 [发布检查表](RELEASE_CHECKLIST.md) 为准。
 
 | 子任务 | 状态 |
 |---|---|
@@ -132,24 +144,34 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 可通过环境变量 `FVCL_LIBENERGY_DLL` 指定路径）。
 
 ```go
-// 状态驱动 UI：State 变化自动 re-render，diff 引擎只 patch 变化的属性
-// （r 为绑定层 renderer，由 internal/native 适配，见 examples/basic/main.go）
-app := flux.NewApp(r)
+package main
 
-count := flux.NewState(0)  // 单向：按钮文本随 State 刷新
-name := flux.NewState("")  // 双向：输入框 ↔ State 同步
-app.Mount(func() flux.Widget {
-    return flux.Window(
-        flux.Column(
-            flux.Text("Count: "+fmt.Sprint(count.Get())),
-            flux.Button(flux.Bind(count), flux.OnClick(func(_ flux.Event) {
-                count.Set(count.Get() + 1) // 外部修改 State → 自动 re-render
+import (
+    "os"
+    "path/filepath"
+
+    flux "github.com/xiaowumin-mark/flux-vcl"
+    "github.com/xiaowumin-mark/flux-vcl/native"
+)
+
+func main() {
+    exe, err := os.Executable()
+    if err != nil { panic(err) }
+    if err := native.Init(filepath.Join(filepath.Dir(exe), "libenergy-amd64.dll")); err != nil {
+        panic(err)
+    }
+    app := flux.NewApp(native.NewRenderer())
+    count := flux.NewState(0)
+    if err := app.Mount(func() flux.Widget {
+        return flux.Window(flux.Column(
+            flux.Text("Count"),
+            flux.Button(flux.Bind(count), flux.OnClick(func(flux.Event) {
+                count.Set(count.Get() + 1)
             })),
-            flux.Input(flux.Bind(name)),
-            flux.Text(flux.Bind(name)), // 回显
-        ),
-    )
-})
+        ))
+    }); err != nil { panic(err) }
+    native.Run()
+}
 ```
 
 ```powershell
@@ -182,6 +204,13 @@ go test . -run '^$' -bench Benchmark -benchmem
 - `examples/inspector` —— P7.1 Inspector demo（三层树、Props/布局、事件/mutation 时间线、重建风险）
 - `examples/plugin-badge` —— P7.2 第三方 Badge 插件（公开 SDK、类型化属性、布局/生命周期、零 native switch 改动）
 - `examples/page-control` —— P7.2c 多页容器（稳定 Key、受控切页、页内输入子树与 native parent）
+- `examples/7guis-counter` —— Counter（State、Text、Button）
+- `examples/7guis-temperature-converter` —— Temperature Converter（受控 Input、双向数值转换、非法输入）
+- `examples/7guis-flight-booker` —— Flight Booker（ComboBox、日期校验、受控 Enabled）
+- `examples/7guis-timer` —— Timer（主线程 Animate pump、Slider、ProgressBar）
+- `examples/7guis-crud` —— CRUD（StringGrid 选择/编辑、过滤、稳定业务 ID）
+- `examples/7guis-circle-drawer` —— Circle Drawer（PaintBox、DIP 命中、撤销/重做）
+- `examples/7guis-cells` —— Cells（StringGrid、公式解析与依赖图）
 
 ```powershell
 # 构建并冒烟 basic（State）
@@ -210,6 +239,16 @@ go test . -run '^$' -bench Benchmark -benchmem
 
 # 构建并冒烟 page-control（P7.2c 多页容器）
 .\scripts\build.ps1 -Target page-control; .\scripts\smoke.ps1 -Target page-control
+
+# 依次构建并冒烟全部 7GUIs
+$targets = @(
+  "7guis-counter", "7guis-temperature-converter", "7guis-flight-booker",
+  "7guis-timer", "7guis-crud", "7guis-circle-drawer", "7guis-cells"
+)
+foreach ($target in $targets) {
+  .\scripts\build.ps1 -Target $target
+  .\scripts\smoke.ps1 -Target $target
+}
 ```
 
 插件最小用法：
@@ -241,11 +280,15 @@ flux-vcl/
 ├── animation.go           # Curve/Tween/AnimationController 动画状态机（Phase 5.1）
 ├── theme.go               # Theme 调色板 + Color/FontColor Opt（Phase 5.2）
 ├── list.go                # ListView 虚拟滚动列表 + ScrollOffset（Phase 6）
+├── slider.go              # 批次 3 受控水平 Slider
+├── stringgrid.go          # 批次 3 TStringGrid 严格字符串矩阵
+├── paintbox.go            # 批次 3 PaintBox 稳定绘制命令
 ├── box.go                 # 布局协议：BoxConstraints/Size/Point/对齐枚举（Phase 3.1）
 ├── layout.go              # 单遍 RenderFlex 布局 + ScrollBox 滚动 + 虚拟列表布局 + NodeDiag（Phase 3/6）
 ├── inspector.go           # P7.1 只读 observer、提交/事件、三层树快照与有界历史
 ├── plugin.go              # P7.2 插件注册表、公开 SDK、builder/布局/生命周期/能力
-├── controls.go            # 控件构造器：Window/Column/Row/ScrollBox/ListView/Component/Text/Button/Input
+├── controls.go            # 基础/表单/分页控件构造器
+├── native/                # 公开默认后端入口：Init/NewRenderer/Run
 ├── internal/
 │   ├── widget/            # Widget 接口 + Node + Props（有序属性集，D2 diff）
 │   ├── diff/              # Element 树 + diff/reconciliation 引擎（Phase 1.4）
@@ -268,15 +311,24 @@ flux-vcl/
 │   ├── inspector/         # P7.1 三层树/mutation/event/rebuild demo
 │   │   └── winres/
 │   ├── plugin-badge/      # P7.2 第三方 Badge（badge 子包只依赖公开 flux）
-│   └── page-control/      # P7.2c PageControl/TabPage 多页容器
-│       └── winres/
+│   ├── page-control/      # P7.2c PageControl/TabPage 多页容器
+│   ├── 7guis-counter/     # Counter
+│   ├── 7guis-temperature-converter/
+│   ├── 7guis-flight-booker/
+│   ├── 7guis-timer/       # Slider + ProgressBar + 主线程动画 pump
+│   ├── 7guis-crud/        # StringGrid CRUD
+│   ├── 7guis-circle-drawer/ # PaintBox 圆形绘制
+│   └── 7guis-cells/       # StringGrid 公式表格
 ├── scripts/
 │   ├── build.ps1          # 构建脚手架 + module/DLL 来源联检
 │   ├── smoke.ps1          # 原生交互冒烟
 │   ├── package.ps1        # NSIS 安装包
 │   └── test-installer.ps1 # 安装/启动/卸载闭环
 ├── packaging/             # NSIS、依赖锁与第三方通知
-├── docs/                  # 设计/计划/调研/实验文档
+├── docs/                  # 设计/计划/API/7GUIs/迁移/维护/能力证据
+├── README.en.md           # 英文产品入口
+├── CHANGELOG.md           # 版本变更记录
+├── RELEASE_CHECKLIST.md   # 发布门禁清单
 └── assets/                # 图标等资源
 ```
 
@@ -287,6 +339,14 @@ flux-vcl/
 - [命名规范](docs/naming-conventions.md) —— example/包/标识符/资源命名
 - [设计文档](docs/design.md) —— 架构、三棵树模型、布局/State/事件设计
 - [开发计划](docs/development-plan.md) —— Phase 0–7 任务与验收标准
+- [English README](README.en.md) —— 英文产品入口
+- [7GUIs 任务映射](docs/7guis.md) —— 七项任务、公开 API 与业务边界
+- [v0.1.0 候选 API 冻结清单](docs/api-v0.1.0.md) —— 首发公开标识符与兼容边界
+- [迁移指南](docs/migration.md) —— 预 1.0 与批次 3 迁移注意事项
+- [维护政策](docs/maintenance.md) —— 支持范围、兼容与安全响应
+- [可验证能力对比](docs/capability-comparison.md) —— 八项能力、仓库证据与限制
+- [CHANGELOG](CHANGELOG.md) —— v0.1.0 变更摘要
+- [发布检查表](RELEASE_CHECKLIST.md) —— clean-VM、许可与发布前门禁
 - [底座选型调研](docs/govcl-vs-lcl.md) —— LCL vs VCL 选型依据
 - [libenergy DLL 映射](docs/phase0-e2-libenergy-mapping.md) —— 版本↔DLL 锁定关系
 - [Windows 打包](docs/packaging.md) —— NSIS、依赖锁、资源门禁、安装验证与单 EXE 评估

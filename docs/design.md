@@ -399,6 +399,11 @@ Text(Bind(user.Name))
 Input(Bind(user.Name))
 ```
 
+`Input`/`Memo` 的文本是受控值。锁定的 LCL 后端会在 `SetText` 边界进入
+`textState.applying`，抑制 setter 同步派发的原生 `OnChange`；只有用户编辑才进入
+公开回调。该行为由 native probe 覆盖，避免双向转换或带副作用的回调因受控值
+回写而重复执行。
+
 **订阅即响应（核心规则）**：re-render 只由**被订阅的** State 触发 —— `State.Set` 只通知
 `App.collectBindings` 在 render 时登记过的 App（`state.go`）。State 须经 `Bind(s)`
 （或 `ScrollOffset(s)`，§16）出现在当前树里才算订阅；只被**读取**（如 `ListView` 行
@@ -961,7 +966,83 @@ PageControl(
 
 ---
 
-# 21. 项目结构
+# 21. 批次 3 机制控件（P7.5）
+
+## 21.1 Slider：显式受控整数范围
+
+`Slider` 的 Widget/Node/Element 类型均为 `Slider`，native 对应水平
+`TTrackBar`。`Minimum/Maximum/Value/Step` 在构造结束后统一规范化：默认
+`0/100/0/1`，`Maximum < Minimum` 时收敛到 `Minimum`，`Value` 钳制到闭区间，
+`Step <= 0` 为确定性 panic。程序化属性 patch 不等于用户输入；只有 TrackBar
+的鼠标或键盘变化才通过 `OnValueChange(func(int))` 回写业务 State。
+
+范围按 `Minimum → Maximum → Step → Value` 的固定顺序下发。移除属性分别回落
+到 `0/100/1/0`，移除事件必须 nil 解绑。专属 setter 与事件通过
+`render.SliderController` 可选接口隔离；Renderer 缺少能力时安全跳过。
+布局只支持水平，intrinsic 为 `180×32 DIP`，显式尺寸和普通 constraints 优先。
+
+## 21.2 StringGrid：有界字符串矩阵
+
+`StringGrid` 映射 native `TStringGrid`。公开模型是构造器声明的逻辑 Rows/Columns、
+严格矩形 `[][]string`、可选单行表头、列宽、可编辑标志和受控 `GridCell` 选择；
+所有 slice 在 Opt、构造器、diff、Mock 和 native 边界深复制。传入的 `Cells` 外层
+长度必须精确等于 Rows，每一行长度必须精确等于 Columns；Rows 大于 0 时的空矩阵，
+以及短行、长行、缺行或多行均确定性 panic，不做补齐或截断。非法行列、表头或
+列宽同样确定性 panic，业务对象和公式不会进入 Grid API。
+
+结构属性按“行列 → 表头/列宽 → Cells → Editable → SelectedCell”下发，避免
+先写越界单元格或选择。用户选择由 `OnCellSelect(func(GridCell))` 回写；编辑提交
+由 `OnCellEdit(func(GridCell,string))` 回写新的受控 Cells。native 在程序化写
+Cells/选择期间设置 applying 门，屏蔽同步事件回环。Grid 没有子 Widget，行身份
+属于二维值模型；CRUD 模型的稳定业务 ID 仍由示例保存，排序或过滤不能用行号
+替代业务身份。
+
+属性移除采用确定的安全默认值：`GridSize` 回落为 `Rows=0, Columns=1`；`Headers`
+和 `ColumnWidths` 回落为空 slice（后者由 native 使用 96 DIP 默认列宽）；`Cells`
+回落为当前 shape 的全空字符串矩阵；`Editable` 回落为 `false`；选择回落到有数据
+时的 `{Row:0, Column:0, RowOnly:false}`，无数据时为 `{-1,-1}`；两个事件均 nil
+解绑。若 shape 与依赖属性在同一次提交中一起移除，先应用安全 shape，再按新 shape
+清空 Cells 和选择，不能把旧维度或旧编辑草稿带入下一棵树。
+
+锁定的 energye/lcl v1.0.3 不会为真实鼠标/键盘稳定派发 TStringGrid 的
+`OnAfterSelection`。默认 Renderer 保留该事件作为低延迟路径，同时用一个主线程
+16ms TTimer 读取 Row/Col，并在同一出口按受控选择去重。轮询器只在至少一个 Grid
+绑定选择回调时启用；空闲时禁用并复用同一窗体拥有的实例，窗口关闭时解除回调，
+避免在 TTimer 自身回调栈中 Free。它不占用普通鼠标/键盘事件，也不启动 goroutine。
+受控 shape、Cells、Editable 或 Selection patch 会丢弃尚未提交的原生编辑草稿，
+防止同步结束编辑被 applying 门拦截后留下陈旧提交。
+
+Grid 专属操作走 `render.GridController`；默认 intrinsic 为 `360×220 DIP`。
+它继承 TStringGrid 的原生键盘、焦点与编辑器 IME。复杂 cell renderer、无限
+数据源、ORM 与 Excel 兼容不在 v0.1.0 范围。列宽以 DIP 保存，并在
+`WM_DPICHANGED` 后按新 DPI 重施。
+
+## 21.3 PaintBox：稳定命令值与 invalidate
+
+`PaintBox` 映射 native `TPaintBox`。绘制输入不是回调 Props，而是防御性复制的
+`[]PaintCommand` 稳定值；命令目前覆盖清屏和圆形，几何全部使用 DIP。Props 的
+深值相等保证相同树 D7c 零 mutation；命令值变化由
+`render.PaintController.SetPaintCommands` 更新缓存，并调用 `InvalidatePaint`，
+下一次 `OnPaint` 才把 DIP 命令按当前 DPI 转换到 Canvas。事件回调不在 paint
+栈内修改原生控件，用户通过普通 DIP `OnMouseDown` 做命中测试并更新 State。
+
+native paint 回调由适配层持有，用户没有拿到 LCL Canvas 的逃逸口。移除命令
+回落为空列表并 invalidate；invalidate 只请求重绘，不重建 PaintBox。默认尺寸为
+`360×260 DIP`，可由 Width/Height 和 constraints 覆盖。TPaintBox 是无独立 HWND
+的 graphic control；UIA/屏幕阅读器不能自动读取图元，v0.1.0 由邻接原生文字
+表达选择状态，完整可访问补偿留在 P7.6。`WM_DPICHANGED` 会明确 invalidate，
+下一次 paint 使用新 DPI 重算命令几何。
+
+## 21.4 7GUIs 的边界
+
+Timer 只把时间推进放在主线程 timer/动画 pump；CRUD 与 Cells 的过滤、业务 ID、
+公式解析和依赖图属于示例层；Circle Drawer 的圆列表、命中、半径编辑和
+undo/redo 都是不可变业务 State，PaintBox 仅消费命令。这样三个控件验证了真实
+机制，同时没有把示例业务固化为框架 API。
+
+---
+
+# 22. 项目结构
 
 ```text
 fluxvcl/
@@ -984,7 +1065,7 @@ fluxvcl/
 
 ---
 
-# 22. 开发路线
+# 23. 开发路线
 
 ## Phase 1
 
@@ -1020,7 +1101,7 @@ fluxvcl/
 
 ---
 
-# 23. 最终定位
+# 24. 最终定位
 
 FluxVCL 不追求替代 VCL/LCL。
 

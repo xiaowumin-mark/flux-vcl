@@ -79,6 +79,32 @@ func controlContractCases() []controlContractCase {
 			}
 			return flux.Window(flux.ProgressBar(flux.Key("subject"), flux.Value(value)))
 		}},
+		{"Slider", "Slider", "subject", true, func(updated bool) flux.Widget {
+			value := 10
+			if updated {
+				value = 20
+			}
+			return flux.Window(flux.Slider(flux.Key("subject"), flux.Value(value)))
+		}},
+		{"StringGrid", "StringGrid", "subject", true, func(updated bool) flux.Widget {
+			value := "before"
+			if updated {
+				value = "after"
+			}
+			return flux.Window(flux.StringGrid(1, 1,
+				flux.Key("subject"), flux.Cells([][]string{{value}}),
+			))
+		}},
+		{"PaintBox", "PaintBox", "subject", true, func(updated bool) flux.Widget {
+			radius := 10
+			if updated {
+				radius = 20
+			}
+			return flux.Window(flux.PaintBox([]flux.PaintCommand{{
+				Kind: flux.PaintCircle, X: 30, Y: 30, Radius: radius,
+				FillColor: flux.RGB(20, 80, 160),
+			}}, flux.Key("subject")))
+		}},
 		{"ScrollBox", "ScrollBox", "", true, func(updated bool) flux.Widget {
 			return flux.Window(flux.ScrollBox(flux.Text(contractText(updated))))
 		}},
@@ -122,13 +148,13 @@ func contractTarget(t *testing.T, root *diff.Element, tc controlContractCase) *d
 	return findByType(t, root, tc.targetType)
 }
 
-// TestControlContractMatrixInventory 固定 7.3a 的 18 项基线，防止意外删除、重命名
+// TestControlContractMatrixInventory 固定批次 3 后的 21 项基线，防止意外删除、重命名
 // 或重复；新增公开构造器时必须同步此清单。PluginWidget 的动态注册契约由
 // plugin_test.go 单独覆盖；ListViewRow 不是公开控件。
 func TestControlContractMatrixInventory(t *testing.T) {
 	want := []string{
 		"Window", "Column", "Row", "Component", "Expanded", "Flexible", "Text", "Button",
-		"Input", "Memo", "CheckBox", "RadioButton", "ComboBox", "ProgressBar", "ScrollBox",
+		"Input", "Memo", "CheckBox", "RadioButton", "ComboBox", "ProgressBar", "Slider", "StringGrid", "PaintBox", "ScrollBox",
 		"ListView", "PageControl", "TabPage",
 	}
 	cases := controlContractCases()
@@ -147,7 +173,7 @@ func TestControlContractMatrixInventory(t *testing.T) {
 	}
 }
 
-// TestControlContractMountPatchAndD7cMatrix 对 7.3a 的 18 个内建公开控件统一验证：
+// TestControlContractMountPatchAndD7cMatrix 对 21 个内建公开控件统一验证：
 // mount 完整、相同树零 mutation、属性变化原地 patch 且不重建。
 func TestControlContractMountPatchAndD7cMatrix(t *testing.T) {
 	for _, tc := range controlContractCases() {
@@ -223,6 +249,9 @@ func TestControlContractRemovedPropertyResetMatrix(t *testing.T) {
 		{"RadioButton", func(c bool) flux.Widget { return flux.Window(contractVisibleRadioButton(c)) }},
 		{"ComboBox", func(c bool) flux.Widget { return flux.Window(contractVisibleComboBox(c)) }},
 		{"ProgressBar", func(c bool) flux.Widget { return flux.Window(contractVisibleProgressBar(c)) }},
+		{"Slider", func(c bool) flux.Widget { return flux.Window(contractVisibleSlider(c)) }},
+		{"StringGrid", func(c bool) flux.Widget { return flux.Window(contractVisibleStringGrid(c)) }},
+		{"PaintBox", func(c bool) flux.Widget { return flux.Window(contractVisiblePaintBox(c)) }},
 		{"ListView", func(c bool) flux.Widget {
 			opts := []flux.Opt{flux.Key("subject")}
 			if c {
@@ -287,6 +316,15 @@ func contractVisibleCheckBox(c bool) flux.Widget    { return flux.CheckBox("x", 
 func contractVisibleRadioButton(c bool) flux.Widget { return flux.RadioButton("x", visibleOpts(c)...) }
 func contractVisibleComboBox(c bool) flux.Widget    { return flux.ComboBox(visibleOpts(c)...) }
 func contractVisibleProgressBar(c bool) flux.Widget { return flux.ProgressBar(visibleOpts(c)...) }
+func contractVisibleSlider(c bool) flux.Widget      { return flux.Slider(visibleOpts(c)...) }
+func contractVisibleStringGrid(c bool) flux.Widget {
+	return flux.StringGrid(1, 1, append(visibleOpts(c), flux.Cells([][]string{{"x"}}))...)
+}
+func contractVisiblePaintBox(c bool) flux.Widget {
+	return flux.PaintBox([]flux.PaintCommand{{
+		Kind: flux.PaintCircle, X: 10, Y: 10, Radius: 5, FillColor: flux.RGB(1, 2, 3),
+	}}, visibleOpts(c)...)
+}
 
 type clickEventControlCase struct {
 	name  string
@@ -306,6 +344,9 @@ func TestControlContractEventRemovalMatrix(t *testing.T) {
 		{"RadioButton", func(h func(flux.Event)) flux.Widget { return flux.Window(contractEventRadioButton(h)) }},
 		{"ComboBox", func(h func(flux.Event)) flux.Widget { return flux.Window(contractEventComboBox(h)) }},
 		{"ProgressBar", func(h func(flux.Event)) flux.Widget { return flux.Window(contractEventProgressBar(h)) }},
+		{"Slider", func(h func(flux.Event)) flux.Widget { return flux.Window(contractEventSlider(h)) }},
+		{"StringGrid", func(h func(flux.Event)) flux.Widget { return flux.Window(contractEventStringGrid(h)) }},
+		{"PaintBox", func(h func(flux.Event)) flux.Widget { return flux.Window(contractEventPaintBox(h)) }},
 		{"ListView", func(h func(flux.Event)) flux.Widget { return contractEventListView(h) }},
 		{"PageControl", func(h func(flux.Event)) flux.Widget { return contractEventPageControl(h) }},
 		{"TabPage", func(h func(flux.Event)) flux.Widget { return contractEventTabPage(h) }},
@@ -516,6 +557,15 @@ func contractEventRadioButton(h func(flux.Event)) flux.Widget {
 func contractEventComboBox(h func(flux.Event)) flux.Widget { return flux.ComboBox(eventOpts(h)...) }
 func contractEventProgressBar(h func(flux.Event)) flux.Widget {
 	return flux.ProgressBar(eventOpts(h)...)
+}
+func contractEventSlider(h func(flux.Event)) flux.Widget { return flux.Slider(eventOpts(h)...) }
+func contractEventStringGrid(h func(flux.Event)) flux.Widget {
+	return flux.StringGrid(1, 1, append(eventOpts(h), flux.Cells([][]string{{"x"}}))...)
+}
+func contractEventPaintBox(h func(flux.Event)) flux.Widget {
+	return flux.PaintBox([]flux.PaintCommand{{
+		Kind: flux.PaintCircle, X: 10, Y: 10, Radius: 5, FillColor: flux.RGB(1, 2, 3),
+	}}, eventOpts(h)...)
 }
 func contractEventListView(h func(flux.Event)) flux.Widget {
 	return flux.Window(flux.Expanded(flux.ListView(10, 20, func(i int) flux.Widget {
@@ -763,6 +813,12 @@ func TestControlContractMissingCapabilitiesAreSafe(t *testing.T) {
 		flux.RadioButton("radio", flux.Key("radio"), flux.Checked(true), flux.GroupIndex(1), flux.OnCheckedChange(func(bool) {})),
 		flux.ComboBox(flux.Key("combo"), flux.Items([]string{"a"}), flux.SelectedIndex(0), flux.OnSelectionChange(func(int) {})),
 		flux.ProgressBar(flux.Key("progress"), flux.Value(10)),
+		flux.Slider(flux.Key("slider"), flux.Value(10), flux.OnValueChange(func(int) {})),
+		flux.StringGrid(1, 1, flux.Key("grid"), flux.Cells([][]string{{"x"}}),
+			flux.OnCellSelect(func(flux.GridCell) {}), flux.OnCellEdit(func(flux.GridCell, string) {})),
+		flux.PaintBox([]flux.PaintCommand{{
+			Kind: flux.PaintCircle, X: 10, Y: 10, Radius: 5, FillColor: flux.RGB(1, 2, 3),
+		}}, flux.Key("paint")),
 		flux.Expanded(flux.ListView(100, 20, func(i int) flux.Widget { return flux.Text(fmt.Sprint(i)) }, flux.Key("list"), flux.ScrollOffset(scroll))),
 		flux.PageControl(
 			flux.TabPage("A", flux.Input(), flux.Key("page")),
@@ -772,7 +828,7 @@ func TestControlContractMissingCapabilitiesAreSafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"check", "radio", "combo", "progress", "list", "pages", "page"} {
+	for _, key := range []string{"check", "radio", "combo", "progress", "slider", "grid", "paint", "list", "pages", "page"} {
 		if findByKey(t, app.Root(), key) == nil {
 			t.Fatalf("能力缺失后 Element %q 丢失", key)
 		}

@@ -11,7 +11,7 @@
 //   - Widget / Node 为 type alias（内部实现见 internal/widget），用户可实现
 //     Create() 返回节点树来自定义组件。
 //   - 绑定层隔离（D6）：flux 只面向 internal/render.Renderer 窄接口；默认 LCL
-//     适配见 internal/native。
+//     后端入口见公开子包 github.com/xiaowumin-mark/flux-vcl/native。
 //   - 事件回调（OnClick 等）每次 render 重新绑定（函数值无法比较相等性）。
 //
 // 设计文档见 docs/design.md，开发计划见 docs/development-plan.md。

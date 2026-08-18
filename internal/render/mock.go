@@ -28,8 +28,11 @@ type Mock struct {
 	parents    map[Handle]Handle          // resolved native parent（RadioButton 逻辑组测试面）
 	selectable map[Handle]*mockSelectable // 下拉选择控件的状态与回调（Selectable 测试面）
 	progress   map[Handle]*mockProgress   // 进度控件的范围和值（Progressable 测试面）
+	sliders    map[Handle]*mockSlider     // Slider 的步长与值变化回调
 	radioGroup map[Handle]int             // 单选控件原生组编号（RadioGroupable 测试面）
 	pages      map[Handle]*mockPages      // 分页容器的页面顺序、受控索引与回调
+	paints     map[Handle]*mockPaint      // PaintBox 命令与 invalidate 次数（PaintController 测试面）
+	grids      map[Handle]*mockGrid       // StringGrid 的有界数据、选择与编辑回调
 }
 
 // mockScroll 记录 ListView 滚动配置/位置（Phase 6）。与真实滚动条不同，mock 不
@@ -60,11 +63,21 @@ type mockProgress struct {
 	value   int
 }
 
+type mockSlider struct {
+	step     int
+	onChange func(int)
+}
+
 type mockPages struct {
 	pages    []Handle
 	desired  int
 	selected int
 	onSelect func(int)
+}
+
+type mockPaint struct {
+	commands      []PaintCommand
+	invalidations int
 }
 
 // NewMock 创建空的 Mock。
@@ -89,7 +102,10 @@ func (m *Mock) Destroy(h Handle) {
 	delete(m.checked, h)
 	delete(m.selectable, h)
 	delete(m.progress, h)
+	delete(m.sliders, h)
 	delete(m.pages, h)
+	delete(m.paints, h)
+	delete(m.grids, h)
 	delete(m.radioGroup, h)
 	delete(m.handlers, h)
 	delete(m.scrolls, h)
@@ -564,6 +580,58 @@ func (m *Mock) FirePageSelectionChange(parent Handle, index int) {
 	}
 }
 
+// SetPaintCommands 为 PaintController 测试后端保存命令快照。非法命令与公开
+// API 和 native 边界一样确定性 panic。
+func (m *Mock) SetPaintCommands(h Handle, commands []PaintCommand) {
+	if err := ValidatePaintCommands(commands); err != nil {
+		panic(fmt.Sprintf("render.Mock: invalid PaintCommands: %v", err))
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.paints == nil {
+		m.paints = make(map[Handle]*mockPaint)
+	}
+	if m.paints[h] == nil {
+		m.paints[h] = &mockPaint{}
+	}
+	m.paints[h].commands = ClonePaintCommands(commands)
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "PaintCommands", Value: ClonePaintCommands(commands)})
+}
+
+// InvalidatePaint 记录一次不改变 native identity 的重绘请求。
+func (m *Mock) InvalidatePaint(h Handle) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.paints == nil {
+		m.paints = make(map[Handle]*mockPaint)
+	}
+	if m.paints[h] == nil {
+		m.paints[h] = &mockPaint{}
+	}
+	m.paints[h].invalidations++
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "InvalidatePaint", Value: m.paints[h].invalidations})
+}
+
+// PaintCommands 返回当前 Mock surface 命令的防御性副本。
+func (m *Mock) PaintCommands(h Handle) []PaintCommand {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p := m.paints[h]; p != nil {
+		return ClonePaintCommands(p.commands)
+	}
+	return []PaintCommand{}
+}
+
+// PaintInvalidations 返回 surface 已收到的重绘请求次数。
+func (m *Mock) PaintInvalidations(h Handle) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p := m.paints[h]; p != nil {
+		return p.invalidations
+	}
+	return 0
+}
+
 // TextExtent 模拟 intrinsic 测量：mock 无字体，返回按字符数的稳定伪值
 // （宽=len*8、高=20，与 Phase 1 占位一致，保证布局测试断言稳定）。
 // 布局引擎的真实测量在 LCL 适配层实现（design.md §6.2）。
@@ -763,8 +831,28 @@ func (m *Mock) Ops() []Op {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]Op, len(m.ops))
-	copy(out, m.ops)
+	for index, op := range m.ops {
+		op.Value = cloneOpValue(op.Value)
+		out[index] = op
+	}
 	return out
+}
+
+func cloneOpValue(value any) any {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []int:
+		return append([]int(nil), typed...)
+	case [][]string:
+		return CloneGridCells(typed)
+	case []PaintCommand:
+		return ClonePaintCommands(typed)
+	case []Handle:
+		return append([]Handle(nil), typed...)
+	default:
+		return value
+	}
 }
 
 // Count 统计日志中某类 op 的数量。

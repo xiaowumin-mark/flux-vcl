@@ -62,7 +62,7 @@ jobs:
       - name: Race tests
         run: go test -race -count=1 ./...
       - name: Benchmark smoke
-        run: go test . -run '^$' -bench 'Benchmark(ControlMount|ControlPurePropertyPatch|PageSwitch|VirtualListScrollPatch)$' -benchtime=1x
+        run: go test . -run '^$' -bench 'Benchmark(ControlMount|ControlPurePropertyPatch|PageSwitch|VirtualListScrollPatch|StringGridUpdate|PaintInvalidate)$' -benchtime=1x
 
   native-probe:
     name: Native LCL probe
@@ -81,7 +81,7 @@ jobs:
         shell: pwsh
         run: |
           $env:FVCL_LIBENERGY_DLL = (Resolve-Path .\ref\designer-lib\libenergy-amd64.dll).Path
-          go test -count=1 -v ./internal/native -run '^TestRadioButtonNative'
+          go test -count=1 -v ./internal/native -run '^(TestRadioButtonNative.*|TestBatch3NativeProbe)$'
 
   build-and-smoke:
     name: Smoke ${{ matrix.target }}
@@ -101,6 +101,13 @@ jobs:
           - inspector
           - plugin-badge
           - page-control
+          - 7guis-counter
+          - 7guis-temperature-converter
+          - 7guis-flight-booker
+          - 7guis-timer
+          - 7guis-crud
+          - 7guis-circle-drawer
+          - 7guis-cells
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5

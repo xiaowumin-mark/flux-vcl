@@ -190,6 +190,15 @@ func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 	case "ProgressBar":
 		sz = leafSize(180, 20, n, c)
 		setBounds(n, pos, sz)
+	case "Slider":
+		sz = leafSize(180, 32, n, c)
+		setBounds(n, pos, sz)
+	case "StringGrid":
+		sz = leafSize(360, 220, n, c)
+		setBounds(n, pos, sz)
+	case "PaintBox":
+		sz = leafSize(360, 260, n, c)
+		setBounds(n, pos, sz)
 	case "PageControl":
 		sz = layoutPageControl(n, r, c, pos, d)
 	case "TabPage":

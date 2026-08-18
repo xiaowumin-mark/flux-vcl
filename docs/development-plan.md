@@ -495,7 +495,7 @@ State 驱动更新，以及窗口关闭后无异常。
 
 ## Phase 7 — 工程化与生态 · 目标：可用、可信、可发布
 
-> **状态：进行中（7.1、7.2、7.2c 与 7.3a 基线门已完成，更新于 2026-08-18）。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
+> **状态：进行中（7.1、7.2、7.2c、7.3a 与 7.5 已完成，更新于 2026-08-19）。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
 > 指为 Inspector、插件验证与 7GUIs 首发示例补齐必要的内建控件和机制，不等于包装
 > energye/lcl 的全部控件。菜单、对话框、TreeView、图像/媒体、托盘等不属于 v0.1.0
 > 发布阻塞项，后续按真实用例或插件生态增量加入。
@@ -507,9 +507,9 @@ State 驱动更新，以及窗口关闭后无异常。
 | 7.1 | Inspector | Widget/Element/native 树、属性、布局、实际事件和 mutation 查看（design.md §18）；高亮任何原生控件重建。 | ✅ 完成 |
 | 7.2 | 插件系统 | `RegisterWidget` 注册、生命周期、布局与可选 Renderer 能力（design.md §19）；内建控件与第三方 builder 双轨隔离。 | ✅ 完成 |
 | 7.2c | 控件扩充批次 2 | 插件模型定案后实现 `PageControl/TabPage` 结构性容器，验证每页子树与 native parent 模型。 | ✅ 完成 |
-| 7.3 | 测试与 CI 强化 | 分 7.3a 基线门和 7.3b 发布门；D7 覆盖全量已发布控件、Windows 冒烟/截图、性能基准。 | 🟨 7.3a 完成；7.3b 待 7.5/7.6 |
+| 7.3 | 测试与 CI 强化 | 分 7.3a 基线门和 7.3b 发布门；D7 覆盖全量已发布控件、Windows 冒烟/截图、性能基准。 | 🟨 7.3a 完成；7.3b 待 7.6 |
 | 7.4 | 打包 | 安装器、DPI manifest/版本资源、DLL 版本校验、单 EXE 方案评估。 | 🟨 实现完成；clean VM 首跑与 DLL 完整许可清单待门禁 |
-| 7.5 | 产品化与控件扩充批次 3 | 中英双语文档、全量示例、7GUIs；按示例机制逐项实现 `Slider`、`StringGrid`（native `TStringGrid`）、`Canvas/PaintBox`。 | ⬜ 未开始 |
+| 7.5 | 产品化与控件扩充批次 3 | 中英双语文档、全量示例、7GUIs；按示例机制逐项实现 `Slider`、`StringGrid`（native `TStringGrid`）、`Canvas/PaintBox`。 | ✅ 完成 |
 | 7.6 | Accessibility / i18n | 高对比度、键盘导航、焦点顺序、可访问名称/UIA 能力清单、国际化资源。 | ⬜ 未开始 |
 
 ### 固定执行顺序与门禁
@@ -596,8 +596,8 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 | Circle Drawer | Canvas/PaintBox、鼠标命中、undo/redo 状态 | 自绘机制在该任务内实现，不用预生成图片替代。 |
 | Cells | StringGrid、公式依赖图、增量更新 | 复用 StringGrid；公式解析/依赖图属于示例业务层，不塞入控件 API。 |
 
-每个示例必须独立可运行、带说明和截图；共享 smoke 脚本仍遵守“每窗口唯一 Button”约束，
-若任务天然需要多个按钮，则为该示例增加按 Key/AutomationId 定位的专用 smoke，不能削弱业务 UI。
+每个示例必须独立可运行、带说明和截图。7GUIs 不套用“每窗口唯一 Button”的通用
+计数信号；共享 smoke 脚本为每项任务定位真实业务控件并断言业务状态，不能为测试削弱或污染业务 UI。
 
 ### 7.1–7.6 分项完成条件
 
@@ -665,8 +665,9 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 > 切换和十万行列表更新基准及首份样本见 [performance-baseline.md](./performance-baseline.md)。
 > 本地逐项复跑 9 个公开 examples 均通过 build/smoke、专属交互断言与退出码 0，
 > 9 张像素有效 PNG 均非空（9,202–46,650 bytes）。
-> **7.3b 仍待 7.5/7.6**：`StringGrid` 更新、`Canvas/PaintBox` invalidate、全部 7GUIs
-> 以及键盘/高对比度/i18n 复测必须在对应实现完成后进入最终发布矩阵。
+> **7.3b 仍待 7.6**：批次 3 的 `StringGrid` 更新、`Canvas/PaintBox` invalidate 和全部
+> 7GUIs 已进入测试/Windows smoke；键盘、高对比度、可访问性和 i18n 复测仍须在 7.6
+> 完成后进入最终发布矩阵。
 
 - **7.3a**：批次 1/2 + 既有控件统一跑 mount、patch 不重建、移除重置、事件解绑、同树零 mutation、State 回写。
 - **7.3b**：批次 3、7.6 与全部 7GUIs 纳入同一矩阵；容器额外测 keyed 重排/native parent，绘制额外测 invalidate 不重建，并复跑键盘/高对比度/i18n smoke。
@@ -701,6 +702,19 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 - 单 EXE 仅做可行性与许可证评估；若不能可靠落地，v0.1.0 明确采用 exe + DLL，不阻塞发布。
 
 #### 7.5 产品化
+
+> **完成记录（2026-08-19）**：公开控件契约扩展到 21 个，`Slider`、native
+> `StringGrid`、命令值 `PaintBox` 与七个 7GUIs 示例按统一矩阵落地；布局矩阵覆盖
+> 显式尺寸、resize、容器客户区、溢出诊断和 144 DPI native 边界。默认后端通过
+> 公开 `native` 包启动，16 个公开示例均不再依赖 `internal/*`。本地最终执行
+> `go test -count=1 ./...`、`go test -race -count=1 ./...`、`go vet ./...`、
+> `git diff --check` 与工作区源码 `gofmt` 检查均通过。16 个示例从同一最终源码逐个
+> build/smoke，业务交互、退出码 0 与像素有效截图全部通过（PNG 7,801–46,650 bytes）；
+> 七张首发 7GUIs 截图另保存在 `docs/screenshots/` 并由任务映射页逐项链接。
+> 七个 7GUIs 使用真实业务控件断言，无测试专用控件；Temperature Converter 明确
+> 断言受控重渲染后的焦点/caret，Circle Drawer 覆盖新建、选择、半径更新与 undo/redo。
+> 候选 API、迁移/维护政策、
+> CHANGELOG、发布检查单和中英文入口已同步；正式 SemVer 承诺仍从 v0.1.0 标签开始。
 
 - README、快速开始、API/设计/限制、迁移和维护政策提供中英双语入口；所有公开 API 有可检索示例。
 - 完成上表 7GUIs，并为批次 2/3 各提供聚合或专门 example；首发截图来自真实运行窗口。

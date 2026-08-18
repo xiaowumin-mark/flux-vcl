@@ -26,6 +26,25 @@ go test . -run '^$' `
 | `BenchmarkPageSwitch` | 11,552 | 1 | 10,860 | 124 |
 | `BenchmarkVirtualListScrollPatch` | 236,737 | 52 | 261,062 | 2,355 |
 
-`ControlMount` 覆盖当前发布的 native 控件全集；纯属性 patch 与 Page 切换保持原
-identity；虚拟列表样本在十万行中段移动现有控件池。Grid 更新与 Paint invalidate
-依赖 7.5 的 `StringGrid`、`Canvas/PaintBox`，在 7.3b 发布门加入本表。
+`ControlMount` 覆盖当时发布的 native 控件全集；纯属性 patch 与 Page 切换保持原
+identity；虚拟列表样本在十万行中段移动现有控件池。
+
+## P7.5 批次 3 基线（2026-08-18）
+
+环境同上。命令：
+
+```powershell
+go test . -run '^$' `
+  -bench 'Benchmark(StringGridUpdate|PaintInvalidate)$' `
+  -benchmem -benchtime=500ms -count=3
+```
+
+| 基准 | ns/op | mutations/op | B/op | allocs/op |
+|---|---:|---:|---:|---:|
+| `BenchmarkStringGridUpdate` | 163,562 | 1 | 131,754 | 1,685 |
+| `BenchmarkPaintInvalidate` | 5,190 | 2 | 4,801 | 55 |
+
+`StringGridUpdate` 对固定尺寸的受控矩阵只下发一次 Cells mutation；
+`PaintInvalidate` 对稳定 PaintBox identity 下发命令快照和一次 invalidate，不创建或
+销毁 native 控件。它们已进入 CI 的单次 benchmark smoke；7.3b 发布门仍需在固定
+发布环境复跑，不以前述耗时作为 hosted runner 的硬阈值。

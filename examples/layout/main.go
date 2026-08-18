@@ -25,10 +25,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/energye/lcl/lcl"
-
 	flux "github.com/xiaowumin-mark/flux-vcl"
-	"github.com/xiaowumin-mark/flux-vcl/internal/native"
+	"github.com/xiaowumin-mark/flux-vcl/native"
 )
 
 // scrollItems 左面板滚动列表内容：20 行文本（Phase 3.6 滚动容器 demo）。
@@ -136,5 +134,5 @@ func main() {
 		}
 	}()
 
-	lcl.Application.Run()
+	native.Run()
 }

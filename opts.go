@@ -88,18 +88,18 @@ func SelectedIndex(index int) Opt {
 	return optFn(func(n *Node) { n.Props.Set("SelectedIndex", index) })
 }
 
-// Minimum 设置 ProgressBar 的最小值（缺省 0）。最终范围与 Value 在 ProgressBar
-// 构造时统一规范化，因此多个 Opt 的声明顺序不影响结果。
+// Minimum 设置 ProgressBar 或 Slider 的最小值（缺省 0）。最终范围与 Value 在
+// 控件构造时统一规范化，因此多个 Opt 的声明顺序不影响结果。
 func Minimum(value int) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Minimum", value) })
 }
 
-// Maximum 设置 ProgressBar 的最大值（缺省 100）。小于 Minimum 时回落为 Minimum。
+// Maximum 设置 ProgressBar 或 Slider 的最大值（缺省 100）。小于 Minimum 时回落为 Minimum。
 func Maximum(value int) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Maximum", value) })
 }
 
-// Value 设置 ProgressBar 的当前值；最终值被钳制到 [Minimum, Maximum]。
+// Value 设置 ProgressBar 或 Slider 的当前值；最终值被钳制到 [Minimum, Maximum]。
 func Value(value int) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Value", value) })
 }

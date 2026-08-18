@@ -1,0 +1,44 @@
+{
+  "RT_GROUP_ICON": {
+    "APPICON": {
+      "0000": ["../../../assets/icon.png"]
+    }
+  },
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {
+          "name": "FluxVCL.7GUIs.FlightBooker",
+          "version": "0.1.0.0"
+        },
+        "description": "FluxVCL 7GUIs Flight Booker",
+        "minimum-os": "vista",
+        "execution-level": "asInvoker",
+        "ui-access": false,
+        "dpi-awareness": "perMonitorV2",
+        "disable-theming": false,
+        "use-common-controls-v6": true
+      }
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0409": {
+        "fixed": {
+          "file_version": "0.1.0.0",
+          "product_version": "0.1.0.0"
+        },
+        "info": {
+          "0409": {
+            "CompanyName": "FluxVCL",
+            "ProductName": "FluxVCL",
+            "ProductVersion": "0.1.0",
+            "FileVersion": "0.1.0.0",
+            "FileDescription": "FluxVCL 7GUIs Flight Booker",
+            "OriginalFilename": "7guis-flight-booker.exe"
+          }
+        }
+      }
+    }
+  }
+}

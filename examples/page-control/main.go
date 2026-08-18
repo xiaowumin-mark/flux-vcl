@@ -15,9 +15,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/energye/lcl/lcl"
 	flux "github.com/xiaowumin-mark/flux-vcl"
-	"github.com/xiaowumin-mark/flux-vcl/internal/native"
+	"github.com/xiaowumin-mark/flux-vcl/native"
 )
 
 func main() {
@@ -99,7 +98,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "挂载失败:", err)
 		os.Exit(2)
 	}
-	lcl.Application.Run()
+	native.Run()
 }
 
 func pageTitle(reversed bool, index int) string {

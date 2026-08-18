@@ -25,10 +25,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/energye/lcl/lcl"
-
 	flux "github.com/xiaowumin-mark/flux-vcl"
-	"github.com/xiaowumin-mark/flux-vcl/internal/native"
+	"github.com/xiaowumin-mark/flux-vcl/native"
 )
 
 const (
@@ -153,5 +151,5 @@ func main() {
 
 	r2.Show() // 次要窗体须显式 Show（主窗体由 Application.Run() 自动显示）
 
-	lcl.Application.Run()
+	native.Run()
 }

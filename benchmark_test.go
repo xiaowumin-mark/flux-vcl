@@ -50,6 +50,30 @@ func (r *benchmarkRenderer) OnPageSelectionChange(render.Handle, func(int))     
 func (r *benchmarkRenderer) SetScrollConfig(render.Handle, render.ScrollConfig) { r.mutation() }
 func (r *benchmarkRenderer) SetScrollPos(render.Handle, int)                    { r.mutation() }
 func (r *benchmarkRenderer) OnScroll(render.Handle, func(int))                  { r.mutation() }
+func (r *benchmarkRenderer) SetSliderStep(render.Handle, int)                   { r.mutation() }
+func (r *benchmarkRenderer) OnSliderValueChange(render.Handle, func(int))       { r.mutation() }
+func (r *benchmarkRenderer) SetPaintCommands(render.Handle, []render.PaintCommand) {
+	r.mutation()
+}
+func (r *benchmarkRenderer) InvalidatePaint(render.Handle) { r.mutation() }
+func (r *benchmarkRenderer) SetGridSize(render.Handle, render.GridSize) {
+	r.mutation()
+}
+func (r *benchmarkRenderer) SetGridHeaders(render.Handle, []string) { r.mutation() }
+func (r *benchmarkRenderer) SetGridColumnWidths(render.Handle, []int) {
+	r.mutation()
+}
+func (r *benchmarkRenderer) SetGridCells(render.Handle, [][]string) { r.mutation() }
+func (r *benchmarkRenderer) SetGridEditable(render.Handle, bool)    { r.mutation() }
+func (r *benchmarkRenderer) SetGridSelection(render.Handle, render.GridSelection) {
+	r.mutation()
+}
+func (r *benchmarkRenderer) OnGridCellSelect(render.Handle, func(render.GridCell)) {
+	r.mutation()
+}
+func (r *benchmarkRenderer) OnGridCellEdit(render.Handle, func(render.GridCell, string)) {
+	r.mutation()
+}
 
 func benchmarkControlTree() flux.Widget {
 	return flux.Window(
@@ -63,6 +87,12 @@ func benchmarkControlTree() flux.Widget {
 			flux.RadioButton("radio", flux.Checked(true), flux.GroupIndex(1)),
 			flux.ComboBox(flux.Items([]string{"a", "b"}), flux.SelectedIndex(1)),
 			flux.ProgressBar(flux.Minimum(0), flux.Maximum(100), flux.Value(50)),
+			flux.Slider(flux.Minimum(0), flux.Maximum(100), flux.Value(50), flux.Step(5)),
+			flux.StringGrid(2, 2, flux.Headers([]string{"A", "B"}),
+				flux.Cells([][]string{{"A1", "B1"}, {"A2", "B2"}})),
+			flux.PaintBox([]flux.PaintCommand{{
+				Kind: flux.PaintCircle, X: 20, Y: 20, Radius: 10, FillColor: flux.RGB(20, 80, 160),
+			}}, flux.Width(120), flux.Height(80)),
 			flux.ScrollBox(flux.Text("scroll content")),
 			flux.PageControl(
 				flux.TabPage("A", flux.Input(), flux.Key("page-a")),
@@ -172,6 +202,73 @@ func BenchmarkVirtualListScrollPatch(b *testing.B) {
 			value = 5200
 		}
 		offset.Set(value)
+	}
+	b.ReportMetric(float64(r.mutations-startMutations)/float64(b.N), "mutations/op")
+}
+
+func benchmarkGridCells(updated bool) [][]string {
+	cells := make([][]string, 100)
+	for row := range cells {
+		cells[row] = make([]string, 10)
+		for column := range cells[row] {
+			cells[row][column] = fmt.Sprintf("R%dC%d", row, column)
+		}
+	}
+	if updated {
+		cells[50][5] = "updated"
+	}
+	return cells
+}
+
+func benchmarkGridTree(updated bool) flux.Widget {
+	return flux.Window(flux.StringGrid(100, 10,
+		flux.Key("grid"), flux.Cells(benchmarkGridCells(updated)), flux.SelectedCell(50, 5),
+	))
+}
+
+// BenchmarkStringGridUpdate 记录 1000 个受控单元格中一个值变化的深比较和原地 patch 成本。
+func BenchmarkStringGridUpdate(b *testing.B) {
+	r := &benchmarkRenderer{}
+	app := flux.NewApp(r)
+	if err := app.Render(benchmarkGridTree(false)); err != nil {
+		b.Fatal(err)
+	}
+	startMutations := r.mutations
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := app.Render(benchmarkGridTree(i%2 == 0)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(r.mutations-startMutations)/float64(b.N), "mutations/op")
+}
+
+func benchmarkPaintTree(radius int) flux.Widget {
+	return flux.Window(flux.PaintBox([]flux.PaintCommand{{
+		Kind: flux.PaintCircle, X: 80, Y: 80, Radius: radius,
+		FillColor: flux.RGB(20, 80, 160),
+	}}, flux.Key("paint")))
+}
+
+// BenchmarkPaintInvalidate 记录稳定绘制命令变化后更新快照并 invalidate 的成本。
+func BenchmarkPaintInvalidate(b *testing.B) {
+	r := &benchmarkRenderer{}
+	app := flux.NewApp(r)
+	if err := app.Render(benchmarkPaintTree(20)); err != nil {
+		b.Fatal(err)
+	}
+	startMutations := r.mutations
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		radius := 20
+		if i%2 == 0 {
+			radius = 30
+		}
+		if err := app.Render(benchmarkPaintTree(radius)); err != nil {
+			b.Fatal(err)
+		}
 	}
 	b.ReportMetric(float64(r.mutations-startMutations)/float64(b.N), "mutations/op")
 }

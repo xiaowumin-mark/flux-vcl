@@ -49,6 +49,7 @@
 | 路径 | 职责 | 依赖方向 |
 |---|---|---|
 | 根包 `flux` | 用户 API：构造器 / Opt / `App` / `State` / `Bind` / 动画 / 主题 / 逃逸口 | → internal |
+| `native/` | 默认 Windows 后端的公开启动入口：`Init` / `NewRenderer` / `Run` | → internal/native |
 | `internal/widget` | `Widget` 接口 + `Node` + `Props`（有序属性集，D2 diff 的输入） | 纯数据，无外部依赖 |
 | `internal/diff` | Element 树 + diff/reconciliation 引擎（D1/D2/D3/D7） | → widget |
 | `internal/render` | `Renderer` 窄接口 + mutation op 集 + DIP 换算 + Mock（D6） | 面向接口，无 LCL 依赖 |
@@ -58,7 +59,7 @@
 | `scripts/` | 构建 / 冒烟 / 取 DLL 脚本 | — |
 | `docs/` | 设计 / 计划 / 调研 / 规范文档 | — |
 
-- **依赖只进不出**：`internal/*` 不得反向 import 根包；用户代码只 import 根包，不得 import `internal/*`（Go internal 规则保证）。
+- **依赖只进不出**：`internal/*` 不得反向 import 根包；用户代码 import 根包，使用默认后端时再 import 公开 `native` 子包，不得 import `internal/*`（Go internal 规则保证）。
 - 新增模块（如多后端适配）须先在 development-plan 立项再落代码。
 
 ---
@@ -112,7 +113,10 @@
 
 ## 7. 文档规范
 
-- `docs/` 与 README、代码注释**全中文**。
+- `docs/`、`README.md` 与代码注释原则上**全中文**。产品化入口
+  `README.en.md`、惯例发布元数据 `CHANGELOG.md`/`RELEASE_CHECKLIST.md`，以及明确
+  标为双语映射页的文档（当前为 `docs/7guis.md`）是该约定的有限豁免；英文内容
+  必须与中文主文档保持同一事实边界，不能单独承诺未验证能力。
 - **引用格式**：设计文档按章节引用，统一 `design.md §N.M` / `development-plan §N`（示例：`design §4.1`、`§5`）。引用时不写绝对章节标题以免文档演进后失配。
 - **已知限制必须记录**：实测到的后端限制（如 win32 下 `TButton` 由 OS 主题绘制、`Color`/`FontColor` 不渲染）须记入 design.md 相关章节 + 提交信息，并在 README「已知限制」区同步。禁止"发现不说、下个阶段才想起来"。
 - **README 同步**：新 API / 新示例 / 阶段状态表 / 目录结构变化 → 同步更新 README。
@@ -126,7 +130,9 @@
 
 - 目录名用**语义英文小写**，表达"演示的能力"，优先领域语义而非阶段号。
 - 每个示例**自包含**：`main.go` + `winres/winres.json`（+ 生成的 `.syso`）。
-- **smoke 约束**：纳入 CI 冒烟的示例，窗口内 `Button` 必须**唯一**，点击信号可枚举断言（按钮文本变化）；非按钮交互用可点击 `Text`（`TLabel` 无 HWND，不干扰冒烟）。
+- **smoke 约束**：基础/通用示例可保留唯一纯数字 `Button` 作为 State 回写信号。
+  7GUIs 不插入测试专用控件；其 smoke 必须定位真实业务控件，并断言对应的
+  计数、换算、启用状态、进度、表格选择/编辑或绘制结果（见 [7GUIs 映射](7guis.md)）。
 - 触发新特性的示例要引用 design 章节，方便读者对照设计。
 
 ---

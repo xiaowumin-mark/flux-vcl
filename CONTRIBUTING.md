@@ -21,7 +21,9 @@
 
 - **报告 Bug**：提 issue，说明复现步骤、期望行为 / 实际行为、相关 commit 或版本。
 - **提交修复 / 新特性**：按下面工作流操作，改动需带无头测试（见开发规范 §6）。
-- **文档改进**：同样走 PR，遵循 docs/ 全中文约定。
+- **文档改进**：同样走 PR；中文主文档之外，仅 `README.en.md`、惯例发布元数据
+  `CHANGELOG.md`/`RELEASE_CHECKLIST.md` 和明确标记的双语映射页适用开发规范中的
+  语言豁免。
 
 ---
 
@@ -40,10 +42,35 @@
 # 全量无头测试（不依赖 DLL，任意平台可跑）
 go test ./...
 
-# 构建并冒烟某个示例（basic / layout / events / phase5 / form-controls / virtual-list / inspector / plugin-badge / page-control）
+# 构建并冒烟某个示例（公开目标见下表）
 .\scripts\build.ps1 -Target <name>
 .\scripts\smoke.ps1 -Target <name>
 ```
+
+### 2.1 公开示例与 smoke 契约
+
+| 目标 | 主要覆盖 |
+|---|---|
+| `basic` | State、Button、Input 双向绑定 |
+| `layout` | Flex、滚动、resize、DPI |
+| `events` | 鼠标/键盘事件、IME、生命周期 |
+| `phase5` | 动画、主题、Async、Component |
+| `form-controls` | Memo、CheckBox、ComboBox、ProgressBar、RadioButton |
+| `virtual-list` | 十万行虚拟化、滚动回写、多窗口 |
+| `inspector` | 三层快照、mutation/event、重建风险 |
+| `plugin-badge` | 公开插件 SDK、布局与生命周期 |
+| `page-control` | PageControl、TabPage、稳定页面 Key |
+| `7guis-counter` | Counter |
+| `7guis-temperature-converter` | Temperature Converter |
+| `7guis-flight-booker` | Flight Booker |
+| `7guis-timer` | Timer、Slider、ProgressBar、主线程动画 pump |
+| `7guis-crud` | CRUD、StringGrid 选择与编辑 |
+| `7guis-circle-drawer` | Circle Drawer、PaintBox、撤销/重做 |
+| `7guis-cells` | Cells、StringGrid、公式依赖 |
+
+基础/通用示例使用通用 smoke 时，保留且只保留一个 Caption 为纯数字的按钮：初始
+Caption 为 `0`，点击一次后由 State 更新为 `1`。7GUIs 不添加测试专用控件；其
+专用 smoke 必须按业务 Caption/class/位置定位真实控件，并断言任务状态变化。
 
 ---
 
@@ -136,9 +163,10 @@ chore/ci-windows-smoke
 - **标题** = 一条提交信息（`type(scope): subject`）。
 - **正文**：动机（为什么）、影响面（改了哪些包 / 是否动 API）、测试（新增了哪些无头测试、是否手动冒烟）。
 - 关联 issue：`Closes #123`。
-- 触发 CI：`go test ./...` + `go vet ./...` + 构建冒烟（basic/layout/events/phase5/form-controls/virtual-list/inspector/plugin-badge/page-control）。
+- 触发 CI：`go test ./...` + `go vet ./...` + §2.1 表中全部公开示例的独立构建、冒烟
+  与截图检查。
 - CI 还会在 Go 1.22–1.26 与当前 1.27rc3 上跑无头测试，在 1.27rc3 跑 `-race`，并在已校验 DLL
-  到位后执行 native probe；全部 9 个公开示例（含 layout/page-control）必须产出
+  到位后执行 native probe；全部 16 个公开示例必须产出
   经像素校验的非空截图 artifact。
 - 触及 API 或行为：必须同步更新 `design.md` / `README.md`。
 
@@ -165,4 +193,10 @@ chore/ci-windows-smoke
 | [docs/naming-conventions.md](docs/naming-conventions.md) | 命名规范：example / 包文件 / 标识符 / 资源 / 提交词汇 |
 | [docs/design.md](docs/design.md) | 架构与设计（三棵树、布局、State、事件、主题…） |
 | [docs/development-plan.md](docs/development-plan.md) | Phase 0–7 计划、架构基线决策 D1–D7 与验收标准 |
+| [docs/7guis.md](docs/7guis.md) | 七个 7GUIs 任务与公开 API 映射 |
+| [docs/api-v0.1.0.md](docs/api-v0.1.0.md) | v0.1.0 候选 API 冻结清单 |
+| [docs/capability-comparison.md](docs/capability-comparison.md) | 八项可验证能力、仓库证据与边界 |
+| [docs/migration.md](docs/migration.md) | 预 1.0 迁移规则与批次 3 注意事项 |
+| [docs/maintenance.md](docs/maintenance.md) | 维护范围、兼容和安全响应政策 |
 | [docs/performance-baseline.md](docs/performance-baseline.md) | 发布性能样本、复跑命令与趋势比较规则 |
+| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | v0.1.0 发布前检查项与未关闭门禁 |
