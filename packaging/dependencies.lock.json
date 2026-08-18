@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "goModule": {
+    "path": "github.com/energye/lcl",
+    "version": "v1.0.3"
+  },
+  "runtime": {
+    "goos": "windows",
+    "goarch": "amd64",
+    "fileName": "libenergy-amd64.dll",
+    "sha256": "2D13987CB5505D56C24D073F5CE8C1CE981A9BD1BD78D8BDE16C8EDBD8641300",
+    "source": {
+      "repository": "https://github.com/energye/designer",
+      "commit": "5c4ec54834ce00641920c6c79616e8f4d58b5a68",
+      "archivePath": "resources/frameworks/lib/windows/libenergy-amd64.zip",
+      "url": "https://raw.githubusercontent.com/energye/designer/5c4ec54834ce00641920c6c79616e8f4d58b5a68/resources/frameworks/lib/windows/libenergy-amd64.zip"
+    }
+  },
+  "tools": {
+    "goWinresModule": "github.com/tc-hib/go-winres",
+    "goWinresVersion": "v0.3.3",
+    "nsisVersion": "3.11",
+    "nsisChocolateyVersion": "3.11.0"
+  }
+}

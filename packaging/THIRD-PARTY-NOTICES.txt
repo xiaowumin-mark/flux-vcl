@@ -1,0 +1,41 @@
+FluxVCL third-party notices
+===========================
+
+The FluxVCL Windows package contains the following third-party components.
+
+Go runtime and standard library
+-------------------------------
+The example executable contains the Go runtime and standard library from the
+toolchain used to build it. The exact toolchain version is recorded in the
+executable's Go build information. Its license and patent grant are installed
+as Go-LICENSE.txt and Go-PATENTS.txt.
+
+energye/lcl v1.0.3
+------------------
+Source: https://github.com/energye/lcl/tree/v1.0.3
+License: Apache License 2.0
+
+The Go binding is linked into the example executable. A copy of its Apache
+License 2.0 text is installed as energye-Apache-2.0.txt.
+
+libenergy-amd64.dll
+-------------------
+Source repository: https://github.com/energye/designer
+Pinned commit: 5c4ec54834ce00641920c6c79616e8f4d58b5a68
+Archive path: resources/frameworks/lib/windows/libenergy-amd64.zip
+SHA-256: 2D13987CB5505D56C24D073F5CE8C1CE981A9BD1BD78D8BDE16C8EDBD8641300
+Upstream repository license at the pinned commit: Apache License 2.0
+
+Binary inspection identifies Lazarus LCL 4.4.0.0, Free Pascal 3.2.2,
+LazControls, VirtualTrees, IJG JPEG-derived code, and hundreds of CEF4Delphi
+symbols in this DLL. The pinned designer repository does not publish the DLL's
+complete source/build manifest, Pascal source, SBOM, NOTICE, or a component-level
+license bundle. Its repository-level Apache-2.0 license therefore does not, by
+itself, satisfy or prove the licenses and source obligations of components such
+as modified LGPL LCL/FPC, MPL-1.1-or-LGPL VirtualTreeView, IJG PasJPEG, and
+MPL/LGPL CEF4Delphi. This package is not release-ready until upstream supplies
+the exact source commit and build recipe plus a complete component SBOM/NOTICE,
+or the same obligations are verified against reproducible source for this hash.
+
+The DLL remains side by side so its exact bytes and origin can be audited. The
+machine-readable source and hash mapping is installed as dependencies.lock.json.

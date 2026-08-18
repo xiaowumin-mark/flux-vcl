@@ -12,17 +12,20 @@
 .EXAMPLE
   .\scripts\build.ps1; .\scripts\smoke.ps1
   .\scripts\smoke.ps1 -Target basic
+  .\scripts\smoke.ps1 -Target basic -ExePath C:\Apps\FluxVCL\basic.exe
 #>
 param(
     [string]$Target = "basic",   # 目标应用：examples/<Target>
     [string]$Output = "bin",     # 与 build.ps1 的 Output 一致
+    [string]$ExePath = "",       # 非空时直接验证指定 EXE（安装包 smoke）
     [string]$Screenshot = ""     # 非空则点击验证后保存截图到此路径（CI artifact）
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root "$Output\$Target.exe"
+$exe = if ($ExePath) { $ExePath } else { Join-Path $root "$Output\$Target.exe" }
 if (-not (Test-Path $exe)) { Write-Error "未找到 $exe，先执行 scripts/build.ps1"; exit 2 }
+$exe = (Resolve-Path -LiteralPath $exe).Path
 
 Add-Type -TypeDefinition @'
 using System;

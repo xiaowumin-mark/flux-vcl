@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   FluxVCL 构建脚本（Phase 0.3 构建脚手架）。
 
@@ -13,7 +13,7 @@
 .NOTES
   libenergy-amd64.dll 必须与 lcl 包版本严格一致（见 docs/phase0-e2-libenergy-mapping.md）。
   默认从 ref/ 下已验证副本取 DLL；也可用环境变量 FVCL_LIBENERGY_DLL 指定。
-  DLL 权威来源：energye/designer 内嵌 zip（resources/frameworks/lib/windows/libenergy-amd64.zip）。
+  module、DLL 来源与 SHA-256 统一锁定在 packaging/dependencies.lock.json。
 #>
 param(
     [string]$Target = "basic",   # 目标应用目录：examples/<Target>
@@ -23,37 +23,35 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$expectedDllSha256 = "2D13987CB5505D56C24D073F5CE8C1CE981A9BD1BD78D8BDE16C8EDBD8641300"
+$lockPath = Join-Path $root "packaging\dependencies.lock.json"
+$lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+$runtimeFileName = [string]$lock.runtime.fileName
+$verifyScript = Join-Path $PSScriptRoot "verify-dependencies.ps1"
 
 # ---------- 1. 定位 libenergy DLL ----------
 $dllCandidates = @(
     $env:FVCL_LIBENERGY_DLL,
-    (Join-Path $root "ref\e1-smoke\libenergy-amd64.dll"),
-    (Join-Path $root "ref\designer-lib\libenergy-amd64.dll")
+    (Join-Path $root "ref\e1-smoke\$runtimeFileName"),
+    (Join-Path $root "ref\designer-lib\$runtimeFileName")
 )
 $dllCandidates = @($dllCandidates | Where-Object { $_ -and (Test-Path $_) })
 if ($dllCandidates.Count -eq 0) {
-    Write-Error "libenergy-amd64.dll 未找到。请设置环境变量 FVCL_LIBENERGY_DLL，"
-    Write-Error "或从 energye/designer 内嵌 zip 解压到 ref/ 下（见 docs/phase0-e2-libenergy-mapping.md）。"
-    exit 2
+    throw "libenergy-amd64.dll 未找到。请设置 FVCL_LIBENERGY_DLL，或运行 scripts/fetch-libenergy.ps1（见 docs/phase0-e2-libenergy-mapping.md）"
 }
 $dll = $dllCandidates[0]
-$actualDllSha256 = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToUpperInvariant()
-if ($actualDllSha256 -ne $expectedDllSha256) {
-    throw "libenergy-amd64.dll SHA-256 不匹配：actual=$actualDllSha256 expected=$expectedDllSha256 path=$dll"
-}
-Write-Host "[build] DLL: $dll (SHA-256 verified)"
+& $verifyScript -DllPath $dll -Arch $Arch
 
 # ---------- 2. 生成 Windows 资源（manifest/icon/version -> *.syso） ----------
 Push-Location (Join-Path $root "examples\$Target")
 try {
     # 固定工具版本，避免 @latest 漂移改变发布资源或在 CI 中突然失效。
-    go run github.com/tc-hib/go-winres@v0.3.3 make --arch $Arch
+    $goWinres = "$($lock.tools.goWinresModule)@$($lock.tools.goWinresVersion)"
+    go run $goWinres make --arch $Arch
     if ($LASTEXITCODE -ne 0) { throw "go-winres make 失败" }
 } finally { Pop-Location }
 
 # ---------- 3. go build ----------
-$outDir = Join-Path $root $Output
+$outDir = if ([IO.Path]::IsPathRooted($Output)) { $Output } else { Join-Path $root $Output }
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $outExe = Join-Path $outDir "$Target.exe"
 
@@ -68,6 +66,6 @@ try {
 } finally { Pop-Location }
 
 # ---------- 4. 复制 DLL 到 exe 旁 ----------
-Copy-Item $dll (Join-Path $outDir (Split-Path $dll -Leaf)) -Force
+Copy-Item -LiteralPath $dll (Join-Path $outDir $runtimeFileName) -Force
 
 Write-Host "[build] OK: $outExe"

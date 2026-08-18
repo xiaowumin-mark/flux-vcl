@@ -115,6 +115,8 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 
 **P7.3a 测试与 CI 基线门 ✅ 完成**：18 个内建公开控件进入统一 inventory、mount、原地 patch 与 D7c 基线，可配置 native 控件覆盖属性移除/事件解绑，具交互语义控件覆盖 State 回写；`PluginWidget` 的 D7/生命周期由插件测试独立覆盖。CI 覆盖 Go 1.22–1.26 与当前 1.27rc3、vet/race、真实 DLL native probe，并对全部 9 个公开示例分别执行 Windows build/smoke 与像素有效截图上传。控件挂载、纯属性 patch、Page 切换和十万行虚拟列表基准见 [性能基线](docs/performance-baseline.md)。7.3b 仍等待 7.5 的批次 3/全部 7GUIs 与 7.6，不提前标记完成。
 
+**P7.4 Windows 打包 🟨 实现完成，发布门待验证**：NSIS 3.11 生成 per-user 安装包，包含示例 EXE、严格匹配的 libenergy DLL、项目/Go/已确认第三方许可证、依赖来源锁、开始菜单入口和卸载器。构建会联检 `energye/lcl` module、designer commit/archive 与 DLL SHA-256，并从最终 EXE 反向验证 PerMonitorV2、Common Controls v6 和完整版本资源；`package-installer` job 已配置在全新 Windows VM 执行安装、交互启动、重装和无残留卸载。该 job 尚待提交后的首次 hosted CI 运行，且 opaque DLL 的完整静态组件许可清单仍待上游构建清单或精确源码审计，因此 7.4 暂不标全绿。v0.1.0 采用 exe + DLL，细节见 [Windows 打包文档](docs/packaging.md)。
+
 | 子任务 | 状态 |
 |---|---|
 | 6.1 ListView + 稳定 key（`ListView(count, itemH, builder)` + slot key=`row-i` 控件池复用；行内容不带数据 key） | ✅ `flux.ListView` + diff/layout `ListViewRow` 透明分支 |
@@ -156,6 +158,10 @@ app.Mount(func() flux.Widget {
 
 # 无头冒烟（验证窗口出现、按钮点击生效、干净退出）
 .\scripts\smoke.ps1
+
+# 生成并验证 NSIS 安装包（需 NSIS 3.11）
+.\scripts\package.ps1
+.\scripts\test-installer.ps1 -InstallerPath .\bin\FluxVCL-0.1.0-basic-setup.exe
 
 # 全量质量门与性能样本（性能只记录趋势，不设脆弱绝对阈值）
 go test -race ./...
@@ -265,8 +271,11 @@ flux-vcl/
 │   └── page-control/      # P7.2c PageControl/TabPage 多页容器
 │       └── winres/
 ├── scripts/
-│   ├── build.ps1          # 构建脚手架
-│   └── smoke.ps1          # 无头冒烟
+│   ├── build.ps1          # 构建脚手架 + module/DLL 来源联检
+│   ├── smoke.ps1          # 原生交互冒烟
+│   ├── package.ps1        # NSIS 安装包
+│   └── test-installer.ps1 # 安装/启动/卸载闭环
+├── packaging/             # NSIS、依赖锁与第三方通知
 ├── docs/                  # 设计/计划/调研/实验文档
 └── assets/                # 图标等资源
 ```
@@ -280,6 +289,7 @@ flux-vcl/
 - [开发计划](docs/development-plan.md) —— Phase 0–7 任务与验收标准
 - [底座选型调研](docs/govcl-vs-lcl.md) —— LCL vs VCL 选型依据
 - [libenergy DLL 映射](docs/phase0-e2-libenergy-mapping.md) —— 版本↔DLL 锁定关系
+- [Windows 打包](docs/packaging.md) —— NSIS、依赖锁、资源门禁、安装验证与单 EXE 评估
 
 ## 许可证
 

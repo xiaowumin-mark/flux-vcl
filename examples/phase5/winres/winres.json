@@ -29,11 +29,14 @@
           "product_version": "0.1.0.0"
         },
         "info": {
-          "CompanyName": { "en-US": "FluxVCL" },
-          "ProductName": { "en-US": "FluxVCL" },
-          "ProductVersion": { "en-US": "0.1.0" },
-          "FileDescription": { "en-US": "FluxVCL advanced features demo" },
-          "OriginalFilename": { "en-US": "phase5.exe" }
+          "0409": {
+            "CompanyName": "FluxVCL",
+            "ProductName": "FluxVCL",
+            "ProductVersion": "0.1.0",
+            "FileVersion": "0.1.0.0",
+            "FileDescription": "FluxVCL advanced features demo",
+            "OriginalFilename": "phase5.exe"
+          }
         }
       }
     }

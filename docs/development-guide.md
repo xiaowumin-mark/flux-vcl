@@ -38,6 +38,7 @@
 | 运行时 DLL | `libenergy-amd64.dll` | 构建脚本复制到 exe 旁；可用 `FVCL_LIBENERGY_DLL` 指定路径 |
 | 资源生成 | go-winres | 生成 `rsrc_windows_amd64.syso`（manifest/icon/version） |
 | 构建 / 冒烟 | `scripts/build.ps1` / `scripts/smoke.ps1` | 见 README「快速开始」 |
+| Windows 安装包 | NSIS 3.11 | `scripts/package.ps1`；CI 固定 Chocolatey 包 `nsis 3.11.0` |
 
 > 单元测试一律**不依赖** DLL 与显示；只有 `internal/native` 的适配层测试与冒烟脚本才碰真实后端。
 
@@ -101,7 +102,8 @@
 - **CI 红线**：Go 1.22–1.26 与当前 1.27rc3 的 `go test ./...`、1.27rc3 工具链
   `go vet ./...` 与
   `go test -race ./...` 全绿；DLL 到位且非 race 时 native probe 不得跳过；全部公开
-  examples 由 Windows CI 独立构建/冒烟并上传经像素检查的非空截图。
+  examples 由 Windows CI 独立构建/冒烟并上传经像素检查的非空截图；NSIS 安装包必须在
+  全新的 `windows-latest` VM 完成安装、从安装目录启动交互 smoke、卸载和残留检查。
 - **性能基线**：基准必须 `-benchmem` 并记录环境、mutation 数和样本结果；耗时用于
   固定环境的趋势比较，不给共享 runner 设置绝对阈值。当前记录见
   [performance-baseline.md](performance-baseline.md)。

@@ -508,7 +508,7 @@ State 驱动更新，以及窗口关闭后无异常。
 | 7.2 | 插件系统 | `RegisterWidget` 注册、生命周期、布局与可选 Renderer 能力（design.md §19）；内建控件与第三方 builder 双轨隔离。 | ✅ 完成 |
 | 7.2c | 控件扩充批次 2 | 插件模型定案后实现 `PageControl/TabPage` 结构性容器，验证每页子树与 native parent 模型。 | ✅ 完成 |
 | 7.3 | 测试与 CI 强化 | 分 7.3a 基线门和 7.3b 发布门；D7 覆盖全量已发布控件、Windows 冒烟/截图、性能基准。 | 🟨 7.3a 完成；7.3b 待 7.5/7.6 |
-| 7.4 | 打包 | 安装器、DPI manifest/版本资源、DLL 版本校验、单 EXE 方案评估。 | ⬜ 未开始 |
+| 7.4 | 打包 | 安装器、DPI manifest/版本资源、DLL 版本校验、单 EXE 方案评估。 | 🟨 实现完成；clean VM 首跑与 DLL 完整许可清单待门禁 |
 | 7.5 | 产品化与控件扩充批次 3 | 中英双语文档、全量示例、7GUIs；按示例机制逐项实现 `Slider`、`StringGrid`（native `TStringGrid`）、`Canvas/PaintBox`。 | ⬜ 未开始 |
 | 7.6 | Accessibility / i18n | 高对比度、键盘导航、焦点顺序、可访问名称/UIA 能力清单、国际化资源。 | ⬜ 未开始 |
 
@@ -674,6 +674,26 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 - 增加控件创建、纯属性 patch、Page 切换、Grid 更新、Paint invalidate 基准，并记录发布基线而非设置脆弱绝对阈值。
 
 #### 7.4 打包
+
+> **实现记录（2026-08-18）**：选定 NSIS 3.11 为主方案，`scripts/package.ps1` 默认把
+> `examples/basic`、严格匹配的 `libenergy-amd64.dll`、项目/Go/已确认第三方许可证、机器可读
+> 依赖锁与开始菜单示例入口打成 per-user 安装包；卸载器对称清理文件、快捷方式和注册表。
+> `packaging/dependencies.lock.json` 唯一锁定 `energye/lcl v1.0.3`、designer 完整 commit、
+> archive path 与 DLL SHA-256，fetch/build/package 均经 `verify-dependencies.ps1` 联检并拒绝
+> module replace 或浮动来源。`verify-release.ps1` 从最终 EXE 反向验证版本字符串/固定版本、
+> perMonitorV2、common controls v6 与图标；全部示例的版本字符串资源层级同步修正。
+> CI 已新增 `package-installer`，将在全新 `windows-latest` VM 执行默认目录安装→安装目录交互
+> smoke→运行中重装/卸载拒绝→原目录重装→卸载残留检查。许可门解决前 CI artifact 只上传
+> SHA-256、依赖锁和截图，不上传 setup.exe，避免形成新的公开分发物。
+> 运行中卸载通过 Restart Manager 按精确 EXE/DLL 路径在删除前拒绝；测试用 `_?=` 直接调用
+> 卸载体断言非零退出码，并另测标准 NSIS 自复制启动路径保留全部可重试入口（外层 bootstrap
+> 固定返回 0，不能作为内部卸载结果）。
+> 当前工作树尚未触发该 hosted clean VM 首跑。二进制检查确认 DLL 含 LCL 4.4.0.0、FPC 3.2.2、
+> VirtualTrees、IJG JPEG 与大量 CEF4Delphi 符号，但 designer 固定提交未提供该 DLL 的完整源码/
+> 构建清单、SBOM/NOTICE 及逐组件许可包；
+> 在向上游确认或按精确构建源码完成审计前，许可验收门保持未通过。单 EXE 评估确认当前 loader 仍要求磁盘 DLL，
+> 内存 PE/临时释放方案没有足够可靠性且不减少许可义务，因此 v0.1.0 明确采用 exe + DLL。
+> 设计、命令、许可与重新评估条件见 [packaging.md](./packaging.md)。
 
 - NSIS/WiX 至少选定一个主方案，安装/卸载包含 exe、严格匹配版本的 DLL、许可证和示例入口。
 - 构建时校验 Go module 的 energye/lcl 版本与打包 DLL 来源；不允许静默拿“最新 DLL”。
