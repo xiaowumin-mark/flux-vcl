@@ -4,7 +4,8 @@
 
 > 中文主文档 ｜ [English README](README.en.md)
 
-提供类似 Flutter / Vue / SwiftUI 的开发体验，同时保留桌面原生控件能力与底层可访问性。
+提供类似 Flutter / Vue / SwiftUI 的开发体验，同时保留桌面原生控件与键盘行为；
+锁定 LCL runtime 的 UIA 能力边界见下方 P7.6 和能力表。
 
 ```go
 Window(
@@ -26,7 +27,7 @@ Window(
 
 - **声明式 + 状态驱动**：UI 即结构，状态自动同步
 - **原生控件**：默认 LCL 后端（`energye/lcl` + libenergy 运行时），零 CGO
-- **LCL/VCL 双后端**：VCL（`govcl`）为 B 计划，通过绑定隔离可切换
+- **后端隔离**：当前实现为 LCL（`energye/lcl`）；VCL（`govcl`）仅保留为尚未立项的 B 计划
 - **现代布局**：自定义 Measure/Layout（Flutter 风格 constraints），禁用原生 Align
 - **线程纪律**：单一 UI 线程 + marshalling 调度器
 
@@ -38,6 +39,7 @@ Window(
 - [v0.1.0 候选 API 冻结清单](docs/api-v0.1.0.md)
 - [迁移指南](docs/migration.md) 与 [维护政策](docs/maintenance.md)
 - [可验证能力对比](docs/capability-comparison.md)
+- [Accessibility / i18n 能力表](docs/accessibility-i18n.md)
 - [CHANGELOG](CHANGELOG.md) 与 [发布检查表](RELEASE_CHECKLIST.md)
 
 ## 项目状态
@@ -123,11 +125,13 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 
 **P7.2c 分页容器 ✅ 完成**：公开 `PageControl` + `TabPage`（不虚构不存在的 `TabControl`），支持稳定页面 Key、受控 `SelectedIndex`、`OnSelectionChange`、每页独立 native parent、inactive 页面保活和 keyed 重排零重建。布局以 `8×32 DIP` 预算扣除页签边框/表头后填充页面客户区；`examples/page-control` 的 Windows smoke 连续切换并重排页面，校验 PageControl、TabSheet parent 与 Edit HWND 不变，同时保存经像素检查的目标窗口截图。Win32/LCL 的页签实际像素仍由 widgetset 主题/DPI 决定。
 
-**P7.3a 测试与 CI 基线门 ✅ 完成**：该里程碑的 18 个内建公开控件进入统一 inventory、mount、原地 patch 与 D7c 基线，可配置 native 控件覆盖属性移除/事件解绑，具交互语义控件覆盖 State 回写；`PluginWidget` 的 D7/生命周期由插件测试独立覆盖。CI 覆盖 Go 1.22–1.26 与当前 1.27rc3、vet/race、真实 DLL native probe，并对当时的 9 个基线示例分别执行 Windows build/smoke 与像素有效截图上传。控件挂载、纯属性 patch、Page 切换和十万行虚拟列表基准见 [性能基线](docs/performance-baseline.md)。7.3b 仍等待 7.6，不提前标记完成。
+**P7.3 测试与 CI 门 🟨 本地矩阵完成，Hosted 通过待证**：21 个内建公开控件进入统一 inventory、mount、原地 patch 与 D7c 基线，可配置 native 控件覆盖属性移除/事件解绑，具交互语义控件覆盖 State 回写；`PluginWidget` 的 D7/生命周期由插件测试独立覆盖。CI 已配置 Go 1.22.x–1.26.x 与 1.27.0-rc.3、vet/race、真实 DLL native probe，以及每个公开示例的 Windows build/smoke 和像素有效截图上传。7.3b 的批次 3、全部 7GUIs 和 Accessibility/i18n 验收也已进入矩阵，但当前工作树尚未获得完整 Hosted CI 全绿证据，不能标为 CI 门完成。控件挂载、纯属性 patch、Page 切换和十万行虚拟列表基准见 [性能基线](docs/performance-baseline.md)。
 
-**P7.4 Windows 打包 🟨 实现完成，发布门待验证**：NSIS 3.11 生成 per-user 安装包，包含示例 EXE、严格匹配的 libenergy DLL、项目/Go/已确认第三方许可证、依赖来源锁、开始菜单入口和卸载器。构建会联检 `energye/lcl` module、designer commit/archive 与 DLL SHA-256，并从最终 EXE 反向验证 PerMonitorV2、Common Controls v6 和完整版本资源；`package-installer` job 已配置在全新 Windows VM 执行安装、交互启动、重装和无残留卸载。该 job 尚待提交后的首次 hosted CI 运行，且 opaque DLL 的完整静态组件许可清单仍待上游构建清单或精确源码审计，因此 7.4 暂不标全绿。v0.1.0 采用 exe + DLL，细节见 [Windows 打包文档](docs/packaging.md)。
+**P7.4 Windows 打包 🟨 实现完成，发布门待验证**：NSIS 3.11 生成 per-user 安装包，包含示例 EXE、严格匹配的 libenergy DLL、项目/Go/已确认第三方许可证、依赖来源锁、开始菜单入口和卸载器。构建会联检 `energye/lcl` module、designer commit/archive 与 DLL SHA-256，并从最终 EXE 反向验证 PerMonitorV2、Common Controls v6 和完整版本资源；`package-installer` job 已配置在全新 Windows VM 执行安装、交互启动、重装和无残留卸载。该 job 的 Hosted CI 成功证据仍待取得，且 opaque DLL 的完整静态组件许可清单仍待上游构建清单或精确源码审计，因此 7.4 暂不标全绿。v0.1.0 采用 exe + DLL，细节见 [Windows 打包文档](docs/packaging.md)。
 
-**P7.5 产品化与控件扩充批次 3 ✅ 完成**：公开内建控件契约已扩展到 21 个，新增受控水平 `Slider`、native `StringGrid` 与命令值驱动的 `PaintBox`。传入 `StringGrid` 的 `Cells` 必须是严格矩形，且行列数与构造器声明精确匹配，不补齐、不截断。Counter、Temperature Converter、Flight Booker、Timer、CRUD、Circle Drawer、Cells 七个 7GUIs 目标均有独立可运行示例、业务专用 smoke 和真实窗口截图；当前仓库共 16 个公开示例。当前 `Version` 仍为 `0.1.0-dev`，但 v0.1.0 候选公开面已冻结为首发基线；正式 SemVer 承诺从版本标签开始。P7.4 的 clean-VM/DLL 许可门和 P7.6 可访问性/i18n 门仍独立以 [发布检查表](RELEASE_CHECKLIST.md) 为准。
+**P7.5 产品化与控件扩充批次 3 ✅ 完成**：公开内建控件契约已扩展到 21 个，新增受控水平 `Slider`、native `StringGrid` 与命令值驱动的 `PaintBox`。传入 `StringGrid` 的 `Cells` 必须是严格矩形，且行列数与构造器声明精确匹配，不补齐、不截断。Counter、Temperature Converter、Flight Booker、Timer、CRUD、Circle Drawer、Cells 七个 7GUIs 目标均有独立可运行示例、业务专用 smoke 和真实窗口截图；当前仓库共 17 个公开示例。当前 `Version` 仍为 `0.1.0-dev`，但 v0.1.0 候选公开面已冻结为首发基线；正式 SemVer 承诺从版本标签开始。P7.4 的 clean-VM/DLL 许可门仍独立以 [发布检查表](RELEASE_CHECKLIST.md) 为准。
+
+**P7.6 Accessibility / i18n 🟨 本地候选完成，Hosted CI 待证**：公开 `AccessibleName/Description/Value`、`TabStop`、`DefaultButton`、`CancelButton` 与自动声明树 Tab 顺序；RadioButton 补齐逻辑分组方向键导航。默认后端在高对比度下回落系统色并响应设置/主题/系统颜色消息。`Catalog` + `Resources` + `Catalog.Bind` 支持 fallback、响应式 locale 切换，框架公开校验诊断使用稳定 Message ID 和可替换中英文资源。`examples/accessibility-i18n` 已在本地覆盖真实键盘、焦点、UIA、高对比度以及中英切换不重建验收；完整 Windows Hosted CI 成功前，不把它表述为发布门完成。等待 provider 稳定后，桌面根查询与 `AutomationElement.FromHandle` 都可通过 Win32 代理获得 Button/Edit/Combo/Slider 的标准 Pattern；锁定的 LCL runtime 仍未投射 Accessible 覆盖值，StringGrid 也无 Grid Pattern，完整边界见 [能力表](docs/accessibility-i18n.md)。
 
 | 子任务 | 状态 |
 |---|---|
@@ -181,9 +185,9 @@ func main() {
 # 无头冒烟（验证窗口出现、按钮点击生效、干净退出）
 .\scripts\smoke.ps1
 
-# 生成并验证 NSIS 安装包（需 NSIS 3.11）
-.\scripts\package.ps1
-.\scripts\test-installer.ps1 -InstallerPath .\bin\FluxVCL-0.1.0-basic-setup.exe
+# 生成并验证当前 -dev 候选安装包（需 NSIS 3.11；不可公开分发）
+.\scripts\package.ps1 -AllowDevVersion
+.\scripts\test-installer.ps1 -InstallerPath .\bin\FluxVCL-0.1.0-basic-setup.exe -AllowDevVersion
 
 # 全量质量门与性能样本（性能只记录趋势，不设脆弱绝对阈值）
 go test -race ./...
@@ -204,6 +208,7 @@ go test . -run '^$' -bench Benchmark -benchmem
 - `examples/inspector` —— P7.1 Inspector demo（三层树、Props/布局、事件/mutation 时间线、重建风险）
 - `examples/plugin-badge` —— P7.2 第三方 Badge 插件（公开 SDK、类型化属性、布局/生命周期、零 native switch 改动）
 - `examples/page-control` —— P7.2c 多页容器（稳定 Key、受控切页、页内输入子树与 native parent）
+- `examples/accessibility-i18n` —— P7.6 键盘、UIA、高对比度与中英文原地切换验收
 - `examples/7guis-counter` —— Counter（State、Text、Button）
 - `examples/7guis-temperature-converter` —— Temperature Converter（受控 Input、双向数值转换、非法输入）
 - `examples/7guis-flight-booker` —— Flight Booker（ComboBox、日期校验、受控 Enabled）
@@ -312,6 +317,7 @@ flux-vcl/
 │   │   └── winres/
 │   ├── plugin-badge/      # P7.2 第三方 Badge（badge 子包只依赖公开 flux）
 │   ├── page-control/      # P7.2c PageControl/TabPage 多页容器
+│   ├── accessibility-i18n/ # P7.6 键盘/UIA/高对比度/i18n 验收
 │   ├── 7guis-counter/     # Counter
 │   ├── 7guis-temperature-converter/
 │   ├── 7guis-flight-booker/
@@ -344,7 +350,7 @@ flux-vcl/
 - [v0.1.0 候选 API 冻结清单](docs/api-v0.1.0.md) —— 首发公开标识符与兼容边界
 - [迁移指南](docs/migration.md) —— 预 1.0 与批次 3 迁移注意事项
 - [维护政策](docs/maintenance.md) —— 支持范围、兼容与安全响应
-- [可验证能力对比](docs/capability-comparison.md) —— 八项能力、仓库证据与限制
+- [可验证能力对比](docs/capability-comparison.md) —— 十项能力（含 Accessibility/i18n）、仓库证据与限制
 - [CHANGELOG](CHANGELOG.md) —— v0.1.0 变更摘要
 - [发布检查表](RELEASE_CHECKLIST.md) —— clean-VM、许可与发布前门禁
 - [底座选型调研](docs/govcl-vs-lcl.md) —— LCL vs VCL 选型依据

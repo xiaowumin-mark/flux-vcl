@@ -1,8 +1,6 @@
 package flux
 
 import (
-	"fmt"
-
 	"github.com/xiaowumin-mark/flux-vcl/internal/render"
 	"github.com/xiaowumin-mark/flux-vcl/internal/widget"
 )
@@ -19,10 +17,10 @@ type GridCell = render.GridCell
 // 返回逻辑坐标。二维 Cells 在公开、diff、Mock 和 native 边界均深复制。
 func StringGrid(rows, columns int, opts ...Opt) Widget {
 	if rows < 0 {
-		panic("flux.StringGrid: rows 必须 >= 0")
+		panic(DiagnosticText(DiagnosticGridRows))
 	}
 	if columns <= 0 {
-		panic("flux.StringGrid: columns 必须 > 0")
+		panic(DiagnosticText(DiagnosticGridColumns))
 	}
 	n := widget.NewNode("StringGrid")
 	applyOpts(n, opts)
@@ -32,10 +30,10 @@ func StringGrid(rows, columns int, opts ...Opt) Widget {
 	if value, ok := n.Props.Get("Cells"); ok {
 		configured, valid := value.([][]string)
 		if !valid {
-			panic("flux.StringGrid: Cells 类型无效")
+			panic(DiagnosticText(DiagnosticGridCellsType))
 		}
 		if err := render.ValidateGridCells(size, configured); err != nil {
-			panic("flux.StringGrid: " + err.Error())
+			panic(gridCellsDiagnostic(err))
 		}
 		cells = render.CloneGridCells(configured)
 	}
@@ -44,7 +42,7 @@ func StringGrid(rows, columns int, opts ...Opt) Widget {
 	if value, ok := n.Props.Get("Headers"); ok {
 		configured, valid := value.([]string)
 		if !valid || (len(configured) != 0 && len(configured) != columns) {
-			panic(fmt.Sprintf("flux.StringGrid: Headers 长度必须为 0 或 %d", columns))
+			panic(DiagnosticText(DiagnosticGridHeadersLength, columns))
 		}
 		headers = append([]string(nil), configured...)
 	}
@@ -53,11 +51,11 @@ func StringGrid(rows, columns int, opts ...Opt) Widget {
 	if value, ok := n.Props.Get("ColumnWidths"); ok {
 		configured, valid := value.([]int)
 		if !valid || (len(configured) != 0 && len(configured) != columns) {
-			panic(fmt.Sprintf("flux.StringGrid: ColumnWidths 长度必须为 0 或 %d", columns))
+			panic(DiagnosticText(DiagnosticGridWidthsLength, columns))
 		}
 		for _, width := range configured {
 			if width <= 0 {
-				panic("flux.StringGrid: ColumnWidths 必须全部 > 0")
+				panic(DiagnosticText(DiagnosticGridWidthsPositive))
 			}
 		}
 		widths = append([]int(nil), configured...)
@@ -70,7 +68,7 @@ func StringGrid(rows, columns int, opts ...Opt) Widget {
 	if value, ok := n.Props.Get("GridSelection"); ok {
 		configured, valid := value.(render.GridSelection)
 		if !valid || !render.ValidGridSelection(size, configured) {
-			panic("flux.StringGrid: 选择坐标超出逻辑行列范围")
+			panic(DiagnosticText(DiagnosticGridSelection))
 		}
 		selection = configured
 	}
@@ -82,6 +80,18 @@ func StringGrid(rows, columns int, opts ...Opt) Widget {
 	n.Props.Set("Editable", n.Props.Bool("Editable"))
 	n.Props.Set("GridSelection", selection)
 	return widgetNode{n}
+}
+
+func gridCellsDiagnostic(err error) string {
+	if validation, ok := err.(*render.GridValidationError); ok {
+		switch validation.Kind {
+		case render.GridValidationRowCount:
+			return DiagnosticText(DiagnosticGridCellsRowCount, validation.Got, validation.Want)
+		case render.GridValidationColumnCount:
+			return DiagnosticText(DiagnosticGridCellsColumnCount, validation.Row, validation.Got, validation.Want)
+		}
+	}
+	return DiagnosticText(DiagnosticGridCellsInvalid, err)
 }
 
 func makeGridCells(rows, columns int) [][]string {
@@ -100,7 +110,7 @@ func Cells(values [][]string) Opt {
 		columns := len(copy[0])
 		for _, row := range copy {
 			if len(row) != columns {
-				panic("flux.Cells: 矩阵必须为严格矩形")
+				panic(DiagnosticText(DiagnosticCellsRectangular))
 			}
 		}
 	}
@@ -123,7 +133,7 @@ func ColumnWidths(values []int) Opt {
 	copy := append([]int(nil), values...)
 	for _, width := range copy {
 		if width <= 0 {
-			panic("flux.ColumnWidths: 所有宽度必须 > 0")
+			panic(DiagnosticText(DiagnosticColumnWidthsPositive))
 		}
 	}
 	if len(copy) == 0 {

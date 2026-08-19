@@ -20,6 +20,7 @@ package native
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -29,6 +30,7 @@ import (
 	"github.com/energye/lcl/api/libname"
 	"github.com/energye/lcl/lcl"
 	"github.com/energye/lcl/types"
+	"github.com/energye/lcl/types/keys"
 	"github.com/energye/lcl/types/messages"
 
 	"github.com/xiaowumin-mark/flux-vcl/internal/render"
@@ -65,29 +67,38 @@ func Init(dllPath string) error {
 
 // Renderer 是 energye/lcl 后端的 Renderer 实现：把窄接口调用映射到 LCL 控件。
 type Renderer struct {
-	controls       map[render.Handle]lcl.IControl
-	next           render.Handle
-	form           lcl.IControl
-	formRef        *engForm
-	measureBmp     lcl.IBitmap                    // 共享测量画布（布局在 diff 前，控件未创建）
-	measureCache   map[string][2]int32            // 文本测量缓存（字体随 DPI 变化时失效）
-	dpi            int32                          // 当前显示器 DPI（0=未查询，invalidateDPI 清零强制重查）
-	canvasDpi      int32                          // 测量 bitmap DC 的 DPI（进程内固定，缓存一次；0=未查询）
-	resizeFn       func(w, h int)                 // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
-	closeFn        func()                         // OnClose 回调（demo 停止后台轮询）
-	closed         atomic.Bool                    // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
-	pendingDestroy []lcl.IControl                 // D4 延后销毁队列：render 完成时 DrainDestroy 统一 Free
-	scrolls        map[render.Handle]*listScroll  // Phase 6 ListView 滚动状态（Scrollable 实现）
-	radios         map[render.Handle]*radioState  // RadioButton 的逻辑分组元数据（不依赖缺失的 LCL setter）
-	radioHosts     map[radioHostKey]*radioHost    // (原生父句柄, RadioButton 句柄) → 隔离用 TPanel
-	pendingHosts   []*radioHost                   // 已脱离逻辑父级、待普通控件释放后销毁的内部 Panel
-	pages          map[render.Handle]*pageState   // PageControl 的受控选择、页面顺序与事件状态
-	texts          map[render.Handle]*textState   // Input/Memo 的程序化 SetText 应用门
-	sliders        map[render.Handle]*sliderState // Slider 的程序化应用门与值变化回调
-	paints         map[render.Handle]*paintState  // PaintBox 的稳定命令快照与原生绘制 surface
-	grids          map[render.Handle]*gridState   // StringGrid 的受控矩阵、选择与编辑事件状态
-	gridPollTimer  lcl.ITimer                     // Grid 选择轮询器；窗体拥有，空闲时禁用并复用
-	gridPollStop   func()                         // 当前启用周期的幂等停止函数；nil 表示空闲
+	controls              map[render.Handle]lcl.IControl
+	bounds                map[render.Handle]render.Rect // framework-owned DIP geometry for Native escape restoration
+	next                  render.Handle
+	form                  lcl.IControl
+	formRef               *engForm
+	measureBmp            lcl.IBitmap                    // 共享测量画布（布局在 diff 前，控件未创建）
+	measureCache          map[string][2]int32            // 文本测量缓存（字体随 DPI 变化时失效）
+	dpi                   int32                          // 当前显示器 DPI（0=未查询，invalidateDPI 清零强制重查）
+	canvasDpi             int32                          // 测量 bitmap DC 的 DPI（进程内固定，缓存一次；0=未查询）
+	resizeFn              func(w, h int)                 // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
+	closeFn               func()                         // OnClose 回调（demo 停止后台轮询）
+	closed                atomic.Bool                    // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
+	pendingDestroy        []lcl.IControl                 // D4 延后销毁队列：render 完成时 DrainDestroy 统一 Free
+	scrolls               map[render.Handle]*listScroll  // Phase 6 ListView 滚动状态（Scrollable 实现）
+	radios                map[render.Handle]*radioState  // RadioButton 的逻辑分组元数据（不依赖缺失的 LCL setter）
+	radioHosts            map[radioHostKey]*radioHost    // (原生父句柄, RadioButton 句柄) → 隔离用 TPanel
+	pendingHosts          []*radioHost                   // 已脱离逻辑父级、待普通控件释放后销毁的内部 Panel
+	pages                 map[render.Handle]*pageState   // PageControl 的受控选择、页面顺序与事件状态
+	combos                map[render.Handle]*comboState  // ComboBox 受控选择、事件去重与键盘回退
+	texts                 map[render.Handle]*textState   // Input/Memo 的程序化 SetText 应用门
+	sliders               map[render.Handle]*sliderState // Slider 的程序化应用门与值变化回调
+	paints                map[render.Handle]*paintState  // PaintBox 的稳定命令快照与原生绘制 surface
+	grids                 map[render.Handle]*gridState   // StringGrid 的受控矩阵、选择与编辑事件状态
+	tabStopDefaults       map[render.Handle]bool         // TabStop Opt 移除时恢复各 LCL 类型的创建默认值
+	tabOrders             map[render.Handle]int          // applyProps 早于 SetParent，缓存后在挂父级时重施
+	requestedColors       map[render.Handle]render.Color // 退出高对比度后恢复应用声明的背景色
+	requestedFontColors   map[render.Handle]render.Color // 退出高对比度后恢复应用声明的文字色
+	requestedTitleBarDark bool                           // 应用最后声明的标题栏模式
+	titleBarConfigured    bool                           // 是否声明过 TitleBarDark
+	highContrast          atomic.Bool                    // 系统或显式覆盖的高对比度状态
+	gridPollTimer         lcl.ITimer                     // Grid 选择轮询器；窗体拥有，空闲时禁用并复用
+	gridPollStop          func()                         // 当前启用周期的幂等停止函数；nil 表示空闲
 }
 
 type textState struct {
@@ -97,6 +108,18 @@ type textState struct {
 type sliderState struct {
 	applying bool
 	onChange func(int)
+}
+
+// comboState keeps the native selection boundary independent from LCL's
+// widgetset-specific notifications. Both OnChange and OnSelect can describe
+// one user selection, while some LCL ComboBox paths omit OnSelect for keyboard
+// navigation. selected is always the last native index observed by Flux.
+type comboState struct {
+	applying  bool
+	selected  int
+	onSelect  func(int)
+	onKeyDown func(render.Event)
+	onKeyUp   func(render.Event)
 }
 
 type paintState struct {
@@ -141,13 +164,16 @@ var (
 // 隔离 LCL 的同 parent 互斥；逻辑组由 Renderer 元数据维护，Panel 句柄绝不暴露给
 // diff 或公开 API。
 type radioState struct {
-	parent   render.Handle
-	group    int
-	bounds   render.Rect
-	visible  bool
-	checked  bool
-	applying bool // 抑制 SetChecked 触发的同步 OnChange 重入
-	host     *radioHost
+	parent    render.Handle
+	group     int
+	bounds    render.Rect
+	visible   bool
+	checked   bool
+	tabOrder  int
+	applying  bool // 抑制 SetChecked 触发的同步 OnChange 重入
+	host      *radioHost
+	onChange  func(bool)
+	onKeyDown func(render.Event)
 }
 
 type radioHostKey struct {
@@ -186,6 +212,7 @@ func NewRenderer() *Renderer {
 		formRef:      f,
 		form:         f,
 	}
+	r.highContrast.Store(detectHighContrast())
 	dpi := int(r.currentDPI())
 	f.SetClientWidth(int32(render.DIPToPX(640, dpi)))
 	f.SetClientHeight(int32(render.DIPToPX(480, dpi)))
@@ -212,7 +239,12 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 	case "CheckBox":
 		c = lcl.NewCheckBox(r.form)
 	case "ComboBox":
-		c = lcl.NewComboBox(r.form)
+		combo := lcl.NewComboBox(r.form)
+		// Flux exposes a selection control, not an editable text input. Apart
+		// from matching the public contract, DropDownList makes OnChange a
+		// selection notification rather than an arbitrary text-edit signal.
+		combo.SetStyle(types.CsDropDownList)
+		c = combo
 	case "RadioButton":
 		c = lcl.NewRadioButton(r.form)
 	case "ProgressBar":
@@ -283,11 +315,18 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 	}
 	h := r.alloc()
 	r.controls[h] = c
+	if control, ok := c.(lcl.IWinControl); ok {
+		if r.tabStopDefaults == nil {
+			r.tabStopDefaults = make(map[render.Handle]bool)
+		}
+		r.tabStopDefaults[h] = control.TabStop()
+	}
 	if widgetType == "RadioButton" {
 		if r.radios == nil {
 			r.radios = make(map[render.Handle]*radioState)
 		}
 		r.radios[h] = &radioState{visible: true}
+		r.installRadioKeyHandler(h)
 	}
 	if ls != nil {
 		if r.scrolls == nil {
@@ -300,6 +339,12 @@ func (r *Renderer) Create(widgetType string) render.Handle {
 			r.pages = make(map[render.Handle]*pageState)
 		}
 		r.pages[h] = &pageState{selected: -1}
+	}
+	if widgetType == "ComboBox" {
+		if r.combos == nil {
+			r.combos = make(map[render.Handle]*comboState)
+		}
+		r.combos[h] = &comboState{selected: -2}
 	}
 	if widgetType == "Input" || widgetType == "Memo" {
 		if r.texts == nil {
@@ -416,11 +461,17 @@ func (r *Renderer) Destroy(h render.Handle) {
 		r.setSheetPageControl(sheet, nil)
 	}
 	delete(r.controls, h)
+	delete(r.bounds, h)
 	delete(r.pages, h)
+	delete(r.combos, h)
 	delete(r.texts, h)
 	delete(r.sliders, h)
 	delete(r.paints, h)
 	delete(r.grids, h)
+	delete(r.tabStopDefaults, h)
+	delete(r.tabOrders, h)
+	delete(r.requestedColors, h)
+	delete(r.requestedFontColors, h)
 	if wasGrid {
 		grid.onSelect = nil
 		grid.onEdit = nil
@@ -476,6 +527,7 @@ func (r *Renderer) SetParent(child, parent render.Handle) {
 		// widgetset 可能同步产生的 OnChange。跨 PageControl 移动时旧、新两侧
 		// 都由 setSheetPageControl 进入 applying 状态。
 		r.setSheetPageControl(sheet, page)
+		r.applyTabOrder(child)
 		return
 	}
 	if radio := r.radios[child]; radio != nil {
@@ -488,6 +540,7 @@ func (r *Renderer) SetParent(child, parent render.Handle) {
 		panic(fmt.Sprintf("native: 父控件 %d 非 IWinControl", parent))
 	}
 	childControl.SetParent(pc)
+	r.applyTabOrder(child)
 }
 
 // radioHostFor 返回指定逻辑父级与 RadioButton 的内部 Panel。使用一控件一 host
@@ -529,6 +582,9 @@ func (r *Renderer) attachRadioToHost(h render.Handle, radio *radioState) {
 	host.members[h] = struct{}{}
 	radio.host = host
 	r.controls[h].SetParent(host.panel)
+	// LCL may recompute a container's TabOrder while attaching its first child.
+	// Apply the logical radio order after the native parent relationship is final.
+	host.panel.SetTabOrder(types.TTabOrder(clampTabOrder(radio.tabOrder)))
 	r.layoutRadioHost(host)
 	r.applyRadioChecked(h, radio.checked)
 }
@@ -591,10 +647,100 @@ func (r *Renderer) applyRadioChecked(h render.Handle, checked bool) {
 	c.SetChecked(checked)
 }
 
+// installRadioKeyHandler restores the native radio-group keyboard contract that
+// is lost when each TRadioButton is isolated in its own host Panel. Public
+// OnKeyDown handlers are composed here so adding or removing one cannot disable
+// Left/Up/Right/Down navigation.
+func (r *Renderer) installRadioKeyHandler(h render.Handle) {
+	control, ok := r.controls[h].(keyEvents)
+	if !ok {
+		return
+	}
+	control.SetOnKeyDown(func(_ lcl.IObject, key *uint16, shift types.TShiftState) {
+		if key == nil {
+			return
+		}
+		if radio := r.radios[h]; radio != nil && radio.onKeyDown != nil {
+			event := render.Event{Type: render.EventKeyDown, Key: *key, Mods: mapShift(shift)}
+			render.Guard("event.OnKeyDown", func() { radio.onKeyDown(event) })
+		}
+
+		direction := 0
+		switch *key {
+		case keys.VkLeft, keys.VkUp:
+			direction = -1
+		case keys.VkRight, keys.VkDown:
+			direction = 1
+		}
+		if direction != 0 && r.moveRadioSelection(h, direction) {
+			*key = 0 // prevent LCL from applying a second, host-local navigation step
+		}
+	})
+}
+
+// moveRadioSelection selects the adjacent enabled, visible radio in the same
+// logical parent and GroupIndex. LCL updates an individual radio's TabStop as
+// selection moves, so arrow candidates intentionally do not filter on it.
+// Ordering follows the declaration-derived TabOrder and wraps at both ends.
+func (r *Renderer) moveRadioSelection(h render.Handle, direction int) bool {
+	current := r.radios[h]
+	if current == nil || current.parent == 0 || direction == 0 {
+		return false
+	}
+	type candidate struct {
+		handle render.Handle
+		order  int
+	}
+	candidates := make([]candidate, 0)
+	for peerHandle, peer := range r.radios {
+		if peer == nil || peer.host == nil || peer.parent != current.parent || peer.group != current.group || !peer.visible {
+			continue
+		}
+		control, ok := r.controls[peerHandle].(lcl.IWinControl)
+		if !ok || !control.Enabled() {
+			continue
+		}
+		candidates = append(candidates, candidate{handle: peerHandle, order: peer.tabOrder})
+	}
+	if len(candidates) < 2 {
+		return false
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].order == candidates[j].order {
+			return candidates[i].handle < candidates[j].handle
+		}
+		return candidates[i].order < candidates[j].order
+	})
+	index := -1
+	for i := range candidates {
+		if candidates[i].handle == h {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return false
+	}
+	next := (index + direction + len(candidates)) % len(candidates)
+	targetHandle := candidates[next].handle
+	r.SetChecked(targetHandle, true)
+	if control, ok := r.controls[targetHandle].(lcl.IWinControl); ok && control.CanSetFocus() {
+		control.SetFocus()
+	}
+	if target := r.radios[targetHandle]; target != nil && target.onChange != nil {
+		render.Guard("event.OnCheckedChange", func() { target.onChange(true) })
+	}
+	return true
+}
+
 func (r *Renderer) SetBounds(h render.Handle, b render.Rect) {
 	if _, ok := r.controls[h].(lcl.ITabSheet); ok {
 		return // TabPage 客户区由 PageControl/widgetset 通过 TCM_AdjustRect 管理。
 	}
+	if r.bounds == nil {
+		r.bounds = make(map[render.Handle]render.Rect)
+	}
+	r.bounds[h] = b
 	if radio := r.radios[h]; radio != nil {
 		radio.bounds = b
 		if radio.host != nil {
@@ -663,16 +809,22 @@ func (r *Renderer) SetText(h render.Handle, text string) {
 // SetColor 设置控件背景色（Phase 5.2 Theme）。ARGB 换算为 LCL TColor（BGR）：
 // IControl 统一暴露 SetColor（TButton/TEdit/TLabel/TScrollBox/TEngForm 均有）。
 func (r *Renderer) SetColor(h render.Handle, color render.Color) {
-	r.controls[h].SetColor(colorToTColor(color))
+	if r.requestedColors == nil {
+		r.requestedColors = make(map[render.Handle]render.Color)
+	}
+	r.requestedColors[h] = color
+	r.applyRequestedColor(h)
 }
 
 // SetFontColor 设置控件文字颜色（经字体对象）。LCL 的 IControl 无 SetFontColor，
 // 文字色统一走 Font().SetColor（TControl.Font() 返回 IFont）。无 Font 语义的
 // 控件（极少数）忽略 —— 不 panic（与事件的结构化断言策略一致，D6）。
 func (r *Renderer) SetFontColor(h render.Handle, color render.Color) {
-	if f := r.controls[h].Font(); f != nil {
-		f.SetColor(colorToTColor(color))
+	if r.requestedFontColors == nil {
+		r.requestedFontColors = make(map[render.Handle]render.Color)
 	}
+	r.requestedFontColors[h] = color
+	r.applyRequestedFontColor(h)
 }
 
 // SetPaintCommands 替换 PaintBox 的不可变命令快照；invalidate 由调用方通过
@@ -712,20 +864,20 @@ func (r *Renderer) paint(paint *paintState) {
 		switch command.Kind {
 		case render.PaintClear:
 			brush.SetStyle(types.BsSolid)
-			brush.SetColor(colorToTColor(command.Color))
+			brush.SetColor(r.paintColor(command.Color, contrastPaintBackground))
 			canvas.FillRectWithIntX4(0, 0, paint.control.ClientWidth(), paint.control.ClientHeight())
 		case render.PaintCircle:
 			if command.FillColor == 0 {
 				brush.SetStyle(types.BsClear)
 			} else {
 				brush.SetStyle(types.BsSolid)
-				brush.SetColor(colorToTColor(command.FillColor))
+				brush.SetColor(r.paintColor(command.FillColor, contrastPaintFill))
 			}
 			if command.StrokeColor == 0 {
 				pen.SetStyle(types.PsClear)
 			} else {
 				pen.SetStyle(types.PsSolid)
-				pen.SetColor(colorToTColor(command.StrokeColor))
+				pen.SetColor(r.paintColor(command.StrokeColor, contrastPaintStroke))
 				width := render.DIPToPX(command.StrokeWidth, dpi)
 				if width < 1 {
 					width = 1
@@ -757,7 +909,13 @@ const (
 // DWM 属性即时生效（DWM 自动重绘标题栏），无需 Recreate/Redraw，属性仅值变化时
 // diff 才调用。老系统不支持沉浸式暗色（20 返回 E_INVALIDARG）→ 回退属性 19；
 // 仍失败则静默忽略（保持系统默认标题栏，属后端能力而非错误）。
-func (r *Renderer) SetTitleBarDark(h render.Handle, dark bool) {
+func (r *Renderer) SetTitleBarDark(_ render.Handle, dark bool) {
+	r.requestedTitleBarDark = dark
+	r.titleBarConfigured = true
+	r.applyRequestedTitleBar()
+}
+
+func (r *Renderer) applyTitleBarDark(dark bool) {
 	if r.formRef == nil || !r.formRef.HandleAllocated() {
 		return
 	}
@@ -951,8 +1109,14 @@ func (r *Renderer) OnCheckedChange(h render.Handle, fn func(bool)) {
 		panic(fmt.Sprintf("native: 控件 %d 不支持 OnCheckedChange", h))
 	}
 	if fn == nil {
+		if radio := r.radios[h]; radio != nil {
+			radio.onChange = nil
+		}
 		c.SetOnChange(nil)
 		return
+	}
+	if radio := r.radios[h]; radio != nil {
+		radio.onChange = fn
 	}
 	c.SetOnChange(func(_ lcl.IObject) {
 		radio := r.radios[h]
@@ -1441,6 +1605,7 @@ type comboBoxControl interface {
 	Items() lcl.IStrings
 	ItemIndex() int32
 	SetItemIndex(int32)
+	SetOnChange(lcl.TNotifyEvent)
 	SetOnSelect(lcl.TNotifyEvent)
 }
 
@@ -1450,12 +1615,18 @@ func (r *Renderer) SetItems(h render.Handle, values []string) {
 	if !ok {
 		return
 	}
-	items := combo.Items()
-	items.Clear()
-	for _, value := range values {
-		items.Add(value)
-	}
-	combo.SetItemIndex(int32(normalizeComboIndex(len(values), int(combo.ItemIndex()))))
+	r.withComboApplying(h, func() {
+		items := combo.Items()
+		selected := int(combo.ItemIndex())
+		items.Clear()
+		for _, value := range values {
+			items.Add(value)
+		}
+		selected = normalizeComboIndex(len(values), selected)
+		if combo.ItemIndex() != int32(selected) {
+			combo.SetItemIndex(int32(selected))
+		}
+	})
 }
 
 func normalizePageIndex(count, index int) int {
@@ -1601,21 +1772,116 @@ func (r *Renderer) SetSelectedIndex(h render.Handle, index int) {
 	if !ok {
 		return
 	}
-	combo.SetItemIndex(int32(normalizeComboIndex(int(combo.Items().Count()), index)))
+	index = normalizeComboIndex(int(combo.Items().Count()), index)
+	r.withComboApplying(h, func() {
+		if combo.ItemIndex() != int32(index) {
+			combo.SetItemIndex(int32(index))
+		}
+	})
 }
 
-// OnSelectionChange 绑定 ComboBox 的 OnSelect；nil 清除绑定。
+// OnSelectionChange wires both LCL selection signals. The locked widgetset
+// does not consistently emit OnSelect for keyboard navigation; OnChange covers
+// the normal path, and the composed KeyUp hook below verifies the final native
+// index as a last-resort keyboard bridge. comboState deduplicates all three.
 func (r *Renderer) OnSelectionChange(h render.Handle, fn func(int)) {
 	combo, ok := r.controls[h].(comboBoxControl)
 	if !ok {
 		return
 	}
-	if fn == nil {
-		combo.SetOnSelect(nil)
+	state := r.combos[h]
+	if state == nil {
 		return
 	}
-	combo.SetOnSelect(func(_ lcl.IObject) {
-		render.Guard("event.OnSelectionChange", func() { fn(int(combo.ItemIndex())) })
+	state.onSelect = fn
+	state.selected = normalizeComboIndex(int(combo.Items().Count()), int(combo.ItemIndex()))
+	if fn == nil {
+		combo.SetOnChange(nil)
+		combo.SetOnSelect(nil)
+		r.installComboKeyHandlers(h)
+		return
+	}
+	notify := func(_ lcl.IObject) { r.emitComboSelection(h) }
+	combo.SetOnChange(notify)
+	combo.SetOnSelect(notify)
+	r.installComboKeyHandlers(h)
+}
+
+// withComboApplying makes programmatic Items/SelectedIndex patches silent even
+// on widgetsets that synchronously raise TComboBox.OnChange. Updating selected
+// after the native mutation also resets de-duplication when a controlled owner
+// deliberately rolls a user selection back on the next render.
+func (r *Renderer) withComboApplying(h render.Handle, fn func()) {
+	state := r.combos[h]
+	if state == nil {
+		fn()
+		return
+	}
+	previous := state.applying
+	state.applying = true
+	defer func() { state.applying = previous }()
+	fn()
+	if combo, ok := r.controls[h].(comboBoxControl); ok {
+		state.selected = normalizeComboIndex(int(combo.Items().Count()), int(combo.ItemIndex()))
+	}
+}
+
+// emitComboSelection is the single user-selection exit. It intentionally reads
+// ItemIndex at dispatch time instead of inferring an arrow-key target, so empty
+// lists, Home/End/type-ahead, disabled native actions, and widgetset clamping
+// all retain the native control's actual result.
+func (r *Renderer) emitComboSelection(h render.Handle) {
+	state := r.combos[h]
+	combo, ok := r.controls[h].(comboBoxControl)
+	if state == nil || !ok || state.applying || state.onSelect == nil {
+		return
+	}
+	index := normalizeComboIndex(int(combo.Items().Count()), int(combo.ItemIndex()))
+	if index == state.selected {
+		return
+	}
+	state.selected = index
+	render.Guard("event.OnSelectionChange", func() { state.onSelect(index) })
+}
+
+// installComboKeyHandlers composes Flux's keyboard callbacks with the final
+// selection check. The user callbacks retain their original Event payload and
+// are never replaced by the internal controlled-selection bridge.
+func (r *Renderer) installComboKeyHandlers(h render.Handle) {
+	state := r.combos[h]
+	keys, ok := r.controls[h].(keyEvents)
+	if state == nil || !ok {
+		return
+	}
+	if state.onKeyDown == nil {
+		keys.SetOnKeyDown(nil)
+	} else {
+		keys.SetOnKeyDown(func(_ lcl.IObject, key *uint16, shift types.TShiftState) {
+			if key == nil {
+				return
+			}
+			fn := state.onKeyDown
+			render.Guard("event.OnKeyDown", func() {
+				fn(render.Event{Type: render.EventKeyDown, Key: *key, Mods: mapShift(shift)})
+			})
+		})
+	}
+	if state.onSelect == nil && state.onKeyUp == nil {
+		keys.SetOnKeyUp(nil)
+		return
+	}
+	keys.SetOnKeyUp(func(_ lcl.IObject, key *uint16, shift types.TShiftState) {
+		// Keyboard navigation is applied by the native control on KeyDown. By
+		// KeyUp, ItemIndex is its settled value even if neither LCL selection
+		// event was delivered.
+		r.emitComboSelection(h)
+		if key == nil || state.onKeyUp == nil {
+			return
+		}
+		fn := state.onKeyUp
+		render.Guard("event.OnKeyUp", func() {
+			fn(render.Event{Type: render.EventKeyUp, Key: *key, Mods: mapShift(shift)})
+		})
 	})
 }
 
@@ -1658,9 +1924,22 @@ func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 		case "OnMouseLeave":
 			c.(mouseEvents).SetOnMouseLeave(nil)
 		case "OnKeyDown":
-			c.(keyEvents).SetOnKeyDown(nil)
+			if radio := r.radios[h]; radio != nil {
+				radio.onKeyDown = nil
+				r.installRadioKeyHandler(h)
+			} else if combo := r.combos[h]; combo != nil {
+				combo.onKeyDown = nil
+				r.installComboKeyHandlers(h)
+			} else {
+				c.(keyEvents).SetOnKeyDown(nil)
+			}
 		case "OnKeyUp":
-			c.(keyEvents).SetOnKeyUp(nil)
+			if combo := r.combos[h]; combo != nil {
+				combo.onKeyUp = nil
+				r.installComboKeyHandlers(h)
+			} else {
+				c.(keyEvents).SetOnKeyUp(nil)
+			}
 		case "OnKeyPress":
 			c.(keyEvents).SetOnUTF8KeyPress(nil)
 		case "OnChange":
@@ -1739,9 +2018,29 @@ func (r *Renderer) SetEvent(h render.Handle, event string, fn any) {
 		if event == "OnKeyUp" {
 			et = render.EventKeyUp
 		}
+		userFn := fn.(func(render.Event))
+		if event == "OnKeyDown" {
+			if radio := r.radios[h]; radio != nil {
+				radio.onKeyDown = userFn
+				r.installRadioKeyHandler(h)
+				break
+			}
+			if combo := r.combos[h]; combo != nil {
+				combo.onKeyDown = userFn
+				r.installComboKeyHandlers(h)
+				break
+			}
+		}
+		if event == "OnKeyUp" {
+			if combo := r.combos[h]; combo != nil {
+				combo.onKeyUp = userFn
+				r.installComboKeyHandlers(h)
+				break
+			}
+		}
 		cb := func(_ lcl.IObject, key *uint16, shift types.TShiftState) {
 			render.Guard("event."+event, func() {
-				fn.(func(render.Event))(render.Event{Type: et, Key: *key, Mods: mapShift(shift)})
+				userFn(render.Event{Type: et, Key: *key, Mods: mapShift(shift)})
 			})
 		}
 		if event == "OnKeyUp" {
@@ -1831,7 +2130,16 @@ func (r *Renderer) AttachRef(h render.Handle, ref render.Ref) {
 }
 
 func (r *Renderer) ApplyNative(h render.Handle, fn func(obj any)) {
-	fn(r.controls[h])
+	control := r.controls[h]
+	defer func() {
+		if control != nil && control.Align() != types.AlNone {
+			control.SetAlign(types.AlNone)
+		}
+		if bounds, ok := r.bounds[h]; ok {
+			r.SetBounds(h, bounds)
+		}
+	}()
+	fn(control)
 }
 
 // RunOnUI 把 fn marshal 到 UI 线程执行（D4 marshalling）。
@@ -2041,11 +2349,14 @@ func (r *Renderer) canvasDPI() int32 {
 func (r *Renderer) setupDPIHook() {
 	r.formRef.SetOnWndProc(func(msg *types.TLMessage) {
 		r.formRef.InheritedWndProc(msg)
-		if msg.Msg == messages.WM_DPICHANGED {
+		switch msg.Msg {
+		case messages.WM_DPICHANGED:
 			r.invalidateDPI()
 			r.measureCache = make(map[string][2]int32)
 			r.refreshDPISensitiveControls()
 			r.emitResize()
+		case messages.WM_SETTINGCHANGE, messages.WM_SYSCOLORCHANGE, messages.WM_THEMECHANGED:
+			r.refreshHighContrast()
 		}
 	})
 }

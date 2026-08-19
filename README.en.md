@@ -35,11 +35,17 @@ func main() {
 
 The current build is `0.1.0-dev`, so it is not a release. The v0.1.0 candidate
 API surface is frozen as the first-release baseline; the formal SemVer promise
-starts at the v0.1.0 tag. The completed P7.5 scope includes
+starts at the v0.1.0 tag. P7.5 is complete; the P7.6 implementation is a local
+candidate awaiting a fully green hosted Windows CI run. Its scope includes
 declarative diffing, DIP-aware layout, State bindings, IME-aware
 native input, virtualized lists, multiple windows, Inspector, plugins,
-PageControl, Slider, StringGrid, and PaintBox. The seven 7GUIs tasks are in
-`examples/7guis-*`.
+PageControl, Slider, StringGrid, PaintBox, accessibility metadata, declarative
+tab order, high-contrast handling, and reactive locale catalogs. The seven
+7GUIs tasks are in `examples/7guis-*`; the keyboard/UIA/i18n verification app is
+`examples/accessibility-i18n`.
+
+The P7.3b release matrix is configured and locally exercised, but is not a
+completed CI gate until the corresponding hosted workflow succeeds.
 
 The default backend is `energye/lcl v1.0.3` and requires a matching
 `libenergy-amd64.dll`. See [the packaging guide](docs/packaging.md) for the
@@ -79,6 +85,11 @@ Build one with `scripts/build.ps1 -Target <target>` and run the matching
 `scripts/smoke.ps1` target. The complete mapping and known limitations are in
 [docs/7guis.md](docs/7guis.md).
 
+`accessibility-i18n` embeds English and Simplified Chinese resources and verifies
+real Tab/arrow/Space/Enter/Escape input, focus, native UIA proxy patterns and
+provider limitations, high-contrast rendering, and locale changes without
+replacing stateful HWNDs.
+
 ## Candidate API and limitations
 
 The frozen v0.1.0 candidate surface is listed in
@@ -89,9 +100,13 @@ a general vector engine, or a GPU scene graph.
 
 Native controls retain widgetset behavior. Win32 theme drawing may ignore
 custom Button/Label colors; PaintBox is a graphic control without a separate
-child HWND; StringGrid accessibility and editor details inherit LCL limits.
-These constraints are recorded in [docs/design.md](docs/design.md), not hidden
-behind an escape hatch.
+child HWND. The locked LCL runtime stores accessible metadata but does not
+project its overrides into Windows UIA. After provider readiness, both a
+desktop-root lookup and `AutomationElement.FromHandle` use Win32 client proxies
+to expose standard Button, Edit, ComboBox, and Slider patterns. Custom accessible
+names/help text are absent, and StringGrid still has no Grid Pattern. Virtual ListView rows do not
+form a UIA List either. The verified matrix and application requirements are in
+[the Accessibility / i18n capability table](docs/accessibility-i18n.md).
 
 ## Documentation
 
@@ -100,10 +115,15 @@ behind an escape hatch.
 - [Development guide](docs/development-guide.md)
 - [7GUIs mapping](docs/7guis.md)
 - [Verifiable capability comparison](docs/capability-comparison.md)
+- [Accessibility / i18n capability table](docs/accessibility-i18n.md)
 - [Migration and compatibility](docs/migration.md)
 - [Maintenance policy](docs/maintenance.md)
 - [Changelog](CHANGELOG.md)
 - [Release checklist](RELEASE_CHECKLIST.md)
+
+The capability comparison covers ten verifiable dimensions, including
+Accessibility and i18n; it records repository evidence and backend limits rather
+than implying that every release gate has passed.
 
 ## License
 

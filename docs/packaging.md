@@ -1,6 +1,7 @@
 # FluxVCL Windows 打包
 
-> 状态：P7.4 实现完成，发布门待验证；当前基线为 Windows amd64、NSIS 3.11、FluxVCL 0.1.0。
+> 状态：P7.4 实现完成，发布门待验证；当前候选基线为 Windows amd64、NSIS 3.11、
+> `FluxVCL 0.1.0-dev`。
 > 尚待两项外部门禁：新 workflow 的 hosted clean Windows VM 首跑，以及 opaque DLL 的完整
 > 静态组件许可/源码义务审计。
 
@@ -32,16 +33,18 @@ CI 使用 Chocolatey 包 `nsis 3.11.0`，不取浮动版本。
 
 ```powershell
 .\scripts\fetch-libenergy.ps1
-.\scripts\package.ps1
+.\scripts\package.ps1 -AllowDevVersion
 
 # 输出
 # bin/FluxVCL-0.1.0-basic-setup.exe
 # bin/FluxVCL-0.1.0-basic-setup.exe.sha256
 ```
 
-`flux.Version = 0.1.0-dev` 的开发态只允许去掉精确的 `-dev` 后缀后与安装包、manifest 和
-版本资源的 `0.1.0` 基线比较；其他版本差异直接失败。正式打 tag 前仍须按发布流程把
-`flux.Version` 改为无后缀的 `0.1.0`。
+`verify-release.ps1` 默认要求 `flux.Version` 与 `-Version` 逐字一致，因此会拒绝
+`0.1.0-dev` 作为正式 `0.1.0` 发布。当前候选只能显式传递 `-AllowDevVersion`，它仅允许
+精确的 `$Version-dev` 进行内部安装验证，并会发出警告；该参数不得用于 tag、Release 或公开
+分发。正式打 tag 前必须把 `flux.Version` 改为无后缀的 `0.1.0`，并在不带该参数的情况下
+重新完成资源、安装和许可门验证。
 
 ## 3. 依赖锁与来源校验
 
@@ -103,8 +106,9 @@ NSIS 标准卸载入口会先复制自身到 `%TEMP%`，外层 bootstrap 固定�
 GitHub Actions 已配置 `package-installer` job，在每次全新的 `windows-latest` VM 上执行同一
 闭环。许可门解决前 artifact 只上传 SHA-256、依赖锁和安装后运行截图，不上传 setup.exe，避免
 把验收包变成新的公开分发物。该 job 是干净 Windows 安装/启动/卸载的发布门，
-不能用仅解压文件、本机测试或仅编译 NSIS 代替；当前工作树必须提交并让该 job 首次成功后，
-才能把 clean VM 项标为通过。
+不能用仅解压文件、本机测试或仅编译 NSIS 代替；只有相关 revision 的该 job 成功后，
+才能把 clean VM 项标为通过。截图 artifact 保留 30 天，clean-VM 验证证据保留 90 天；候选
+验证即使成功也不解除下一节的 DLL 许可阻塞。
 
 ## 6. 第三方许可边界
 

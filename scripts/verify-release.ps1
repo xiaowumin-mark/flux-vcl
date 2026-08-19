@@ -5,13 +5,19 @@
 .EXAMPLE
   .\scripts\verify-release.ps1 -ExePath .\bin\basic.exe `
       -DllPath .\bin\libenergy-amd64.dll -Target basic -Version 0.1.0
+
+  # 仅供未发布候选包的内部验证；正式发布不得传此参数。
+  .\scripts\verify-release.ps1 -ExePath .\bin\basic.exe `
+      -DllPath .\bin\libenergy-amd64.dll -Target basic -Version 0.1.0 `
+      -AllowDevVersion
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$ExePath,
     [Parameter(Mandatory = $true)][string]$DllPath,
     [string]$Target = "basic",
-    [string]$Version = "0.1.0"
+    [string]$Version = "0.1.0",
+    [switch]$AllowDevVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,8 +47,11 @@ if (-not $versionMatch.Success) {
     throw "无法从 flux.go 读取 flux.Version"
 }
 $frameworkVersion = $versionMatch.Groups[1].Value
-$frameworkReleaseVersion = $frameworkVersion -replace '-dev$', ''
-if ($frameworkReleaseVersion -ne $Version) {
+if ($frameworkVersion -eq $Version) {
+    # 正式版本必须与打包版本逐字一致。
+} elseif ($AllowDevVersion -and $frameworkVersion -eq "$Version-dev") {
+    Write-Warning "正在验证未发布候选包: flux.Version=$frameworkVersion；该参数不得用于正式发布。"
+} else {
     throw "安装包版本与 flux.Version 不一致: package=$Version flux=$frameworkVersion"
 }
 

@@ -242,7 +242,7 @@ func pluginRuntimeForNode(n *Node) (*pluginRuntime, bool) {
 func layoutPlugin(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags, runtime *pluginRuntime) Size {
 	if len(n.Children) != 1 {
 		if d != nil {
-			d.err = &PluginError{Name: runtime.name, Stage: "measure", Err: fmt.Errorf("%w: builder 必须产生唯一子树", ErrPluginInvalid)}
+			d.err = &PluginError{Name: runtime.name, Stage: "measure", Err: fmt.Errorf("%w: %s", ErrPluginInvalid, DiagnosticText(DiagnosticPluginMeasureSingleChild))}
 		}
 		return Size{}
 	}
@@ -540,7 +540,7 @@ func layoutScrollBox(n *Node, r render.Renderer, c BoxConstraints, pos Point, d 
 // 供 diff 应用（原生滚动条范围/位置）。
 func layoutListView(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags) Size {
 	if c.IsUnboundedW() || c.IsUnboundedH() {
-		panic("flux.ListView: 需要有界的宽高约束（虚拟列表必须有 viewport，请放在 Expanded/固定尺寸容器内）")
+		panic(DiagnosticText(DiagnosticListBounded))
 	}
 	vw, vh := c.MaxW, c.MaxH
 	if vw < 0 {

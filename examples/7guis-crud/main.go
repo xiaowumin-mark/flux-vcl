@@ -166,6 +166,8 @@ func main() {
 				),
 				flux.Expanded(flux.StringGrid(len(visible), 3,
 					flux.Key("people-grid"),
+					flux.AccessibleName("People directory"),
+					flux.AccessibleDescription("Use the arrow keys to select a person."),
 					flux.Headers([]string{"Surname", "Name", "ID"}),
 					flux.ColumnWidths([]int{150, 145, 64}),
 					flux.Cells(cells),

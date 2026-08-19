@@ -23,7 +23,8 @@
 本文面向所有在 `github.com/xiaowumin-mark/flux-vcl` 上写代码 / 测试 / 文档的贡献者，目标是让仓库长期保持：
 
 - **架构不变量**（D1–D7）不被无意破坏；
-- **无头可测**：核心逻辑不依赖 LCL/DLL，任意平台 `go test ./...` 可跑；
+- **无头可测**：核心纯逻辑不依赖 LCL/DLL，可在支持 Go 的宿主平台单独测试；包含默认
+  LCL 后端、Windows API 和示例的完整仓库当前只支持在 Windows 上运行 `go test ./...`；
 - **声明式一致**：所有用户 API 遵循同一套构造器 / Opt / State 惯例；
 - **文档同步**：行为变化必须反映到 design.md 与 README。
 
@@ -33,7 +34,7 @@
 
 | 项 | 要求 | 说明 |
 |---|---|---|
-| Go | 1.22+ | `go.mod` 锁 `go 1.22`；CI 覆盖 1.22–1.26 与当前 1.27 RC |
+| Go | 模块基线 1.22 | `go.mod` 锁 `go 1.22`；当前受支持的验证集合以 CI 矩阵列出的 1.22.x–1.26.x 与 1.27.0-rc.3 为准，不把“1.22+”解释为所有未来工具链均已验证。 |
 | 绑定依赖 | `github.com/energye/lcl v1.0.3` | **版本必须与 `libenergy-amd64.dll` 严格一致**（见 `docs/phase0-e2-libenergy-mapping.md`），升级需同步替换 DLL 并记录 |
 | 运行时 DLL | `libenergy-amd64.dll` | 构建脚本复制到 exe 旁；可用 `FVCL_LIBENERGY_DLL` 指定路径 |
 | 资源生成 | go-winres | 生成 `rsrc_windows_amd64.syso`（manifest/icon/version） |
@@ -95,14 +96,17 @@
 
 ## 6. 测试规范
 
-- **无头优先**：核心逻辑（widget/diff/render/flux 声明式层）用 `internal/render.Mock` 测试，不接触 energye/lcl/DLL，任意平台 `go test` 可跑（见 `renderer_test.go` 的 `TestMockHasNoDisplayDependency`）。
+- **无头优先**：核心逻辑（根包、`internal/widget`、`internal/diff`、`internal/render`）用
+  `internal/render.Mock` 测试，不接触 energye/lcl/DLL；这些包可在支持 Go 的宿主平台
+  单独测试（见 `renderer_test.go` 的 `TestMockHasNoDisplayDependency`）。`internal/native`
+  使用 Win32 API，故完整的 `go test ./...` 是 Windows 验证命令。
 - **命名**：`Test<特征><场景>`，英文 PascalCase；架构不变量用 `TestD<N><...>` 前缀（如 `TestD7aPurePropertyChangeNoRebuild`）。
 - **文件**：`<被测文件>_test.go`（如 `state_test.go`、`inspector_test.go`），跨特性收尾测试用功能域名（如 `phase5_test.go`、`scroll_inspect_test.go`）。
 - **并发**：涉及 goroutine / 跨线程 marshalling 的测试必须用 `go test -race` 通过（如 Phase 2 的 5 goroutine 并发 Set）。
 - **覆盖**：新功能必须带测试；修 bug 先加复现测试再修。
-- **CI 红线**：Go 1.22–1.26 与当前 1.27rc3 的 `go test ./...`、1.27rc3 工具链
-  `go vet ./...` 与
-  `go test -race ./...` 全绿；DLL 到位且非 race 时 native probe 不得跳过；全部公开
+- **CI 红线**：当前 CI 矩阵列出的 Go 1.22.x–1.26.x 与 1.27.0-rc.3 的 Windows
+  `go test ./...` 全绿；其中 1.27.0-rc.3 还必须通过 `go vet ./...` 与
+  `go test -race ./...`。DLL 到位且非 race 时 native probe 不得跳过；全部公开
   examples 由 Windows CI 独立构建/冒烟并上传经像素检查的非空截图；NSIS 安装包必须在
   全新的 `windows-latest` VM 完成安装、从安装目录启动交互 smoke、卸载和残留检查。
 - **性能基线**：基准必须 `-benchmem` 并记录环境、mutation 数和样本结果；耗时用于

@@ -94,6 +94,27 @@ func main() {
 		flux.RGB(0xF5, 0x9E, 0x0B),
 		flux.RGB(0xEF, 0x44, 0x44),
 	}
+	addCircleAt := func(x, y int) {
+		radius := defaultRadius
+		if value, err := strconv.Atoi(radiusText.Get()); err == nil && value >= minimumRadius && value <= maximumRadius {
+			radius = value
+		}
+		commit(func() {
+			drawing.circles = append(drawing.circles, circle{
+				x: x, y: y, radius: radius,
+				color: palette[len(drawing.circles)%len(palette)],
+			})
+			drawing.selected = len(drawing.circles) - 1
+		})
+		setRadiusText()
+	}
+	selectNextCircle := func() {
+		if len(drawing.circles) == 0 {
+			return
+		}
+		drawing.selected = (drawing.selected + 1) % len(drawing.circles)
+		setRadiusText()
+	}
 
 	if err := app.Mount(func() flux.Widget {
 		commands := make([]flux.PaintCommand, 0, len(drawing.circles)+1)
@@ -129,6 +150,9 @@ func main() {
 		}
 		canvas := flux.Widget(flux.PaintBox(commands,
 			flux.Key("drawing"),
+			flux.AccessibleName("Circle drawing canvas"),
+			flux.AccessibleDescription("Use Add circle and Select next circle for keyboard access."),
+			flux.AccessibleValue(fmt.Sprintf("%d circles; selected %s", len(drawing.circles), selected)),
 			flux.OnMouseDown(func(e flux.Event) {
 				if e.Button != flux.ButtonLeft {
 					return
@@ -139,18 +163,7 @@ func main() {
 					return
 				}
 
-				radius := defaultRadius
-				if value, err := strconv.Atoi(radiusText.Get()); err == nil && value >= minimumRadius && value <= maximumRadius {
-					radius = value
-				}
-				commit(func() {
-					drawing.circles = append(drawing.circles, circle{
-						x: e.X, y: e.Y, radius: radius,
-						color: palette[len(drawing.circles)%len(palette)],
-					})
-					drawing.selected = len(drawing.circles) - 1
-				})
-				setRadiusText()
+				addCircleAt(e.X, e.Y)
 			}),
 		))
 
@@ -177,6 +190,12 @@ func main() {
 						redoStack = redoStack[:len(redoStack)-1]
 						setRadiusText()
 					})),
+					flux.Button("Add circle", flux.OnClick(func(_ flux.Event) {
+						index := len(drawing.circles)
+						addCircleAt(70+(index%4)*80, 60+((index/4)%2)*60)
+					})),
+					flux.Button("Select next", flux.Enabled(len(drawing.circles) > 0),
+						flux.OnClick(func(_ flux.Event) { selectNextCircle() })),
 					flux.Expanded(flux.Text(fmt.Sprintf("Circles: %d   Selected: %s", len(drawing.circles), selected))),
 				),
 				flux.Expanded(canvas),

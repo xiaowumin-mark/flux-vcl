@@ -10,10 +10,8 @@
 //  3. 6.3 多窗口：启动即开第二个窗体（独立 App/State 作用域，计数互不相干），
 //     主窗体与第二窗体的 State 各自触发各自的 re-render。
 //
-// 工程约束（Phase 0 冒烟结论）：smoke 按 class=Button 枚举主窗体子控件取按钮
-// 文本作"点击生效"信号 —— 本 demo 主窗体只有一个按钮（counter），滚动/选中
-// 操作均用可点击 Text（TLabel 无 HWND，非 Button 类，不干扰冒烟）。第二窗体
-// 标题不以 "FluxVCL " 开头（smoke 只匹配主窗体标题前缀）。
+// 键盘可达性：滚动、选中和第二窗口计数均使用原生 Button，Tab/Space/Enter
+// 与鼠标路径等价。第二窗体标题不以 "FluxVCL " 开头（smoke 只匹配主窗体标题前缀）。
 // State 订阅约束（design §9）：行 builder 里读取的 sel 必须 Bind 出来才响应
 // Set —— 头部"已选中"读数即为此订阅（点击标记 → sel.Set → 触发 re-render）。
 //
@@ -68,7 +66,7 @@ func main() {
 			// 虚拟列表行身份由 ListView 内部控制池 slot key（row-N）提供，builder 产物
 			// 不写 key（否则滚动换内容时重建，破坏控件池）。
 			flux.Column(
-				// 头部：标题 + 唯一按钮（smoke 目标）+ 滚动位置读数
+				// 头部：标题 + 计数按钮 + 滚动位置读数
 				flux.Row(
 					flux.Text("10 万行虚拟列表", flux.FontColor(th.Text), flux.Width(140)),
 					flux.Button(flux.Bind(count),
@@ -84,18 +82,18 @@ func main() {
 					flux.Text(flux.Bind(sel), flux.FontColor(th.Accent)),
 					flux.Text(" 行", flux.FontColor(th.Text)),
 				),
-				// 控制行：滚动/选中操作（可点击 Text，非 Button 类，不扰冒烟）
+				// 控制行：原生按钮同时提供鼠标与键盘操作路径。
 				flux.Row(
-					flux.Text("⬆ 滚到顶", flux.FontColor(th.Accent),
+					flux.Button("滚到顶", flux.AccessibleName("滚动到列表顶部"),
 						flux.OnClick(func(flux.Event) { scroll.Set(0) })),
-					flux.Text("⬇ 滚到底", flux.FontColor(th.Accent),
+					flux.Button("滚到底", flux.AccessibleName("滚动到列表底部"),
 						flux.OnClick(func(flux.Event) { scroll.Set(maxOffset) })),
-					flux.Text("选中第 50000 行", flux.FontColor(th.Accent),
+					flux.Button("选中第 50000 行",
 						flux.OnClick(func(flux.Event) {
 							sel.Set(50000)
 							scroll.Set(50000 * rowH) // 滚动到目标行（可见区中部）
 						})),
-					flux.Text("清除选中", flux.FontColor(th.Text),
+					flux.Button("清除选中",
 						flux.OnClick(func(flux.Event) { sel.Set(-1) })),
 				),
 				// 虚拟列表：占满剩余高度（Expanded → 有界约束）
@@ -111,7 +109,8 @@ func main() {
 							flux.Text(fmt.Sprintf("第 %d 条数据（点击右侧标记选中）", idx),
 								flux.FontColor(th.Text)),
 							flux.Expanded(flux.Text("", flux.Width(1))),
-							flux.Text(mark, flux.FontColor(th.Accent),
+							flux.Button(mark, flux.Width(40),
+								flux.AccessibleName(fmt.Sprintf("选择第 %d 行", idx)),
 								flux.OnClick(func(e flux.Event) {
 									if sel.Get() == idx {
 										sel.Set(-1)
@@ -143,7 +142,7 @@ func main() {
 					flux.Text("第二窗口计数: ", flux.FontColor(th.Text)),
 					flux.Text(flux.Bind(count2), flux.FontColor(th.Accent)),
 				),
-				flux.Text("▸ 点击我 +1（不影响主窗口计数）", flux.FontColor(th.Accent),
+				flux.Button("计数 +1（不影响主窗口）",
 					flux.OnClick(func(e flux.Event) { count2.Set(count2.Get() + 1) })),
 			),
 		)

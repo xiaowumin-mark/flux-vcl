@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/energye/lcl/types"
+	"github.com/energye/lcl/types/colors"
 
 	"github.com/xiaowumin-mark/flux-vcl/internal/render"
 )
@@ -27,6 +28,40 @@ func TestMapButton(t *testing.T) {
 		if got := mapButton(c.in); got != c.want {
 			t.Errorf("mapButton(%v) = %v，期望 %v", c.in, got, c.want)
 		}
+	}
+}
+
+func TestHighContrastColorResolution(t *testing.T) {
+	custom := render.Color(0xFF123456)
+	if got := resolveThemeColor(custom, false); got != colorToTColor(custom) {
+		t.Fatalf("normal theme color = %#x", got)
+	}
+	if got := resolveThemeColor(0, false); got != types.TColor(colors.ClDefault) {
+		t.Fatalf("removed theme color = %#x, want system default", got)
+	}
+	if got := resolveThemeColor(custom, true); got != types.TColor(colors.ClDefault) {
+		t.Fatalf("high contrast theme color = %#x, want system default", got)
+	}
+
+	for value, want := range map[string]bool{
+		"1": true, "TRUE": true, " on ": true, "yes": true,
+		"0": false, "false": false, "": false, "other": false,
+	} {
+		if got := parseHighContrastOverride(value); got != want {
+			t.Errorf("parseHighContrastOverride(%q)=%v, want %v", value, got, want)
+		}
+	}
+
+	renderer := &Renderer{}
+	renderer.highContrast.Store(true)
+	if got := renderer.paintColor(custom, contrastPaintBackground); got != types.TColor(colors.ClWindow) {
+		t.Errorf("PaintBox high contrast background = %#x", got)
+	}
+	if got := renderer.paintColor(custom, contrastPaintFill); got != types.TColor(colors.ClHighlight) {
+		t.Errorf("PaintBox high contrast fill = %#x", got)
+	}
+	if got := renderer.paintColor(custom, contrastPaintStroke); got != types.TColor(colors.ClWindowText) {
+		t.Errorf("PaintBox high contrast stroke = %#x", got)
 	}
 }
 

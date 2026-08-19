@@ -31,7 +31,7 @@ type Window struct {
 // 调用方须已完成 native.Init，并在 UI 线程调用。
 func Open(target *flux.App) *Window {
 	if target == nil {
-		panic("inspector.Open: target 不能为空")
+		panic(flux.DiagnosticText(flux.DiagnosticInspectorTargetNil))
 	}
 	w := &Window{target: target, history: flux.NewInspectorHistory(80)}
 	w.form = lcl.NewForm(lcl.Application)

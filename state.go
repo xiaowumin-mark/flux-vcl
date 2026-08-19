@@ -45,7 +45,7 @@ func (s *State[T]) Set(v T) {
 	}
 	s.mu.Unlock()
 	for _, a := range subs {
-		a.invalidate()
+		a.invalidateFor(s)
 	}
 }
 
@@ -56,12 +56,29 @@ func (s *State[T]) subscribe(a *App) {
 	s.subs[a] = struct{}{}
 }
 
+// unsubscribe removes an App from this State. App replaces its complete
+// subscription set after each successful tree build, so bindings removed from
+// a conditional branch no longer keep the App alive or schedule re-renders.
+func (s *State[T]) unsubscribe(a *App) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subs, a)
+}
+
+// stateSubscription is the stable State identity behind a bindable. Bindings
+// are reconstructed on every render, so App tracks this identity rather than
+// the transient Binding value.
+type stateSubscription interface {
+	subscribe(*App)
+	unsubscribe(*App)
+}
+
 // bindable 是绑定参数（Bind 返回值）：渲染时取当前文本值，输入时回写 State。
 // Text/Button 构造器按类型分支处理；Input 走 Opt.apply 设置回写。
 type bindable interface {
-	renderText() string     // 渲染时的当前文本值
-	onChange() func(string) // 双向绑定回写函数；不支持类型返回 nil
-	bindTo(a *App)          // 登记订阅
+	renderText() string
+	onChange() func(string)
+	subscription() stateSubscription
 }
 
 // Binding 是 State 的绑定（design.md §9 数据绑定）。
@@ -97,7 +114,7 @@ func (b *Binding[T]) onChange() func(string) {
 	}
 }
 
-func (b *Binding[T]) bindTo(a *App) { b.state.subscribe(a) }
+func (b *Binding[T]) subscription() stateSubscription { return b.state }
 
 // apply 实现 Opt：Input(Bind(s)) 时设置显示文本、回写事件与依赖标记。
 func (b *Binding[T]) apply(n *Node) {

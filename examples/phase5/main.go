@@ -149,11 +149,11 @@ func main() {
 					}),
 				),
 
-				// 主题切换（5.2）：可点击 Text chip（TLabel 无 HWND，非 Button，不扰冒烟）。
+				// 主题切换（5.2）：原生 Button 提供鼠标与键盘等价操作。
 				// Bind(themeName) 把 State 订阅到 App —— Set 才触发全量 re-diff（同 count/load 路径）。
 				flux.Row(
-					flux.Text(flux.Bind(themeName),
-						flux.FontColor(th.Accent),
+					flux.Button(flux.Bind(themeName),
+						flux.AccessibleName("切换浅色或深色主题"),
 						flux.OnClick(func(e flux.Event) {
 							if themeName.Get() == "light" {
 								themeName.Set("dark") // State 变 → 全量 re-diff（仅 patch 颜色属性）

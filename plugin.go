@@ -16,21 +16,21 @@ const pluginTypePrefix = "Plugin:"
 
 var (
 	// ErrPluginInvalid 表示插件名称、描述符或属性不符合公开契约。
-	ErrPluginInvalid = errors.New("flux: 插件定义无效")
+	ErrPluginInvalid = newDiagnosticError(DiagnosticErrPluginInvalid)
 	// ErrPluginReserved 表示插件名称与内建控件或框架保留前缀冲突。
-	ErrPluginReserved = errors.New("flux: 插件名称已保留")
+	ErrPluginReserved = newDiagnosticError(DiagnosticErrPluginReserved)
 	// ErrPluginAlreadyRegistered 表示进程注册表已有同名插件。
-	ErrPluginAlreadyRegistered = errors.New("flux: 插件已注册")
+	ErrPluginAlreadyRegistered = newDiagnosticError(DiagnosticErrPluginRegistered)
 	// ErrPluginNotRegistered 表示渲染或注销时找不到指定插件。
-	ErrPluginNotRegistered = errors.New("flux: 插件未注册")
+	ErrPluginNotRegistered = newDiagnosticError(DiagnosticErrPluginNotRegistered)
 	// ErrPluginInUse 表示仍有 App 使用插件，不能逻辑注销。
-	ErrPluginInUse = errors.New("flux: 插件仍在使用")
+	ErrPluginInUse = newDiagnosticError(DiagnosticErrPluginInUse)
 	// ErrPluginPanic 表示框架已捕获插件回调 panic。
-	ErrPluginPanic = errors.New("flux: 插件回调 panic")
+	ErrPluginPanic = newDiagnosticError(DiagnosticErrPluginPanic)
 	// ErrPluginCycle 表示插件 builder 递归展开超过安全深度。
-	ErrPluginCycle = errors.New("flux: 插件 builder 循环")
+	ErrPluginCycle = newDiagnosticError(DiagnosticErrPluginCycle)
 	// ErrAppClosed 表示 App 已关闭，不能继续渲染。
-	ErrAppClosed = errors.New("flux: App 已关闭")
+	ErrAppClosed = newDiagnosticError(DiagnosticErrAppClosed)
 )
 
 // PluginError 描述插件错误发生的类型名、阶段与底层原因。
@@ -47,7 +47,7 @@ func (e *PluginError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("flux: 插件 %q 在 %s 阶段失败: %v", e.Name, e.Stage, e.Err)
+	return DiagnosticText(DiagnosticPluginError, e.Name, e.Stage, e.Err)
 }
 
 // Unwrap 返回底层错误，供 errors.Is/errors.As 使用。
@@ -82,7 +82,7 @@ func PluginFloat(name string, value float64) PluginProperty {
 
 func newPluginProperty(name string, value any) PluginProperty {
 	if !validPluginPropertyName(name) {
-		panic(fmt.Sprintf("flux.PluginProperty: 属性名 %q 无效", name))
+		panic(DiagnosticText(DiagnosticPluginPropertyName, name))
 	}
 	return PluginProperty{name: name, value: value}
 }
@@ -99,7 +99,7 @@ func NewPluginProperties(properties ...PluginProperty) PluginProperties {
 	p := PluginProperties{values: make(map[string]any, len(properties))}
 	for _, property := range properties {
 		if !validPluginPropertyName(property.name) {
-			panic("flux.NewPluginProperties: 属性必须由 PluginString/PluginInt/PluginBool/PluginFloat 创建")
+			panic(DiagnosticText(DiagnosticPluginProperties))
 		}
 		if _, exists := p.values[property.name]; !exists {
 			p.keys = append(p.keys, property.name)
@@ -151,7 +151,7 @@ type Capability[T any] struct{ name string }
 // NewCapability 创建具名能力令牌。名称必须采用点分命名空间，如 example.chart.export。
 func NewCapability[T any](name string) Capability[T] {
 	if !validCapabilityName(name) {
-		panic(fmt.Sprintf("flux.NewCapability: 能力名称 %q 无效", name))
+		panic(DiagnosticText(DiagnosticCapabilityName, name))
 	}
 	return Capability[T]{name: name}
 }
@@ -310,7 +310,7 @@ func RegisteredWidgets() []string {
 // args 可混合 Widget 子节点与 Opt；非法参数 panic。
 func PluginWidget(name string, properties PluginProperties, args ...any) Widget {
 	if !validPluginName(name) || reservedPluginName(name) {
-		panic(fmt.Sprintf("flux.PluginWidget: 插件名称 %q 无效或已保留", name))
+		panic(DiagnosticText(DiagnosticPluginWidgetName, name))
 	}
 	n := widgetNodeForPlugin(name)
 	n.Props.Set("PluginProperties", properties.clone())
@@ -321,7 +321,7 @@ func PluginWidget(name string, properties PluginProperties, args ...any) Widget 
 		case Opt:
 			value.apply(n)
 		default:
-			panic("flux.PluginWidget: 参数必须是 Widget 或 Opt")
+			panic(DiagnosticText(DiagnosticPluginWidgetArguments))
 		}
 	}
 	return widgetNode{n}
@@ -338,13 +338,13 @@ func newNode(t string) *Node {
 
 func validatePlugin(name string, descriptor WidgetPlugin) error {
 	if !validPluginName(name) {
-		return &PluginError{Name: name, Stage: "register", Err: fmt.Errorf("%w: 名称格式错误", ErrPluginInvalid)}
+		return &PluginError{Name: name, Stage: "register", Err: fmt.Errorf("%w: %s", ErrPluginInvalid, DiagnosticText(DiagnosticPluginNameFormat))}
 	}
 	if reservedPluginName(name) {
 		return &PluginError{Name: name, Stage: "register", Err: ErrPluginReserved}
 	}
 	if descriptor.Build == nil {
-		return &PluginError{Name: name, Stage: "register", Err: fmt.Errorf("%w: Build 不能为空", ErrPluginInvalid)}
+		return &PluginError{Name: name, Stage: "register", Err: fmt.Errorf("%w: %s", ErrPluginInvalid, DiagnosticText(DiagnosticPluginBuildRequired))}
 	}
 	return nil
 }
@@ -480,7 +480,7 @@ func (a *App) ensurePlugin(name string) (*pluginRuntime, bool, error) {
 
 func (a *App) expandWidget(source Widget) (*Node, error) {
 	if source == nil {
-		return nil, fmt.Errorf("flux: 根 Widget 不能为空")
+		return nil, fmt.Errorf("%s", DiagnosticText(DiagnosticRootWidgetNil))
 	}
 	pluginStart := len(a.pluginOrder)
 	var sourceNode *Node
@@ -505,7 +505,7 @@ func (a *App) expandWidget(source Widget) (*Node, error) {
 func widgetCall(fn func() error) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("flux: Widget.Create panic: %v", recovered)
+			err = fmt.Errorf("%s", DiagnosticText(DiagnosticWidgetCreatePanic, recovered))
 		}
 	}()
 	return fn()
@@ -538,7 +538,7 @@ const maxPluginBuildDepth = 64
 
 func (a *App) expandNode(node *Node, depth int) (*Node, error) {
 	if node == nil {
-		return nil, fmt.Errorf("flux: Widget.Create 返回 nil Node")
+		return nil, fmt.Errorf("%s", DiagnosticText(DiagnosticWidgetCreateNil))
 	}
 	if depth > maxPluginBuildDepth {
 		return nil, &PluginError{Stage: "build", Err: ErrPluginCycle}
@@ -546,7 +546,7 @@ func (a *App) expandNode(node *Node, depth int) (*Node, error) {
 	name, isPlugin := pluginNameFromType(node.Type)
 	if !isPlugin {
 		if _, ok := builtInWidgetTypes[node.Type]; !ok {
-			return nil, fmt.Errorf("flux: 未知 Widget 类型 %q", node.Type)
+			return nil, fmt.Errorf("%s", DiagnosticText(DiagnosticWidgetUnknown, node.Type))
 		}
 		for i, child := range node.Children {
 			expanded, err := a.expandNode(child, depth)
@@ -582,7 +582,7 @@ func (a *App) expandNode(node *Node, depth int) (*Node, error) {
 			return buildErr
 		}
 		if builtWidget == nil {
-			return fmt.Errorf("%w: Build 返回 nil Widget", ErrPluginInvalid)
+			return fmt.Errorf("%w: %s", ErrPluginInvalid, DiagnosticText(DiagnosticPluginBuildNil))
 		}
 		built = builtWidget
 		return nil
@@ -593,7 +593,7 @@ func (a *App) expandNode(node *Node, depth int) (*Node, error) {
 	if err := pluginCall(name, "build", func() error {
 		builtNode = built.Create()
 		if builtNode == nil {
-			return fmt.Errorf("%w: Widget.Create 返回 nil Node", ErrPluginInvalid)
+			return fmt.Errorf("%w: %s", ErrPluginInvalid, DiagnosticText(DiagnosticWidgetCreateNil))
 		}
 		return validatePluginNodeTypes(builtNode)
 	}); err != nil {
@@ -625,17 +625,17 @@ func validatePluginNodeTypes(root *Node) error {
 	var validate func(*Node) error
 	validate = func(node *Node) error {
 		if node == nil {
-			return fmt.Errorf("%w: Widget.Create 返回 nil Node", ErrPluginInvalid)
+			return fmt.Errorf("%w: %s", ErrPluginInvalid, DiagnosticText(DiagnosticWidgetCreateNil))
 		}
 		if node.Props == nil {
-			return fmt.Errorf("%w: builder 返回 nil Props", ErrPluginInvalid)
+			return fmt.Errorf("%w: %s", ErrPluginInvalid, DiagnosticText(DiagnosticPluginNodePropsNil))
 		}
 		if visiting[node] {
-			return fmt.Errorf("%w: builder 返回循环 Node 树", ErrPluginInvalid)
+			return fmt.Errorf("%w: %s", ErrPluginInvalid, DiagnosticText(DiagnosticPluginNodeCycle))
 		}
 		if _, ok := builtInWidgetTypes[node.Type]; !ok {
 			if _, isPlugin := pluginNameFromType(node.Type); !isPlugin {
-				return fmt.Errorf("%w: builder 返回未知 Widget 类型 %q", ErrPluginInvalid, node.Type)
+				return fmt.Errorf("%w: %s", ErrPluginInvalid, DiagnosticText(DiagnosticPluginWidgetUnknown, node.Type))
 			}
 		}
 		visiting[node] = true
@@ -661,45 +661,45 @@ func validateAndNormalizePageControls(root *Node) error {
 	var validate func(*Node, *Node) error
 	validate = func(node, parent *Node) error {
 		if node == nil {
-			return fmt.Errorf("flux: 分页树包含 nil Node")
+			return fmt.Errorf("%s", DiagnosticText(DiagnosticPageTreeNil))
 		}
 		if node.Type == "TabPage" {
 			if parent == nil || parent.Type != "PageControl" {
-				return fmt.Errorf("flux: TabPage 只能直接属于 PageControl")
+				return fmt.Errorf("%s", DiagnosticText(DiagnosticTabPageParent))
 			}
 			if node.Props == nil {
-				return fmt.Errorf("flux: TabPage %q Props 不能为空", node.Key)
+				return fmt.Errorf("%s", DiagnosticText(DiagnosticTabPagePropsNil, node.Key))
 			}
 			if title, exists := node.Props.Get("Text"); !exists {
-				return fmt.Errorf("flux: TabPage %q 必须声明字符串标题", node.Key)
+				return fmt.Errorf("%s", DiagnosticText(DiagnosticTabPageTitleMissing, node.Key))
 			} else if _, ok := title.(string); !ok {
-				return fmt.Errorf("flux: TabPage %q 标题必须是 string", node.Key)
+				return fmt.Errorf("%s", DiagnosticText(DiagnosticTabPageTitleType, node.Key))
 			}
 			if node.Key == "" {
-				return fmt.Errorf("flux: PageControl 的 TabPage 必须设置非空 Key")
+				return fmt.Errorf("%s", DiagnosticText(DiagnosticExpandedPageKey))
 			}
 			if len(node.Children) != 1 || node.Children[0] == nil {
-				return fmt.Errorf("flux: PageControl 的 TabPage %q 必须包含唯一非空子树", node.Key)
+				return fmt.Errorf("%s", DiagnosticText(DiagnosticExpandedPageContent, node.Key))
 			}
 		}
 		if node.Type == "PageControl" {
 			if node.Props == nil {
-				return fmt.Errorf("flux: PageControl Props 不能为空")
+				return fmt.Errorf("%s", DiagnosticText(DiagnosticPagePropsNil))
 			}
 			keys := make(map[string]struct{}, len(node.Children))
 			for _, page := range node.Children {
 				if page == nil || page.Type != "TabPage" {
-					return fmt.Errorf("flux: PageControl 子节点必须是 TabPage")
+					return fmt.Errorf("%s", DiagnosticText(DiagnosticExpandedPageChild))
 				}
 				if page.Key == "" {
-					return fmt.Errorf("flux: PageControl 的 TabPage 必须设置非空 Key")
+					return fmt.Errorf("%s", DiagnosticText(DiagnosticExpandedPageKey))
 				}
 				if _, exists := keys[page.Key]; exists {
-					return fmt.Errorf("flux: PageControl 的 TabPage Key %q 重复", page.Key)
+					return fmt.Errorf("%s", DiagnosticText(DiagnosticExpandedPageKeyDuplicate, page.Key))
 				}
 				keys[page.Key] = struct{}{}
 				if len(page.Children) != 1 || page.Children[0] == nil {
-					return fmt.Errorf("flux: PageControl 的 TabPage %q 必须包含唯一非空子树", page.Key)
+					return fmt.Errorf("%s", DiagnosticText(DiagnosticExpandedPageContent, page.Key))
 				}
 			}
 
@@ -708,7 +708,7 @@ func validateAndNormalizePageControls(root *Node) error {
 				var ok bool
 				selected, ok = value.(int)
 				if !ok {
-					return fmt.Errorf("flux: PageControl SelectedIndex 必须是 int")
+					return fmt.Errorf("%s", DiagnosticText(DiagnosticPageSelectedIndexType))
 				}
 			}
 			node.Props.Set("SelectedIndex", normalizePageSelectedIndex(len(node.Children), selected))

@@ -70,6 +70,44 @@ func Enabled(v bool) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Enabled", v) })
 }
 
+// AccessibleName 声明供可访问性 Provider 使用的名称。Input、Slider、StringGrid、
+// PaintBox 等无独立标签的控件应显式设置。默认后端把该值写入 LCL
+// AccessibleName；锁定的 energye/lcl runtime 尚未将它投射到 Windows UIA，详见
+// docs/accessibility-i18n.md。
+func AccessibleName(name string) Opt {
+	return optFn(func(n *Node) { n.Props.Set("AccessibleName", name) })
+}
+
+// AccessibleDescription 声明可访问性补充说明。说明应补充名称未表达的目的或
+// 约束，不能重复可见标签；实际辅助技术暴露能力由 Renderer 后端决定。
+func AccessibleDescription(description string) Opt {
+	return optFn(func(n *Node) { n.Props.Set("AccessibleDescription", description) })
+}
+
+// AccessibleValue 声明自绘或受控控件的文本化可访问值。仅在后端无法从原生
+// 控件推导时使用；实际辅助技术暴露能力由 Renderer 后端决定。
+func AccessibleValue(value string) Opt {
+	return optFn(func(n *Node) { n.Props.Set("AccessibleValue", value) })
+}
+
+// TabStop 控制带原生键盘焦点的控件是否进入 Tab 导航。移除该 Opt 后恢复控件
+// 类型的 LCL 默认值。PaintBox 等无 HWND 的图形控件无法成为 Tab stop。
+func TabStop(enabled bool) Opt {
+	return optFn(func(n *Node) { n.Props.Set("TabStop", enabled) })
+}
+
+// DefaultButton 使 Button 成为窗体的 Enter 默认操作。仅 Button 生效；同一窗体
+// 应只声明一个默认按钮。
+func DefaultButton(enabled bool) Opt {
+	return optFn(func(n *Node) { n.Props.Set("DefaultButton", enabled) })
+}
+
+// CancelButton 使 Button 成为窗体的 Esc 取消操作。仅 Button 生效；同一窗体
+// 应只声明一个取消按钮。
+func CancelButton(enabled bool) Opt {
+	return optFn(func(n *Node) { n.Props.Set("CancelButton", enabled) })
+}
+
 // Checked 设置 CheckBox 等可选控件的选中状态（缺省 false）。
 func Checked(v bool) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Checked", v) })

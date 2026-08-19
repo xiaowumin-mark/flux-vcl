@@ -21,7 +21,7 @@ func Slider(opts ...Opt) Widget {
 		step = n.Props.Int("Step")
 	}
 	if step <= 0 {
-		panic("flux.Slider: Step 必须 > 0")
+		panic(DiagnosticText(DiagnosticSliderStepPositive))
 	}
 	minimum, maximum, value = normalizeProgress(minimum, maximum, value)
 	n.Props.Set("Minimum", minimum)
@@ -34,7 +34,7 @@ func Slider(opts ...Opt) Widget {
 // Step 设置 Slider 的正整数键盘步长，缺省为 1。它不影响鼠标拖动精度。
 func Step(value int) Opt {
 	if value <= 0 {
-		panic("flux.Step: value 必须 > 0")
+		panic(DiagnosticText(DiagnosticStepValuePositive))
 	}
 	return optFn(func(n *Node) { n.Props.Set("Step", value) })
 }

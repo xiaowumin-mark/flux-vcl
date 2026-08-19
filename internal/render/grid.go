@@ -2,6 +2,38 @@ package render
 
 import "fmt"
 
+// GridValidationKind identifies one stable category of grid validation failure.
+// The root package maps these categories to localized framework diagnostics.
+type GridValidationKind uint8
+
+const (
+	GridValidationInvalidSize GridValidationKind = iota + 1
+	GridValidationRowCount
+	GridValidationColumnCount
+)
+
+// GridValidationError carries validation details without making rendered error
+// text part of the cross-package contract.
+type GridValidationError struct {
+	Kind GridValidationKind
+	Row  int
+	Got  int
+	Want int
+}
+
+func (e *GridValidationError) Error() string {
+	switch e.Kind {
+	case GridValidationInvalidSize:
+		return fmt.Sprintf("invalid grid size %dx%d", e.Got, e.Want)
+	case GridValidationRowCount:
+		return fmt.Sprintf("Cells row count=%d, want %d", e.Got, e.Want)
+	case GridValidationColumnCount:
+		return fmt.Sprintf("Cells row %d column count=%d, want %d", e.Row, e.Got, e.Want)
+	default:
+		return "invalid grid cells"
+	}
+}
+
 // GridCell 是 StringGrid 的逻辑数据坐标，不包含可选的原生表头行。
 type GridCell struct {
 	Row    int
@@ -51,14 +83,19 @@ func CloneGridCells(cells [][]string) [][]string {
 // ValidateGridCells 验证矩阵与有界逻辑尺寸严格匹配。
 func ValidateGridCells(size GridSize, cells [][]string) error {
 	if size.Rows < 0 || size.Columns <= 0 {
-		return fmt.Errorf("invalid grid size %dx%d", size.Rows, size.Columns)
+		return &GridValidationError{Kind: GridValidationInvalidSize, Got: size.Rows, Want: size.Columns}
 	}
 	if len(cells) != size.Rows {
-		return fmt.Errorf("Cells 行数=%d，期望 %d", len(cells), size.Rows)
+		return &GridValidationError{Kind: GridValidationRowCount, Got: len(cells), Want: size.Rows}
 	}
 	for row := range cells {
 		if len(cells[row]) != size.Columns {
-			return fmt.Errorf("Cells 第 %d 行列数=%d，期望 %d", row, len(cells[row]), size.Columns)
+			return &GridValidationError{
+				Kind: GridValidationColumnCount,
+				Row:  row,
+				Got:  len(cells[row]),
+				Want: size.Columns,
+			}
 		}
 	}
 	return nil

@@ -1,8 +1,6 @@
 package flux
 
 import (
-	"fmt"
-
 	"github.com/xiaowumin-mark/flux-vcl/internal/render"
 	"github.com/xiaowumin-mark/flux-vcl/internal/widget"
 )
@@ -31,10 +29,32 @@ type PaintCommand = render.PaintCommand
 // 应用层自行决定。
 func PaintBox(commands []PaintCommand, opts ...Opt) Widget {
 	if err := render.ValidatePaintCommands(commands); err != nil {
-		panic(fmt.Sprintf("flux.PaintBox: %v", err))
+		panic(paintCommandsDiagnostic(err))
 	}
 	n := widget.NewNode("PaintBox")
 	n.Props.Set("PaintCommands", render.ClonePaintCommands(commands))
 	applyOpts(n, opts)
 	return widgetNode{n}
+}
+
+func paintCommandsDiagnostic(err error) string {
+	if validation, ok := err.(*render.PaintValidationError); ok {
+		switch validation.Kind {
+		case render.PaintValidationClearColor:
+			return DiagnosticText(DiagnosticPaintClearColor, validation.Index)
+		case render.PaintValidationCircleRadius:
+			return DiagnosticText(DiagnosticPaintCircleRadius, validation.Index)
+		case render.PaintValidationStrokeWidthNegative:
+			return DiagnosticText(DiagnosticPaintStrokeWidthNegative, validation.Index)
+		case render.PaintValidationCirclePaint:
+			return DiagnosticText(DiagnosticPaintCirclePaint, validation.Index)
+		case render.PaintValidationStrokeWidthRequired:
+			return DiagnosticText(DiagnosticPaintStrokeWidthRequired, validation.Index)
+		case render.PaintValidationStrokeColorRequired:
+			return DiagnosticText(DiagnosticPaintStrokeColorRequired, validation.Index)
+		case render.PaintValidationUnknownKind:
+			return DiagnosticText(DiagnosticPaintUnknownKind, validation.Index, validation.Command)
+		}
+	}
+	return DiagnosticText(DiagnosticPaintCommands, err)
 }

@@ -6,6 +6,9 @@
   既有示例继续使用唯一数字按钮；7GUIs 使用各自的业务级专用断言，不向产品
   界面插入测试专用控件。
 
+  accessibility-i18n 目标额外使用真实 SendInput、GetGUIThreadInfo 和 .NET UIA，
+  并在 FLUXVCL_FORCE_HIGH_CONTRAST 下验证中英文原地切换与截图。
+
   注意：LCL 的 TLabel 无独立 HWND（自绘在父窗体表面），冒烟通过按钮文本
   观测"点击生效"，这也是 FluxVCL 需要记住的工程约束。PageControl 目标还会
   连续重排页序、校验 native identity，并严格验证 PrintWindow 截图像素。
@@ -57,7 +60,11 @@ public static class W {
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
     public static extern IntPtr SetFocus(IntPtr h);
+    [DllImport("user32.dll")]
+    public static extern bool IsChild(IntPtr parent, IntPtr child);
     [DllImport("user32.dll")]
     public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
     [DllImport("kernel32.dll")]
@@ -85,6 +92,8 @@ public static class W {
         uint flags, uint timeout, out UIntPtr result);
     [DllImport("user32.dll", SetLastError=true)]
     public static extern bool PostMessage(IntPtr h, uint m, IntPtr wp, IntPtr lp);
+    [DllImport("user32.dll", SetLastError=true)]
+    private static extern uint SendInput(uint count, INPUT[] inputs, int size);
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)]
@@ -98,6 +107,71 @@ public static class W {
         public IntPtr hwndMoveSize;
         public IntPtr hwndCaret;
         public RECT rcCaret;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct INPUT {
+        public uint type;
+        public INPUTUNION data;
+    }
+    [StructLayout(LayoutKind.Explicit)]
+    public struct INPUTUNION {
+        [FieldOffset(0)] public MOUSEINPUT mouse;
+        [FieldOffset(0)] public KEYBDINPUT keyboard;
+        [FieldOffset(0)] public HARDWAREINPUT hardware;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint flags;
+        public uint time;
+        public UIntPtr extraInfo;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KEYBDINPUT {
+        public ushort virtualKey;
+        public ushort scanCode;
+        public uint flags;
+        public uint time;
+        public UIntPtr extraInfo;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HARDWAREINPUT {
+        public uint message;
+        public ushort parameterLow;
+        public ushort parameterHigh;
+    }
+    private static INPUT KeyboardInput(ushort virtualKey, bool keyUp) {
+        INPUT input = new INPUT();
+        input.type = 1;
+        input.data.keyboard.virtualKey = virtualKey;
+        input.data.keyboard.flags = keyUp ? 0x0002u : 0u;
+        return input;
+    }
+    private static INPUT UnicodeInput(char character, bool keyUp) {
+        INPUT input = new INPUT();
+        input.type = 1;
+        input.data.keyboard.scanCode = character;
+        input.data.keyboard.flags = 0x0004u | (keyUp ? 0x0002u : 0u);
+        return input;
+    }
+    public static bool SendVirtualKey(ushort virtualKey, bool shift, bool control, bool alt) {
+        INPUT[] inputs = new INPUT[(shift ? 2 : 0) + (control ? 2 : 0) + (alt ? 2 : 0) + 2];
+        int index = 0;
+        if (control) inputs[index++] = KeyboardInput(0x11, false);
+        if (shift) inputs[index++] = KeyboardInput(0x10, false);
+        if (alt) inputs[index++] = KeyboardInput(0x12, false);
+        inputs[index++] = KeyboardInput(virtualKey, false);
+        inputs[index++] = KeyboardInput(virtualKey, true);
+        if (alt) inputs[index++] = KeyboardInput(0x12, true);
+        if (shift) inputs[index++] = KeyboardInput(0x10, true);
+        if (control) inputs[index++] = KeyboardInput(0x11, true);
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))) == inputs.Length;
+    }
+    public static bool SendUnicodeCharacter(char character) {
+        INPUT[] inputs = new INPUT[] { UnicodeInput(character, false), UnicodeInput(character, true) };
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))) == inputs.Length;
     }
 }
 '@
@@ -410,6 +484,14 @@ function Get-ChildWindowText {
     return $text.ToString()
 }
 
+function Get-ComboSelection {
+    param([IntPtr]$Handle)
+
+    $raw = [uint64](Send-WindowMessage $Handle 0x0147) # CB_GETCURSEL
+    if ($raw -gt [int]::MaxValue) { return -1 }
+    return [int]$raw
+}
+
 function Set-ChildFocus {
     param(
         [IntPtr]$Window,
@@ -445,6 +527,292 @@ function Get-FocusedWindow {
         throw "[smoke] FAIL: GetGUIThreadInfo failed for hwnd=$Handle error=$errorCode"
     }
     return $info.hwndFocus
+}
+
+function Assert-LogicalFocus {
+    param(
+        [IntPtr]$Expected,
+        [string]$Context
+    )
+
+    $focused = Get-FocusedWindow $Expected
+    if ($focused -ne $Expected -and -not [W]::IsChild($Expected, $focused)) {
+        throw "[smoke] FAIL: $Context focus=$focused, want hwnd=$Expected or one of its native children"
+    }
+    return $focused
+}
+
+function Invoke-ForegroundKey {
+    param(
+        [IntPtr]$Window,
+        [int]$VirtualKey,
+        [switch]$Shift,
+        [switch]$Control,
+        [switch]$Alt,
+        [int]$SettleMilliseconds = 180
+    )
+
+    [W]::SetForegroundWindow($Window) | Out-Null
+    Start-Sleep -Milliseconds 50
+    if ([W]::GetForegroundWindow() -ne $Window) {
+        $windowRect = New-Object W+RECT
+        if (-not [W]::GetWindowRect($Window, [ref]$windowRect)) {
+            throw "[smoke] FAIL: GetWindowRect failed while activating keyboard target"
+        }
+        $titleX = [int](($windowRect.Left + $windowRect.Right) / 2)
+        $titleY = $windowRect.Top + 10
+        if (-not [W]::SetCursorPos($titleX, $titleY)) {
+            throw "[smoke] FAIL: SetCursorPos failed while activating keyboard target"
+        }
+        [W]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 50
+        [W]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 150
+    }
+    if ([W]::GetForegroundWindow() -ne $Window) {
+        throw "[smoke] FAIL: keyboard target is not the system foreground window"
+    }
+    [uint32]$processID = 0
+    $thread = [W]::GetWindowThreadProcessId($Window, [ref]$processID)
+    $info = New-Object W+GUITHREADINFO
+    $info.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($info)
+    if (-not [W]::GetGUIThreadInfo($thread, [ref]$info)) {
+        $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "[smoke] FAIL: GetGUIThreadInfo failed before SendInput error=$errorCode"
+    }
+    if ($info.hwndActive -ne $Window) {
+        throw "[smoke] FAIL: keyboard target is not foreground: active=$($info.hwndActive) want=$Window"
+    }
+    if (-not [W]::SendVirtualKey(
+        [uint16]$VirtualKey, $Shift.IsPresent, $Control.IsPresent, $Alt.IsPresent
+    )) {
+        $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "[smoke] FAIL: SendInput failed for virtual key 0x$($VirtualKey.ToString('X2')) error=$errorCode"
+    }
+    Start-Sleep -Milliseconds $SettleMilliseconds
+}
+
+function Send-ForegroundText {
+    param(
+        [IntPtr]$Window,
+        [string]$Text
+    )
+
+    foreach ($character in $Text.ToCharArray()) {
+        if ([W]::GetForegroundWindow() -ne $Window) {
+            throw "[smoke] FAIL: keyboard target lost foreground while entering text"
+        }
+        if (-not [W]::SendUnicodeCharacter($character)) {
+            $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            throw "[smoke] FAIL: Unicode SendInput failed for '$character' error=$errorCode"
+        }
+        Start-Sleep -Milliseconds 70
+    }
+}
+
+function Initialize-UIAutomation {
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+}
+
+function Get-AutomationPatternIdentifier {
+    param([string]$Name)
+
+    switch ($Name) {
+        "Invoke" { return [Windows.Automation.InvokePattern]::Pattern }
+        "Value" { return [Windows.Automation.ValuePattern]::Pattern }
+        "Text" { return [Windows.Automation.TextPattern]::Pattern }
+        "RangeValue" { return [Windows.Automation.RangeValuePattern]::Pattern }
+        "Selection" { return [Windows.Automation.SelectionPattern]::Pattern }
+        "SelectionItem" { return [Windows.Automation.SelectionItemPattern]::Pattern }
+        "Toggle" { return [Windows.Automation.TogglePattern]::Pattern }
+        "ExpandCollapse" { return [Windows.Automation.ExpandCollapsePattern]::Pattern }
+        "Grid" { return [Windows.Automation.GridPattern]::Pattern }
+        default { throw "unknown UI Automation pattern '$Name'" }
+    }
+}
+
+function Test-AutomationPattern {
+    param(
+        [object]$Element,
+        [string]$Name
+    )
+
+    $patternObject = $null
+    return $Element.TryGetCurrentPattern(
+        (Get-AutomationPatternIdentifier $Name), [ref]$patternObject
+    )
+}
+
+function Get-AutomationElementsByHandle {
+    param(
+        [IntPtr]$Window,
+        [IntPtr]$Handle
+    )
+
+    [uint32]$processID = 0
+    [W]::GetWindowThreadProcessId($Window, [ref]$processID) | Out-Null
+    $processCondition = [Windows.Automation.PropertyCondition]::new(
+        [Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$processID
+    )
+    $handleCondition = [Windows.Automation.PropertyCondition]::new(
+        [Windows.Automation.AutomationElement]::NativeWindowHandleProperty, [int]$Handle.ToInt64()
+    )
+    $condition = [Windows.Automation.AndCondition]::new($processCondition, $handleCondition)
+    $collection = [Windows.Automation.AutomationElement]::RootElement.FindAll(
+        [Windows.Automation.TreeScope]::Descendants, $condition
+    )
+    $result = New-Object System.Collections.Generic.List[object]
+    for ($index = 0; $index -lt $collection.Count; $index++) {
+        $result.Add($collection.Item($index)) | Out-Null
+    }
+    return @($result.ToArray())
+}
+
+function Get-AutomationElementsFromWindowHandle {
+    param(
+        [IntPtr]$Window,
+        [IntPtr]$Handle
+    )
+
+    $root = [Windows.Automation.AutomationElement]::FromHandle($Window)
+    $handleCondition = [Windows.Automation.PropertyCondition]::new(
+        [Windows.Automation.AutomationElement]::NativeWindowHandleProperty, [int]$Handle.ToInt64()
+    )
+    $collection = $root.FindAll(
+        [Windows.Automation.TreeScope]::Subtree, $handleCondition
+    )
+    $result = New-Object System.Collections.Generic.List[object]
+    for ($index = 0; $index -lt $collection.Count; $index++) {
+        $result.Add($collection.Item($index)) | Out-Null
+    }
+    return @($result.ToArray())
+}
+
+function Wait-AutomationElementByHandle {
+    param(
+        [IntPtr]$Window,
+        [IntPtr]$Handle,
+        [string]$ControlType,
+        [string]$ReadyPattern = "",
+        [int]$TimeoutMilliseconds = 8000,
+        [switch]$FromWindowHandle
+    )
+
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $lastEvidence = "no matches"
+    while ($timer.ElapsedMilliseconds -lt $TimeoutMilliseconds) {
+        try {
+            $matches = if ($FromWindowHandle) {
+                @(Get-AutomationElementsFromWindowHandle $Window $Handle)
+            } else {
+                @(Get-AutomationElementsByHandle $Window $Handle)
+            }
+            $typed = @($matches | Where-Object {
+                ($_.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '') -eq $ControlType
+            })
+            $lastEvidence = "matches=$($matches.Count) typed=$($typed.Count)"
+            if ($typed.Count -eq 1 -and
+                (-not $ReadyPattern -or (Test-AutomationPattern $typed[0] $ReadyPattern))) {
+                return $typed[0]
+            }
+        } catch [Windows.Automation.ElementNotAvailableException] { }
+        Start-Sleep -Milliseconds 150
+    }
+    $source = if ($FromWindowHandle) { "FromHandle" } else { "desktop root" }
+    throw "[smoke] FAIL: UI Automation $source hwnd=$Handle type='$ControlType' pattern='$ReadyPattern' was not ready ($lastEvidence)"
+}
+
+function Assert-UIAutomationElement {
+    param(
+        [object]$Element,
+        [string]$Name,
+        [string]$ControlType,
+        [string]$ClassName,
+        [string[]]$Patterns = @(),
+        [string[]]$MissingPatterns = @(),
+        [IntPtr]$ExpectedHandle = [IntPtr]::Zero,
+        [string]$HelpText = "",
+        [switch]$KeyboardFocusable
+    )
+
+    $current = $Element.Current
+    $actualType = $current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+    if ($current.Name -ne $Name -or $actualType -ne $ControlType -or
+        $current.ClassName -notlike $ClassName) {
+        throw "[smoke] FAIL: UIA '$Name' is name='$($current.Name)' type='$actualType' class='$($current.ClassName)'"
+    }
+    if ($ExpectedHandle -ne [IntPtr]::Zero -and
+        [int64]$current.NativeWindowHandle -ne $ExpectedHandle.ToInt64()) {
+        throw "[smoke] FAIL: UIA '$Name' hwnd=$($current.NativeWindowHandle), want=$ExpectedHandle"
+    }
+    if ($KeyboardFocusable -and -not $current.IsKeyboardFocusable) {
+        throw "[smoke] FAIL: UIA '$Name' is not keyboard focusable"
+    }
+    if ($PSBoundParameters.ContainsKey("HelpText") -and $current.HelpText -ne $HelpText) {
+        throw "[smoke] FAIL: UIA '$Name' HelpText='$($current.HelpText)', want='$HelpText'"
+    }
+    foreach ($pattern in $Patterns) {
+        if (-not (Test-AutomationPattern $Element $pattern)) {
+            throw "[smoke] FAIL: UIA '$Name' does not expose $pattern"
+        }
+    }
+    foreach ($pattern in $MissingPatterns) {
+        if (Test-AutomationPattern $Element $pattern) {
+            throw "[smoke] FAIL: UIA '$Name' unexpectedly exposes $pattern; update the documented backend capability"
+        }
+    }
+}
+
+function Get-AutomationValue {
+    param(
+        [object]$Element,
+        [string]$Pattern
+    )
+
+    $patternObject = $null
+    if (-not $Element.TryGetCurrentPattern(
+        (Get-AutomationPatternIdentifier $Pattern), [ref]$patternObject
+    )) {
+        throw "[smoke] FAIL: UIA '$($Element.Current.Name)' has no $Pattern value"
+    }
+    switch ($Pattern) {
+        "Value" { return ([Windows.Automation.ValuePattern]$patternObject).Current.Value }
+        "RangeValue" { return ([Windows.Automation.RangeValuePattern]$patternObject).Current.Value }
+        default { throw "UI Automation pattern '$Pattern' does not have a scalar smoke value"
+        }
+    }
+}
+
+function Get-AutomationHandle {
+    param([object]$Element)
+
+    return [IntPtr]::new([int64]$Element.Current.NativeWindowHandle)
+}
+
+function Get-ChildHandleIdentity {
+    param([IntPtr]$Window)
+
+    $handles = @(Get-ChildWindowSnapshot $Window | ForEach-Object { $_.Handle.ToInt64() } | Sort-Object)
+    return $handles -join ","
+}
+
+function Assert-ChildBoundsWithinWindow {
+    param([IntPtr]$Window)
+
+    $windowRect = New-Object W+RECT
+    if (-not [W]::GetWindowRect($Window, [ref]$windowRect)) {
+        throw "[smoke] FAIL: GetWindowRect failed for layout bounds check"
+    }
+    foreach ($child in @(Get-ChildWindowSnapshot $Window | Where-Object { $_.Visible })) {
+        $width = $child.Rect.Right - $child.Rect.Left
+        $height = $child.Rect.Bottom - $child.Rect.Top
+        if ($width -le 0 -or $height -le 0 -or
+            $child.Rect.Left -lt $windowRect.Left -or $child.Rect.Top -lt $windowRect.Top -or
+            $child.Rect.Right -gt $windowRect.Right -or $child.Rect.Bottom -gt $windowRect.Bottom) {
+            throw "[smoke] FAIL: localized child hwnd=$($child.Handle) class=$($child.Class) bounds=$($child.Rect.Left),$($child.Rect.Top),$($child.Rect.Right),$($child.Rect.Bottom) exceed window bounds=$($windowRect.Left),$($windowRect.Top),$($windowRect.Right),$($windowRect.Bottom)"
+        }
+    }
 }
 
 function Assert-EditFocusAndCaret {
@@ -858,7 +1226,245 @@ function Assert-PaintInteraction {
     }
 }
 
-$p = Start-Process -FilePath $exe -PassThru
+function Assert-AccessibilityI18nInteraction {
+    param([IntPtr]$Window)
+
+    Initialize-UIAutomation
+
+    $native = [ordered]@{
+        English = Get-UniqueChildWindow $Window "Button" "English"
+        Chinese = Get-UniqueChildWindow $Window "Button" "中文"
+        Name = Get-UniqueChildWindow $Window "Edit" "Ada Lovelace"
+        Priority = Get-UniqueChildWindow $Window "msctls_trackbar32"
+        Grid = Get-UniqueChildWindow $Window "Window"
+        Reset = Get-UniqueChildWindow $Window "Button" "Reset"
+        Save = Get-UniqueChildWindow $Window "Button" "Save (0)"
+    }
+    $combos = @(Get-ChildWindowSnapshot $Window | Where-Object { $_.Class -like "LCLComboBox*" })
+    if ($combos.Count -ne 1) {
+        throw "[smoke] FAIL: accessibility demo expected one ComboBox, found $($combos.Count)"
+    }
+    $native["Category"] = $combos[0]
+
+    $handles = [ordered]@{}
+    foreach ($entry in $native.GetEnumerator()) {
+        $handles[$entry.Key] = $entry.Value.Handle
+    }
+
+    # Query from the desktop root, constrained by process and HWND. A second
+    # query below starts from AutomationElement.FromHandle after the provider is
+    # input-idle; both paths must expose the same stable Win32 proxy contract.
+    $elements = [ordered]@{
+        English = Wait-AutomationElementByHandle $Window $handles.English "Button" "Invoke"
+        Chinese = Wait-AutomationElementByHandle $Window $handles.Chinese "Button" "Invoke"
+        Name = Wait-AutomationElementByHandle $Window $handles.Name "Edit" "Value"
+        Category = Wait-AutomationElementByHandle $Window $handles.Category "ComboBox" "ExpandCollapse"
+        Priority = Wait-AutomationElementByHandle $Window $handles.Priority "Slider" "RangeValue"
+        Grid = Wait-AutomationElementByHandle $Window $handles.Grid "Pane"
+        Reset = Wait-AutomationElementByHandle $Window $handles.Reset "Button" "Invoke"
+        Save = Wait-AutomationElementByHandle $Window $handles.Save "Button" "Invoke"
+    }
+
+    Assert-UIAutomationElement $elements.English "English" "Button" "Button" `
+        -Patterns @("Invoke") -ExpectedHandle $handles.English -KeyboardFocusable
+    Assert-UIAutomationElement $elements.Chinese "中文" "Button" "Button" `
+        -Patterns @("Invoke") -ExpectedHandle $handles.Chinese -KeyboardFocusable
+    Assert-UIAutomationElement $elements.Name "Ada Lovelace" "Edit" "Edit" `
+        -Patterns @("Value", "Text") -ExpectedHandle $handles.Name -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $elements.Category "Engineering" "ComboBox" "LCLComboBox*" `
+        -Patterns @("Selection", "ExpandCollapse") -ExpectedHandle $handles.Category `
+        -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $elements.Priority "" "Slider" "msctls_trackbar32" `
+        -Patterns @("RangeValue") -ExpectedHandle $handles.Priority -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $elements.Grid "" "Pane" "Window" `
+        -MissingPatterns @("Grid") -ExpectedHandle $handles.Grid -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $elements.Reset "Reset" "Button" "Button" `
+        -Patterns @("Invoke") -ExpectedHandle $handles.Reset -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $elements.Save "Save (0)" "Button" "Button" `
+        -Patterns @("Invoke") -ExpectedHandle $handles.Save -HelpText "" -KeyboardFocusable
+
+    $fromHandleElements = [ordered]@{
+        English = Wait-AutomationElementByHandle $Window $handles.English "Button" "Invoke" -FromWindowHandle
+        Name = Wait-AutomationElementByHandle $Window $handles.Name "Edit" "Value" -FromWindowHandle
+        Category = Wait-AutomationElementByHandle $Window $handles.Category "ComboBox" "ExpandCollapse" -FromWindowHandle
+        Priority = Wait-AutomationElementByHandle $Window $handles.Priority "Slider" "RangeValue" -FromWindowHandle
+        Grid = Wait-AutomationElementByHandle $Window $handles.Grid "Pane" -FromWindowHandle
+    }
+    Assert-UIAutomationElement $fromHandleElements.English "English" "Button" "Button" `
+        -Patterns @("Invoke") -ExpectedHandle $handles.English -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $fromHandleElements.Name "Ada Lovelace" "Edit" "Edit" `
+        -Patterns @("Value", "Text") -ExpectedHandle $handles.Name -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $fromHandleElements.Category "Engineering" "ComboBox" "LCLComboBox*" `
+        -Patterns @("Selection", "ExpandCollapse") -ExpectedHandle $handles.Category `
+        -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $fromHandleElements.Priority "" "Slider" "msctls_trackbar32" `
+        -Patterns @("RangeValue") -ExpectedHandle $handles.Priority -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $fromHandleElements.Grid "" "Pane" "Window" `
+        -MissingPatterns @("Grid") -ExpectedHandle $handles.Grid -HelpText "" -KeyboardFocusable
+    Write-Host "[smoke] PASS: desktop-root and FromHandle UIA roles/patterns plus metadata/GridPattern limitations verified"
+
+    $tabRing = @(
+        [PSCustomObject]@{ Name = "English"; Handle = $handles.English },
+        [PSCustomObject]@{ Name = "Chinese"; Handle = $handles.Chinese },
+        [PSCustomObject]@{ Name = "Name"; Handle = $handles.Name },
+        [PSCustomObject]@{ Name = "Category"; Handle = $handles.Category },
+        [PSCustomObject]@{ Name = "Priority"; Handle = $handles.Priority },
+        [PSCustomObject]@{ Name = "Grid"; Handle = $handles.Grid },
+        [PSCustomObject]@{ Name = "Reset"; Handle = $handles.Reset },
+        [PSCustomObject]@{ Name = "Save"; Handle = $handles.Save }
+    )
+    $tabEvidence = @($tabRing | ForEach-Object { "{0}={1}" -f $_.Name, $_.Handle }) -join ", "
+    Write-Host "[smoke] Tab ring HWNDs: $tabEvidence"
+    Set-ChildFocus $Window $tabRing[0].Handle
+    Assert-LogicalFocus $tabRing[0].Handle "Tab ring start" | Out-Null
+    for ($index = 1; $index -lt $tabRing.Count; $index++) {
+        Invoke-ForegroundKey $Window 0x09 # VK_TAB
+        Assert-LogicalFocus $tabRing[$index].Handle "Tab -> $($tabRing[$index].Name)" | Out-Null
+    }
+    Invoke-ForegroundKey $Window 0x09
+    Assert-LogicalFocus $tabRing[0].Handle "Tab wrap" | Out-Null
+    Invoke-ForegroundKey $Window 0x09 -Shift
+    Assert-LogicalFocus $tabRing[-1].Handle "Shift+Tab reverse wrap" | Out-Null
+    Write-Host "[smoke] PASS: real SendInput Tab/Shift+Tab ring and GetGUIThreadInfo focus verified"
+
+    # Enter state through the real foreground keyboard so the locale patch must
+    # preserve both native text and the controlled Flux State.
+    Set-ChildFocus $Window $handles.Name
+    Invoke-ForegroundKey $Window 0x41 -Control # Ctrl+A
+    Send-ForegroundText $Window "Grace"
+    $enteredName = Get-ChildWindowText $handles.Name
+    if ($enteredName -ne "Grace") {
+        throw "[smoke] FAIL: real keyboard input produced '$enteredName', want 'Grace'"
+    }
+    Assert-LogicalFocus $handles.Name "controlled Input rerender" | Out-Null
+
+    Set-ChildFocus $Window $handles.Category
+    Invoke-ForegroundKey $Window 0x28 # VK_DOWN: Engineering -> Research
+    $categoryIndex = Get-ComboSelection $handles.Category
+    if ($categoryIndex -ne 2) {
+        throw "[smoke] FAIL: ComboBox arrow key selected index $categoryIndex, want 2"
+    }
+    Assert-LogicalFocus $handles.Category "ComboBox arrow selection" | Out-Null
+
+    Set-ChildFocus $Window $handles.Priority
+    Invoke-ForegroundKey $Window 0x27 # VK_RIGHT: 3 -> 4
+    Invoke-ForegroundKey $Window 0x27 # VK_RIGHT: 4 -> 5
+    $priority = [int](Send-WindowMessage $handles.Priority 0x0400) # TBM_GETPOS
+    if ($priority -ne 5) {
+        throw "[smoke] FAIL: Slider arrow keys produced $priority, want 5"
+    }
+    Assert-LogicalFocus $handles.Priority "Slider arrow update" | Out-Null
+
+    Set-ChildFocus $Window $handles.Grid
+    Invoke-ForegroundKey $Window 0x27 # Grid column 1 -> 2
+    Invoke-ForegroundKey $Window 0x28 # Grid row 1 -> 2
+    Assert-LogicalFocus $handles.Grid "StringGrid arrow selection" | Out-Null
+
+    $identityBeforeLocale = Get-ChildHandleIdentity $Window
+    Set-ChildFocus $Window $handles.Chinese
+    Invoke-ForegroundKey $Window 0x20 # VK_SPACE
+    if ((Get-ChildWindowText $Window) -ne "FluxVCL 无障碍与国际化") {
+        throw "[smoke] FAIL: Space did not switch the application locale to zh-CN"
+    }
+    if ((Get-ChildHandleIdentity $Window) -ne $identityBeforeLocale) {
+        throw "[smoke] FAIL: locale switch recreated or removed native child HWNDs"
+    }
+    Assert-LogicalFocus $handles.Chinese "locale switch" | Out-Null
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        $localizedNameText = Get-ChildWindowText $handles.Name
+        $localizedCategoryIndex = Get-ComboSelection $handles.Category
+        $localizedCategoryText = Get-ChildWindowText $handles.Category
+        $localizedPriorityValue = [int](Send-WindowMessage $handles.Priority 0x0400)
+        if ($localizedNameText -eq "Grace" -and $localizedCategoryIndex -eq 2 -and
+            $localizedCategoryText -eq "研究" -and $localizedPriorityValue -eq 5) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if ($localizedNameText -ne "Grace" -or $localizedCategoryIndex -ne 2 -or
+        $localizedCategoryText -ne "研究" -or $localizedPriorityValue -ne 5) {
+        throw "[smoke] FAIL: locale state name='$localizedNameText' category=$localizedCategoryIndex/'$localizedCategoryText' priority=$localizedPriorityValue, want Grace/2/'研究'/5"
+    }
+    Assert-ChildBoundsWithinWindow $Window
+
+    $localizedName = Wait-AutomationElementByHandle $Window $handles.Name "Edit" "Value"
+    $localizedCategory = Wait-AutomationElementByHandle $Window $handles.Category "ComboBox" "ExpandCollapse"
+    $localizedPriority = Wait-AutomationElementByHandle $Window $handles.Priority "Slider" "RangeValue"
+    $localizedGrid = Wait-AutomationElementByHandle $Window $handles.Grid "Pane"
+    $localizedChinese = Wait-AutomationElementByHandle $Window $handles.Chinese "Button" "Invoke"
+    $localizedReset = Wait-AutomationElementByHandle $Window $handles.Reset "Button" "Invoke"
+    $localizedSave = Wait-AutomationElementByHandle $Window $handles.Save "Button" "Invoke"
+    Assert-UIAutomationElement $localizedName "Grace" "Edit" "Edit" `
+        -Patterns @("Value", "Text") -ExpectedHandle $handles.Name -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $localizedCategory "研究" "ComboBox" "LCLComboBox*" `
+        -Patterns @("Selection", "ExpandCollapse") -ExpectedHandle $handles.Category `
+        -HelpText "" -KeyboardFocusable
+    Assert-UIAutomationElement $localizedPriority "" "Slider" "msctls_trackbar32" `
+        -Patterns @("RangeValue") -ExpectedHandle $handles.Priority -KeyboardFocusable
+    Assert-UIAutomationElement $localizedGrid "" "Pane" "Window" `
+        -MissingPatterns @("Grid") -ExpectedHandle $handles.Grid -KeyboardFocusable
+    Assert-UIAutomationElement $localizedChinese "中文" "Button" "Button" `
+        -Patterns @("Invoke") -ExpectedHandle $handles.Chinese -KeyboardFocusable
+    Assert-UIAutomationElement $localizedReset "重置" "Button" "Button" `
+        -Patterns @("Invoke") -ExpectedHandle $handles.Reset -KeyboardFocusable
+    Assert-UIAutomationElement $localizedSave "保存 (0)" "Button" "Button" `
+        -Patterns @("Invoke") -ExpectedHandle $handles.Save -KeyboardFocusable
+    foreach ($identity in @(
+        [PSCustomObject]@{ Element = $localizedName; Handle = $handles.Name; Name = "项目名称" },
+        [PSCustomObject]@{ Element = $localizedCategory; Handle = $handles.Category; Name = "项目类别" },
+        [PSCustomObject]@{ Element = $localizedPriority; Handle = $handles.Priority; Name = "优先级" },
+        [PSCustomObject]@{ Element = $localizedGrid; Handle = $handles.Grid; Name = "任务分配表" },
+        [PSCustomObject]@{ Element = $localizedChinese; Handle = $handles.Chinese; Name = "切换为中文" },
+        [PSCustomObject]@{ Element = $localizedReset; Handle = $handles.Reset; Name = "重置表单" },
+        [PSCustomObject]@{ Element = $localizedSave; Handle = $handles.Save; Name = "保存表单" }
+    )) {
+        if ((Get-AutomationHandle $identity.Element) -ne $identity.Handle) {
+            throw "[smoke] FAIL: localized UIA '$($identity.Name)' changed HWND"
+        }
+    }
+    if ((Get-AutomationValue $localizedName "Value") -ne "Grace" -or
+        $localizedCategory.Current.Name -ne "研究" -or
+        [int](Get-AutomationValue $localizedPriority "RangeValue") -ne 5) {
+        throw "[smoke] FAIL: localized UIA value or ComboBox selection does not reflect preserved state"
+    }
+    Write-Host "[smoke] PASS: Space locale switch preserved HWNDs, focus, state, UIA, and bounded layout"
+
+    # A single-line Edit leaves Enter/Esc to the form's Default/Cancel buttons.
+    Set-ChildFocus $Window $handles.Name
+    Invoke-ForegroundKey $Window 0x0D # VK_RETURN -> Save
+    if ((Get-ChildWindowText $handles.Save) -ne "保存 (1)") {
+        throw "[smoke] FAIL: Enter did not invoke the default Save button"
+    }
+    Assert-LogicalFocus $handles.Name "default Enter action" | Out-Null
+
+    Invoke-ForegroundKey $Window 0x1B # VK_ESCAPE -> Reset
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        $resetName = Get-ChildWindowText $handles.Name
+        $resetCategory = Get-ComboSelection $handles.Category
+        $resetPriority = [int](Send-WindowMessage $handles.Priority 0x0400)
+        if ($resetName -eq "Ada Lovelace" -and $resetCategory -eq 1 -and $resetPriority -eq 3) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if ($resetName -ne "Ada Lovelace" -or $resetCategory -ne 1 -or $resetPriority -ne 3) {
+        throw "[smoke] FAIL: Esc did not invoke the cancel Reset button"
+    }
+    Assert-LogicalFocus $handles.Name "cancel Esc action" | Out-Null
+    Write-Host "[smoke] PASS: real Enter default and Esc cancel actions verified"
+}
+
+$forcedContrastWasSet = Test-Path Env:FLUXVCL_FORCE_HIGH_CONTRAST
+$previousForcedContrast = $env:FLUXVCL_FORCE_HIGH_CONTRAST
+if ($Target -eq "accessibility-i18n") {
+    $env:FLUXVCL_FORCE_HIGH_CONTRAST = "1"
+    Write-Host "[smoke] forced high contrast enabled for accessibility-i18n"
+}
+try {
+    $p = Start-Process -FilePath $exe -PassThru
+} finally {
+    if ($forcedContrastWasSet) {
+        $env:FLUXVCL_FORCE_HIGH_CONTRAST = $previousForcedContrast
+    } else {
+        Remove-Item Env:FLUXVCL_FORCE_HIGH_CONTRAST -ErrorAction SilentlyContinue
+    }
+}
 Write-Host "[smoke] started pid=$($p.Id) exe=$exe"
 $hwnd = [IntPtr]::Zero
 try {
@@ -884,6 +1490,9 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 if ($hwnd -eq [IntPtr]::Zero) { Write-Host "[smoke] FAIL: window not found"; exit 1 }
 Write-Host "[smoke] window found hwnd=$hwnd"
+if (-not $p.WaitForInputIdle(5000)) {
+    throw "[smoke] FAIL: target process did not become input-idle"
+}
 
 $pageBaseline = $null
 $sevenGuiTargets = @(
@@ -891,7 +1500,9 @@ $sevenGuiTargets = @(
     "7guis-timer", "7guis-crud", "7guis-circle-drawer", "7guis-cells"
 )
 $isSevenGui = $sevenGuiTargets -contains $Target
-if ($isSevenGui) {
+if ($Target -eq "accessibility-i18n") {
+    Assert-AccessibilityI18nInteraction $hwnd
+} elseif ($isSevenGui) {
     switch ($Target) {
         "7guis-counter" { Assert-CounterInteraction $hwnd }
         "7guis-temperature-converter" { Assert-TemperatureInteraction $hwnd }

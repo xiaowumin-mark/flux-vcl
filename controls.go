@@ -21,7 +21,7 @@ func Window(args ...any) Widget {
 		case Opt:
 			v.apply(n)
 		default:
-			panic("flux.Window: 参数必须是 Widget 或 Opt")
+			panic(DiagnosticText(DiagnosticWindowArguments))
 		}
 	}
 	return widgetNode{n}
@@ -86,23 +86,23 @@ func PageControl(args ...any) Widget {
 		case Widget:
 			page := v.Create()
 			if page == nil || page.Type != "TabPage" {
-				panic("flux.PageControl: 子节点必须是 TabPage")
+				panic(DiagnosticText(DiagnosticPageChild))
 			}
 			if len(page.Children) != 1 || page.Children[0] == nil {
-				panic("flux.PageControl: TabPage 必须包含唯一非空子树")
+				panic(DiagnosticText(DiagnosticPageContent))
 			}
 			if page.Key == "" {
-				panic("flux.PageControl: TabPage 必须设置非空 Key")
+				panic(DiagnosticText(DiagnosticPageKey))
 			}
 			if _, exists := keys[page.Key]; exists {
-				panic("flux.PageControl: TabPage Key 必须唯一")
+				panic(DiagnosticText(DiagnosticPageKeyUnique))
 			}
 			keys[page.Key] = struct{}{}
 			n.Add(page)
 		case Opt:
 			v.apply(n)
 		default:
-			panic("flux.PageControl: 参数必须是 TabPage 或 Opt")
+			panic(DiagnosticText(DiagnosticPageArguments))
 		}
 	}
 	selected := 0
@@ -118,17 +118,17 @@ func PageControl(args ...any) Widget {
 // 不能使用数组下标或每次 render 临时生成的值。
 func TabPage(title string, child Widget, opts ...Opt) Widget {
 	if child == nil {
-		panic("flux.TabPage: child 不能为空")
+		panic(DiagnosticText(DiagnosticTabChildNil))
 	}
 	content := child.Create()
 	if content == nil {
-		panic("flux.TabPage: child.Create() 不能返回 nil")
+		panic(DiagnosticText(DiagnosticTabChildCreateNil))
 	}
 	n := widget.NewNode("TabPage")
 	n.Props.Set("Text", title)
 	applyOpts(n, opts)
 	if n.Key == "" {
-		panic("flux.TabPage: 必须设置非空 Key")
+		panic(DiagnosticText(DiagnosticTabKey))
 	}
 	n.Add(content)
 	return widgetNode{n}
@@ -151,7 +151,7 @@ func flexNode(t string, child Widget, flex []int) Widget {
 		f = flex[0]
 	}
 	if f <= 0 {
-		panic("flux: flex 因子必须 > 0")
+		panic(DiagnosticText(DiagnosticFlexPositive))
 	}
 	n.Props.Set("Flex", f)
 	n.Add(child.Create())
@@ -168,7 +168,7 @@ func containerArgs(t string, args []any) Widget {
 		case Opt:
 			v.apply(n)
 		default:
-			panic("flux." + t + ": 参数必须是 Widget 或 Opt")
+			panic(DiagnosticText(DiagnosticContainerArguments, t))
 		}
 	}
 	return widgetNode{n}
@@ -200,7 +200,7 @@ func setTextProp(n *Node, text any) {
 		n.Props.Set("Text", v.renderText())
 		n.Props.Set(bindKey, v) // 登记绑定依赖（collectBindings 订阅）
 	default:
-		panic("flux: 文本参数必须是 string 或 Bind(...)")
+		panic(DiagnosticText(DiagnosticTextArgument))
 	}
 }
 

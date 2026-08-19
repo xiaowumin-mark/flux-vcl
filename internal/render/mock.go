@@ -33,6 +33,7 @@ type Mock struct {
 	pages      map[Handle]*mockPages      // 分页容器的页面顺序、受控索引与回调
 	paints     map[Handle]*mockPaint      // PaintBox 命令与 invalidate 次数（PaintController 测试面）
 	grids      map[Handle]*mockGrid       // StringGrid 的有界数据、选择与编辑回调
+	a11y       map[Handle]*mockA11y       // 可访问名称、焦点顺序与默认/取消操作
 }
 
 // mockScroll 记录 ListView 滚动配置/位置（Phase 6）。与真实滚动条不同，mock 不
@@ -106,6 +107,7 @@ func (m *Mock) Destroy(h Handle) {
 	delete(m.pages, h)
 	delete(m.paints, h)
 	delete(m.grids, h)
+	delete(m.a11y, h)
 	delete(m.radioGroup, h)
 	delete(m.handlers, h)
 	delete(m.scrolls, h)

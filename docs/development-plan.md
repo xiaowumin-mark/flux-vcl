@@ -14,28 +14,41 @@
 ### D1. 三棵树模型（reconciliation 的根基）
 - **Widget 树**：每次 render 重建的不可变 Go 结构体（纯数据，不持有原生指针）。
 - **Element 树**：持久 identity 节点 `{controlType, key, parentPath, nativePtr, prevConfig}`。
-- **原生控件树**：绑定层真实控件（默认 LCL：`*lcl.TButton` 等；VCL 后端：`*vcl.TButton`）。
+- **原生控件树**：绑定层真实控件（当前默认 LCL：`*lcl.TButton` 等；未来 VCL B 计划才会有
+  对应的 `*vcl.TButton` 适配）。
 - 更新规则 = Flutter `canUpdate`：`旧控件类型==新控件类型 && 旧key==新key` → **原地 patch**；否则**只重建该节点**（绝不上溯重建祖先容器）。
 
 ### D2. 属性级 patch + 批量提交
 - diff 只产生 mutation op 集（Create/Update/Insert/Remove/Delete），按"先删后建、先上后下"应用。
 - 逐属性比较（Caption/Left/Top/Width/Height/Visible/Enabled/Font/Color/TabStop…），只对变化者调 `Set*`；未变控件直接跳过。
-- 应用时用 `BeginUpdate/EndUpdate` + 窗体 `DoubleBuffered` + `WM_SETREDRAW`（TScrollBox）包裹；新控件在首个 handle 访问前设完全部属性。
-- 逃逸口：直接单向属性绑定（类 Dioxus Signal），高频热路径绕过整树 diff。
+- 当前应用路径按 mutation 顺序提交，并在现有 `TScrollBox` 等后端对象上使用
+  `DoubleBuffered`；尚未实现覆盖所有控件的 `BeginUpdate/EndUpdate` 或 `WM_SETREDRAW`
+  批量包裹。若未来引入，必须独立立项并验证事件、焦点和重绘语义；新控件仍在首次
+  handle 访问前设完全部属性。
+- 高频逃逸口目前仅为 `App.SetBounds(key, Rect)`：它按稳定 Key 直接提交几何，绕过整树
+  diff；没有通用的“直接属性绑定”或 Dioxus Signal API。
 
 ### D3. 列表身份：稳定 key
 - key 必须来自模型（ID 或创建时生成一次），**绝不用数组 index、绝不每次 render 随机**。index key 会让 VCL 焦点/caret/IME 迁到错误行。
 
 ### D4. 线程纪律：单一 UI 线程 + marshalling
-- 所有控件访问只在主线程；框架 init 照抄绑定库（energye/lcl 与 govcl 相同）的 `runtime.LockOSThread()` 钉住 UI goroutine；**每个碰原生控件的入口做 debug 断言** `rtl.CurrentThreadId()==rtl.MainThreadId()`（违反即 panic）。
-- 自建调度器：在 `ThreadSync` 之上建单一主线程消费队列，提供 `runOnUI(fn)`（异步）/`runOnUISync(fn)`（阻塞），**批量/合并更新**（禁止逐条目 ThreadSync，阻塞+全局互斥会停摆）。
-- State 变更从任意 goroutine 触发时：离线程更新纯 Go 模型，落地控件的 commit 一律经 `runOnUI`。
-- **销毁必须入队延后**，绝不在事件回调内同步 Free（LCLRefCount>0 崩溃）；`LCLRefCount>0` 警告在 debug 构建中视为断言失败。
-- **事件分发错误边界**：govcl 事件回调无 recover，主线程 handler 内 panic 会崩进程 → 分发层统一 `recover()` 路由到错误事件。
+- 所有默认 LCL 后端的控件访问都在 LCL 主线程执行。`lcl.Init` 负责其运行时的线程初始化；
+  FluxVCL 不额外实现全局 `LockOSThread` 包装或为每个 Renderer 方法设置 debug 断言。
+  直接 `Mount`/`Render` 仍由调用方在 UI 线程调用。
+- `Renderer.RunOnUI` 在主线程内联执行，其他 goroutine 则调用 `lcl.RunOnMainThreadSync` 并
+  阻塞等待；`App.pending` 合并同一周期的 State 失效，`renderMu` 串行化 reconcile。
+  当前没有独立的异步主线程队列或公开 `runOnUISync` API。
+- State 变更可来自任意 goroutine：先更新纯 Go State，再经 `RunOnUI` 提交 re-render。
+- 默认 LCL Renderer 把物理控件释放推迟到成功 reconcile 后的 `DrainDestroy`，避免在
+  事件/生命周期回调栈内同步 Free；当前没有公开的 `LCLRefCount` debug 断言。
+- **事件分发错误边界**：主线程 handler 的 panic 由分发层统一 `recover()` 记录；当前没有
+  公开错误事件路由，不能把该草图表述为已交付 API。
 
 ### D5. 布局：自定义 Measure/Layout，禁用原生 Align
 - 协议：constraints 下传 / size 上抛 / 父定 offset；结果 `constraints.constrain()` 钳制。
-- 框架管理的控件 `Align=alNone`，几何只走 `SetBounds`；`Native()` 逃逸口设置的 Align 在布局前还原。
+- 框架创建的控件设 `Align=alNone`，几何只走 `SetBounds`。默认 LCL 后端在每次
+  `Native()` 回调返回后恢复 `Align=alNone`，并有真实 LCL probe 覆盖；其他原生布局
+  属性仍不是公开支持路径。
 - 叶子尺寸用 **intrinsic-size 函数**（GDI 文本测量 + 主题 API + 缓存脏标记），不因测量而实现控件。
 - 全坐标用 DIP，`MulDiv(dip, dpi, 96)` 转像素；DPI 感知 PerMonitorV2。
 
@@ -66,7 +79,9 @@
 >
 > **同日追加：0.5/0.6 完成。** CI 工作流 + `scripts/fetch-libenergy.ps1`（designer commit
 > `5c4ec54` 锁定 lcl v1.0.3 对应 DLL，`-Force` 实测下载 13MB 成功）；`internal/render`
-> 无头测试驱动（Renderer 接口 + Mock + 无显示测试，`go test ./...` 全绿）。
+> 无头测试驱动（Renderer 窄接口 + Mock + 无显示测试）。完整仓库的 `go test ./...`
+> 是 Windows 默认后端验证；非 Windows 仅支持单独测试根包与 `internal/widget`、
+> `internal/diff`、`internal/render` 等不依赖 Win32 的核心包。
 
 | # | 子任务 | 要点 / 参考 | 状态 |
 |---|---|---|---|
@@ -75,7 +90,7 @@
 | 0.3 | **构建脚手架** | `GOOS=windows` `CGO_ENABLED=0` `-buildmode=exe` `-ldflags "-H=windowsgui"`；`examples/basic` 用 go-winres 生成 `rsrc_windows_amd64.syso`（PerMonitorV2 manifest + 图标 + 版本信息，命名 `rsrc_windows_<arch>`）；封装 `scripts/build.ps1`（资源生成→构建→DLL 复制）与 `scripts/smoke.ps1`（无头冒烟）；Go 版本策略 `go 1.22`（覆盖 1.22–1.27 工具链）；CI 复用两个脚本（0.5）。 | ✅ 完成 |
 | 0.4 | **仓库与模块** | 模块路径 `github.com/xiaowumin-mark/flux-vcl`（git 远程地址）；目录骨架（根包 `flux`、`internal/{widget,diff,render}`、`examples/basic`、`scripts`、`assets`）；`go.mod` 锁 `lcl v1.0.3`；README/许可（MIT）。 | ✅ 完成 |
 | 0.5 | **CI 骨架** | GitHub Actions（`.github/workflows/ci.yml`）：windows-latest 上 `go test ./...` + `go vet`；`scripts/fetch-libenergy.ps1` 从 designer 内嵌 zip 取 DLL（锁定 commit `5c4ec54`）；复用 `build.ps1` + `smoke.ps1` 冒烟；截图 artifact（用 PowerShell `CopyFromScreen`，避免引入 `kbinani/screenshot` 依赖污染根 go.mod；无头会话可能黑屏，失败不中断）。 | ✅ 完成 |
-| 0.6 | **无头测试驱动雏形** | 参照 Fyne `test` 驱动：`internal/render` 定义 Renderer 窄接口（D6）+ Dioxus 风格 Op 集 + `Mock` renderer；测试不接触 energye/lcl/DLL，任意平台 `go test` 可跑。Phase 1.4 diff 引擎直接在此框架加测试。 | ✅ 完成 |
+| 0.6 | **无头测试驱动雏形** | 参照 Fyne `test` 驱动：`internal/render` 定义 Renderer 窄接口（D6）+ Dioxus 风格 Op 集 + `Mock` renderer；核心包测试不接触 energye/lcl/DLL，可在非 Windows 单独运行。完整仓库的 `go test ./...` 仍是 Windows 验证命令。Phase 1.4 diff 引擎直接在此框架加测试。 | ✅ 完成 |
 
 **交付物**：选型决议文档、可运行的 Hello World、CI 绿。
 **验收**：`go build` 单命令产出 exe，双击出窗口、点按钮有反应；CI 冒烟通过。
@@ -113,7 +128,7 @@
 | 1.3 | Renderer 接口 + Mutation op 集 | Dioxus 风格 op：`AppendChild/SetProperty/SetText/Create/Destroy/SetEvent`（可 mock 测试）；适配层 `internal/native` 实现 energye/lcl 映射。 | ✅ 完成 |
 | 1.4 | **diff/reconciliation 引擎** | 全项目最高优先级代码。build 新树 → 按 D1 匹配 → 属性级 patch（D2）→ 批量提交。性能：diff 循环复用 buffer。 | ✅ 完成 |
 | 1.5 | 基础控件集 | `Window/Column/Row/Text/Button/Input`；对应原生控件 `TEngForm/TLabel/TButton/TEdit`（默认 LCL；占位布局，Phase 3 精修）。 | ✅ 完成 |
-| 1.6 | 原生逃逸口 | `Native(func(btn *lcl.TButton))`（默认 LCL 后端）、`Ref`（design.md §11）。约束：逃逸口改动 Align 须在布局前还原（D5）。 | ✅ 完成 |
+| 1.6 | 原生逃逸口 | `Native(func(btn *lcl.TButton))`（默认 LCL 后端）、`Ref`（design.md §11）。约束：回调返回后恢复 `Align=alNone`，使用者不得以原生 Align 接管布局（D5）。 | ✅ 完成 |
 | 1.7 | **三不变量测试** | D7 三条测试护栏上线（a/b/c）；flux 层端到端（Mock 断言零重建）。 | ✅ 完成 |
 
 **交付物**：`examples/basic`（窗口+文本+按钮+输入框+点击）。
@@ -226,7 +241,7 @@
 > - **TScrollBox 配置**：`NewScrollBox(form)` + `SetAutoScroll(true)`（LCL 按子包围盒
 >   自动算滚动范围、滚动条自动出现）+ `SetDoubleBuffered(true)`（防闪烁）。无
 >   OnScrollViewChanged 事件（滚动条位置回写需轮询/钩 WM_VSCROLL，MVP 不做）。
->   `WM_SETREDRAW` 批量防闪烁留 Phase 5 虚拟化。
+>   覆盖所有控件的 `WM_SETREDRAW` 批量防闪烁不在当前实现范围，后续若需要须独立验证。
 > - **NodeDiag 的 Frame 时机**：`record` 在布局递归内执行，早于父容器 `setPos` 平移子树，
 >   故 `NodeDiag.Frame` 留空、由 `finalize(root)` 在整棵布局完成后后序回填（与 record
 >   同序），与 diff 应用的一致 Bounds。
@@ -244,9 +259,9 @@
 | 3.1 | 协议 | `BoxConstraints`/`Size`；`Measure`/`Layout` 两遍（design.md §6.2）。 | ✅ 完成（单遍） |
 | 3.2 | **intrinsic-size 函数** | `Size Measure(font, text, dpi, constraints)`；GDI 文本测量（`TCanvas.TextWidth/TextHeight/TextExtent`）；主题 API（`BCM_GETIDEALSIZE`/`GetThemePartSize`）一次实现测量+缓存；缓存失效（文本/字体/DPI 变化）。 | ✅ 完成（GDI 测量+缓存；主题 API 待 3.5） |
 | 3.3 | Flex 算法 | RenderFlex 精确实现：非 flex 主轴 unbounded、freeSpace/flex 分配、Expanded=tight/Flexible=loose、主轴对齐分布、只增不缩+溢出诊断。 | ✅ 完成 |
-| 3.4 | 定位应用 | `SetBounds` 写 frame；框架控件 `Align=alNone`（D5）；逃逸口 Align 还原。 | ✅ 完成（Bounds 写 Props，diff 应用；逃逸口 Align 还原待 3.5 校量） |
+| 3.4 | 定位应用 | `SetBounds` 写 frame；框架控件 `Align=alNone`（D5）；Native 回调返回后恢复 Align。 | ✅ 完成（Bounds 写 Props，diff 应用；真实 LCL probe 覆盖 Align 恢复） |
 | 3.5 | **DPI** | PerMonitorV2 manifest（已就位）；DIP→像素换算（`render.DIPToPX/PXToDIP`）；`WM_DPICHANGED` 钩子（先 `InheritedWndProc` 放行再清缓存 + 全量 re-layout）；字体策略：不调 `ScaleForPPI`、不改 `Application.Scaled`（测量归一化自洽）。 | ✅ 完成 |
-| 3.6 | 滚动容器 | 滚动轴 unbounded 约束；TScrollBox 原生滚动 + DoubleBuffered 防闪烁（`WM_SETREDRAW` 留 Phase 5 虚拟化）。 | ✅ 完成 |
+| 3.6 | 滚动容器 | 滚动轴 unbounded 约束；TScrollBox 原生滚动 + DoubleBuffered 防闪烁。全局 `WM_SETREDRAW` 批量策略未实现。 | ✅ 完成 |
 | 3.7 | 布局调试 | inspector 预留：节点 constraints/size/frame/flex 因子、溢出提示。 | ✅ 完成（`App.Inspect()` 全节点 + `App.LastLayoutDiags` 溢出） |
 
 **交付物**：表单布局、可伸缩面板、滚动列表、高分屏 demo。
@@ -310,7 +325,8 @@
 | 4.4 | **IME/中文输入** | form 级路由 `OnUTF8KeyPress`（计划担忧 TForm-only；实测 energye/lcl v1.0.3 在 **TWinControl** 上可用，控件级路由即可）。 | ✅ 完成（`SetOnUTF8KeyPress` → `Event.Text`） |
 
 **交付物**：完整交互示例（hover/点击/键盘/焦点/中文 IME）—— 已达成（examples/events）。
-**验收**：中文输入正常；事件不阻塞主线程（长时间 handler 自动离屏）；销毁不崩溃。
+**验收**：中文输入正常；事件 handler 必须保持短小，不阻塞 UI 线程；耗时工作通过
+`Async`/`RunOnUI` 显式调度；销毁不崩溃。框架不承诺自动把长 handler 离屏执行。
 **风险**：IME 边界（政府已知 bug）—— 限制范围，普通输入用 TMemo/TEdit 能力内（4.4 实测控件级路由可用，风险降级）。
 
 ---
@@ -350,8 +366,8 @@
 | # | 子任务 | 要点 / 参考 | 状态 |
 |---|---|---|---|
 | 5.1 | **动画** | 主线程 60fps（TTimer/自定义 pump）；Curve（Linear/EaseIn/Out/InOut/ElasticOut）/Tween/AnimationController（0..1 状态机，不持定时器）；高频属性用**直接绑定**（`App.SetBounds` D2 逃逸口）避免整树 re-diff。 | ✅ 完成（`flux/animation.go` + `App.Animate/SetBounds`；`flux/phase5_test.go` Mock FireTimer 驱动 pump） |
-| 5.2 | Theme | `Theme{Font,Color,Radius,Animation}`（design.md §14）；Light/Dark；标题栏沉浸式暗色（`DarkTitleBar` → DWM）；主题切换=全量 re-diff（重入 diff 引擎，只 patch 变化颜色）。 | ✅ 完成（`flux/theme.go`：`ColorValue`/`RGB`/`Theme`/Light/Dark + `Color`/`FontColor`/`DarkTitleBar` Opt + diff 分发；`DarkTitleBar` 已接入 native，FontSize/Radius 为文档字段） |
-| 5.3 | Async | `Async(Load, OnSuccess)`（design.md §15）：后台 goroutine + `RunOnUI` marshalling（D4）。 | ✅ 完成（包级泛型 `Async[T]`；失败走 onError 可选回调） |
+| 5.2 | Theme | `Theme{Primary,Background,Surface,Text,Accent,DarkTitleBar,FontSize,Radius}`（design.md §14）；Light/Dark；标题栏沉浸式暗色（`DarkTitleBar` → DWM）；主题切换=全量 re-diff（只 patch 变化颜色）。 | ✅ 完成（`flux/theme.go`：`ColorValue`/`RGB`/`Theme`/Light/Dark + `Color`/`FontColor`/`DarkTitleBar` Opt + diff 分发；`DarkTitleBar` 已接入 native，FontSize/Radius 为文档字段） |
+| 5.3 | Async | `Async[T](app, load, onSuccess, onError…)`（design.md §15）：后台 goroutine + `RunOnUI` marshalling（D4）。 | ✅ 完成（包级泛型 `Async[T]`；失败走 onError 可选回调） |
 | 5.4 | Component | `Build() Widget`（design.md §4.1）；组件身份（**不在 Build 内定义嵌套类型/生成 key** —— React 教训，Key 由外部经 opts 传入）。 | ✅ 完成（`flux.Component` 透明分组 + diff/layout "Component" 分支） |
 
 **交付物**：`examples/phase5` —— 点击按钮：计数（冒烟目标）+ ElasticOut 方块滑动（App.SetBounds 逐帧直接落地）+ 500ms 异步加载（RunOnUI 回 UI 线程）；点击"主题" chip 切换 Light/Dark（State → 全量 re-diff）。
@@ -434,9 +450,10 @@
 
 - 时间或验证成本不足时，允许在文档中明确裁掉 **ProgressBar / RadioButton**；不得裁掉
   `Memo / CheckBox / ComboBox` 后仍把本批标记为完成。
-- `TabControl/PageControl`（真实容器与每页子树语义）、`Canvas/PaintBox`（Painter/自绘机制）、
-  `StringGrid`（native `TStringGrid`，单元格编辑/数据模型）、`Slider`（范围/拖拽交互模型）留到 P7 的插件、
-  组件或 7GUIs 专项设计阶段，不能借本批次顺带实现。
+- 本批次不处理 `TabControl/PageControl`（真实容器与每页子树语义）、`StringGrid`（native
+  `TStringGrid`，单元格编辑/数据模型）或 `Slider`（范围/拖拽交互模型）；这些能力留到
+  P7 的插件、组件或 7GUIs 专项设计阶段。`PaintBox` 已在后续 P7.5 以命令值自绘模型
+  落地，但不提供通用 `Canvas`/`Painter` API，不能把后续能力倒记为本批次完成。
 
 ### 统一实现与验收矩阵
 
@@ -495,7 +512,7 @@ State 驱动更新，以及窗口关闭后无异常。
 
 ## Phase 7 — 工程化与生态 · 目标：可用、可信、可发布
 
-> **状态：进行中（7.1、7.2、7.2c、7.3a 与 7.5 已完成，更新于 2026-08-19）。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
+> **状态：进行中（7.1、7.2、7.2c、7.3a 与 7.5 的仓库内交付已完成；7.3b/7.6 为本地候选，Hosted CI 通过待证；7.4 发布门仍待外部许可/clean-VM 证据；独立文档站/Pages 尚未配置）。** 入口门槛是“控件扩充批次 1”完成并通过人工验收。P7 的“控件补齐”
 > 指为 Inspector、插件验证与 7GUIs 首发示例补齐必要的内建控件和机制，不等于包装
 > energye/lcl 的全部控件。菜单、对话框、TreeView、图像/媒体、托盘等不属于 v0.1.0
 > 发布阻塞项，后续按真实用例或插件生态增量加入。
@@ -507,10 +524,10 @@ State 驱动更新，以及窗口关闭后无异常。
 | 7.1 | Inspector | Widget/Element/native 树、属性、布局、实际事件和 mutation 查看（design.md §18）；高亮任何原生控件重建。 | ✅ 完成 |
 | 7.2 | 插件系统 | `RegisterWidget` 注册、生命周期、布局与可选 Renderer 能力（design.md §19）；内建控件与第三方 builder 双轨隔离。 | ✅ 完成 |
 | 7.2c | 控件扩充批次 2 | 插件模型定案后实现 `PageControl/TabPage` 结构性容器，验证每页子树与 native parent 模型。 | ✅ 完成 |
-| 7.3 | 测试与 CI 强化 | 分 7.3a 基线门和 7.3b 发布门；D7 覆盖全量已发布控件、Windows 冒烟/截图、性能基准。 | 🟨 7.3a 完成；7.3b 待 7.6 |
+| 7.3 | 测试与 CI 强化 | 分 7.3a 基线门和 7.3b 发布门；D7 覆盖全量已发布控件、Windows 冒烟/截图、性能基准。 | 🟨 7.3a 完成；7.3b 本地矩阵完成，Hosted 通过待证 |
 | 7.4 | 打包 | 安装器、DPI manifest/版本资源、DLL 版本校验、单 EXE 方案评估。 | 🟨 实现完成；clean VM 首跑与 DLL 完整许可清单待门禁 |
-| 7.5 | 产品化与控件扩充批次 3 | 中英双语文档、全量示例、7GUIs；按示例机制逐项实现 `Slider`、`StringGrid`（native `TStringGrid`）、`Canvas/PaintBox`。 | ✅ 完成 |
-| 7.6 | Accessibility / i18n | 高对比度、键盘导航、焦点顺序、可访问名称/UIA 能力清单、国际化资源。 | ⬜ 未开始 |
+| 7.5 | 产品化与控件扩充批次 3 | 仓库内中英双语入口、全量示例、7GUIs；按示例机制逐项实现 `Slider`、`StringGrid`（native `TStringGrid`）、`PaintBox` 命令值自绘。独立文档站/Pages 尚未配置。 | ✅ 仓库入口完成；文档站为外部后续门 |
+| 7.6 | Accessibility / i18n | 高对比度、键盘导航、焦点顺序、可访问名称/UIA 能力清单、国际化资源。 | 🟨 本地候选完成；Hosted CI 通过待证 |
 
 ### 固定执行顺序与门禁
 
@@ -524,7 +541,7 @@ State 驱动更新，以及窗口关闭后无异常。
 6. **7.5 产品化 + 控件批次 3**：按 7GUIs 示例需要逐项实现机制型控件，不单独开启“无限补控件”支线。
 7. **7.6 Accessibility/i18n**：在公开控件/API 稳定后做全量键盘、高对比度、可访问名称和文案资源验收。
 8. **7.3b 发布门**：批次 3 和 7.6 结果纳入全量 D7、Windows 冒烟、截图和性能基准，形成最终发布矩阵。
-9. **v0.1.0 发布**：全新环境安装、README 5 分钟路径、全部 7GUIs、文档站和维护政策同时通过。
+9. **v0.1.0 发布**：全新环境安装、README 5 分钟路径、全部 7GUIs、仓库内中英文入口和维护政策通过；若要提供独立文档站/Pages，需另行配置并在发布检查表记录外部 URL/部署 SHA。
 
 ```text
 控件批次 1（已完成）
@@ -557,16 +574,17 @@ LCL 适配、无头测试、Windows 多页 smoke 和专门 example 全部完成�
 
 批次 3 不是一个先做完再写示例的独立阶段；每个控件与使用它的 7GUIs 任务一起设计、实现和验收，
 避免脱离真实用例提前固化错误 API。建议按机制风险从低到高推进：`Slider` → `StringGrid` →
-`Canvas/PaintBox`。
+`PaintBox`。
 
 | 控件/机制 | 对应 7GUIs | v0.1.0 最小范围 | 明确不做 |
 |---|---|---|---|
 | `Slider` | Timer | `Minimum/Maximum/Value/Step`、受控 Value、`OnValueChange(func(int))`、水平布局与键盘步进。 | 刻度标签、垂直方向、范围双滑块、富绑定。 |
 | `StringGrid`（native `TStringGrid`） | CRUD、Cells | 行列数、字符串 Cells 防御性复制、受控选中行/单元格、选择/编辑回调、表头与基本列宽。 | 通用 ORM、无限数据源、复杂单元格 renderer、Excel 兼容层。 |
-| `Canvas/PaintBox` | Circle Drawer | 自绘 surface、DIP 坐标、paint/invalidate 生命周期、鼠标命中；支持圆形新增/选择/半径更新。 | 通用矢量引擎、GPU 后端、场景图、任意富媒体。 |
+| `PaintBox` | Circle Drawer | 命令值自绘 surface、DIP 坐标、paint/invalidate 生命周期、鼠标命中；支持圆形新增/选择/半径更新。 | 通用 `Canvas`/`Painter` API、GPU 后端、场景图、任意富媒体。 |
 
-`Canvas/PaintBox` 的绘制回调不能直接当作普通可比 Props 参与 D7c；实现前必须先选定稳定命令值、
-Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 记录。`StringGrid` 的二维 slice
+`PaintBox` 的稳定命令值不能直接当作普通可比 Props 参与 D7c；实现采用防御性复制的
+`[]PaintCommand` 和专用 invalidate，而非早期草图中的 `Canvas`/`Painter` 对象 identity。
+`StringGrid` 的二维 slice
 必须深复制，调用方修改源数据不能绕开 diff；`Slider` 沿用显式受控模式，不临时扩张 `Bind`。
 
 ### P7 新控件统一实现矩阵
@@ -593,7 +611,7 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 | Flight Booker | ComboBox、Input、受控 Enabled | 批次 1 已满足控件前置。 |
 | Timer | Animation/Timer、ProgressBar、Slider | Slider 在该任务内实现。 |
 | CRUD | Input、Button、StringGrid、稳定选择 | StringGrid 在该任务内先实现最小行选择/编辑模型。 |
-| Circle Drawer | Canvas/PaintBox、鼠标命中、undo/redo 状态 | 自绘机制在该任务内实现，不用预生成图片替代。 |
+| Circle Drawer | PaintBox、鼠标命中、undo/redo 状态 | 命令值自绘机制在该任务内实现，不用预生成图片替代。 |
 | Cells | StringGrid、公式依赖图、增量更新 | 复用 StringGrid；公式解析/依赖图属于示例业务层，不塞入控件 API。 |
 
 每个示例必须独立可运行、带说明和截图。7GUIs 不套用“每窗口唯一 Button”的通用
@@ -654,8 +672,9 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 
 #### 7.3 测试与 CI 强化
 
-> **7.3a 基线门已完成（2026-08-18）**：`control_contract_test.go` 固定 18 个内建公开
-> 控件的 inventory、mount、纯属性 patch 零重建和无事件同树零 mutation 基线；
+> **7.3a 基线门已完成（2026-08-18）**：在批次 3 扩充前，`control_contract_test.go`
+> 固定当时 18 个内建公开控件的 inventory、mount、纯属性 patch 零重建和无事件同树
+> 零 mutation 基线；P7.5 随后将当前契约扩展到 21 个控件；
 > 可配置 native 控件另测移除重置/事件解绑，具交互语义控件另测 State 回写，
 > `PluginWidget` 的 D7/生命周期由 `plugin_test.go` 独立覆盖。矩阵补出并修复了
 > `ListView` 移除 `ScrollOffset` 后旧原生回调残留及重复解绑的问题。CI 在 Go
@@ -665,9 +684,12 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 > 切换和十万行列表更新基准及首份样本见 [performance-baseline.md](./performance-baseline.md)。
 > 本地逐项复跑 9 个公开 examples 均通过 build/smoke、专属交互断言与退出码 0，
 > 9 张像素有效 PNG 均非空（9,202–46,650 bytes）。
-> **7.3b 仍待 7.6**：批次 3 的 `StringGrid` 更新、`Canvas/PaintBox` invalidate 和全部
-> 7GUIs 已进入测试/Windows smoke；键盘、高对比度、可访问性和 i18n 复测仍须在 7.6
-> 完成后进入最终发布矩阵。
+> **7.3b 本地候选记录（2026-08-19）**：批次 3、全部 7GUIs 与 P7.6 专用目标进入同一
+> Windows build/smoke 矩阵；native probe 加入可访问属性、焦点语义、Radio 方向键和
+> 高对比度颜色回落。专用 smoke 使用 SendInput/GetGUIThreadInfo 验证真实键盘与焦点，
+> 在 provider 稳定后同时验证桌面根与 `FromHandle` 的 Win32 UIA 代理，并覆盖强制高对比度截图和 locale 切换后的
+> HWND/状态保持。该记录只说明本地实现和矩阵配置；在该提交通过完整 Hosted CI 前，
+> 7.3b 不能标记为 CI 门完成，也不替代 P7.4 clean-VM 安装/许可门。
 
 - **7.3a**：批次 1/2 + 既有控件统一跑 mount、patch 不重建、移除重置、事件解绑、同树零 mutation、State 回写。
 - **7.3b**：批次 3、7.6 与全部 7GUIs 纳入同一矩阵；容器额外测 keyed 重排/native parent，绘制额外测 invalidate 不重建，并复跑键盘/高对比度/i18n smoke。
@@ -706,30 +728,57 @@ Painter 对象 identity 或专用 invalidate 逃逸口之一，并在 design.md 
 > **完成记录（2026-08-19）**：公开控件契约扩展到 21 个，`Slider`、native
 > `StringGrid`、命令值 `PaintBox` 与七个 7GUIs 示例按统一矩阵落地；布局矩阵覆盖
 > 显式尺寸、resize、容器客户区、溢出诊断和 144 DPI native 边界。默认后端通过
-> 公开 `native` 包启动，16 个公开示例均不再依赖 `internal/*`。本地最终执行
+> 公开 `native` 包启动；截至 7.5 的 17 个公开示例均不再依赖 `internal/*`。本地最终执行
 > `go test -count=1 ./...`、`go test -race -count=1 ./...`、`go vet ./...`、
-> `git diff --check` 与工作区源码 `gofmt` 检查均通过。16 个示例从同一最终源码逐个
+> `git diff --check` 与工作区源码 `gofmt` 检查均通过。截至 7.5 的 17 个示例从同一最终源码逐个
 > build/smoke，业务交互、退出码 0 与像素有效截图全部通过（PNG 7,801–46,650 bytes）；
 > 七张首发 7GUIs 截图另保存在 `docs/screenshots/` 并由任务映射页逐项链接。
 > 七个 7GUIs 使用真实业务控件断言，无测试专用控件；Temperature Converter 明确
 > 断言受控重渲染后的焦点/caret，Circle Drawer 覆盖新建、选择、半径更新与 undo/redo。
-> 候选 API、迁移/维护政策、
-> CHANGELOG、发布检查单和中英文入口已同步；正式 SemVer 承诺仍从 v0.1.0 标签开始。
+> 候选 API、迁移/维护政策、CHANGELOG、发布检查单和仓库内中英文入口已同步；当前没有
+> GitHub Pages/独立文档站 workflow，正式 SemVer 承诺仍从 v0.1.0 标签开始。
 
-- README、快速开始、API/设计/限制、迁移和维护政策提供中英双语入口；所有公开 API 有可检索示例。
+- README、快速开始、API/设计/限制、迁移和维护政策通过 `README.md` 与 `README.en.md`
+  提供仓库内中英双语入口；所有公开 API 有可检索示例。独立文档站/Pages 未配置，不能
+  作为已交付站点对外宣称；发布前若需要，须完成外部部署、链接和内容同步验收。
 - 完成上表 7GUIs，并为批次 2/3 各提供聚合或专门 example；首发截图来自真实运行窗口。
 - 发布对比页只陈述可验证能力：原生控件、声明式 diff、IME、DPI、虚拟化、多窗口、Inspector/插件。
 - 冻结 v0.1.0 公开 API 清单和 breaking-change 政策，生成 changelog 与 release checklist。
 
 #### 7.6 Accessibility / i18n
 
-- 全控件键盘可达，Tab 顺序、方向键、Space/Enter、Esc 行为有 Windows smoke；焦点指示不可被主题隐藏。
-- 高对比度下不以自定义颜色覆盖系统可读性；Canvas/Grid 补可访问名称或明确记录后端限制。
+> **本地候选记录（2026-08-19）**：根包新增 `AccessibleName`、
+> `AccessibleDescription`、`AccessibleValue`、`TabStop`、`DefaultButton` 和
+> `CancelButton`，声明树为每个原生父级自动生成 TabOrder，keyed 重排只 patch 顺序。
+> RadioButton 的逐项 host 原本破坏原生方向键组行为，默认 Renderer 现按逻辑
+> parent + GroupIndex + TabOrder 补齐循环选择和焦点移动。高对比度开启时标准控件
+> 回落系统默认色、暗色标题栏关闭，PaintBox 使用系统窗口/高亮/文字色，并监听设置、
+> 主题和系统颜色消息。
+>
+> `Catalog`/`Resources`/`Catalog.Bind` 提供防御复制、fallback、格式化和响应式 locale
+> 切换；公开框架诊断使用稳定 Message ID，可选择内建中英文或替换进程级目录，错误
+> 哨兵保持 `errors.Is` identity。新增 `examples/accessibility-i18n` 的嵌入式 en/zh-CN
+> 资源和无头/Windows 验收；既有鼠标专用 Text 操作改为 Button，Circle Drawer 为
+> PaintBox 增加键盘等价命令，Grid/PaintBox 补声明式元数据。
+>
+> 真实 UIA 查询同时确认后端上限：provider 稳定后，桌面根与 `FromHandle` 查询均可由
+> Win32 client proxy 为 Button/Edit/Combo/Slider 提供标准 Pattern，但锁定的
+> energye/lcl v1.0.3 没有投射 LCL Accessible 覆盖值；StringGrid 无 Grid Pattern，
+> PaintBox/TLabel 无子 HWND，虚拟行无 List Pattern。smoke 把两条查询路径固定为
+> 能力契约，文档不把 LCL 元数据误写为自定义 Provider 支持。完整分层和应用
+> 要求见 [accessibility-i18n.md](./accessibility-i18n.md)。该记录只覆盖本地验证；
+> 当前没有完整 Hosted CI 成功证据前，P7.6 仍不是发布门完成。
+
+- 可交互原生控件保留 widgetset 键盘语义；无焦点的 PaintBox 提供等价 Button 命令。
+  专用 Windows smoke 覆盖 8 个代表性控件的完整 Tab 环、方向键、Space/Enter/Esc 和实际焦点；
+  标准焦点指示继续由 OS 绘制，不把像素有效截图误写为焦点对比度认证。
+- 高对比度下不以自定义颜色覆盖系统可读性；PaintBox/Grid 补可访问名称或明确记录后端限制。
 - 示例文案和框架诊断从可替换资源读取；至少验证中英文切换不重建有状态控件、不破坏布局。
 - 形成 UIA/屏幕阅读器能力表：原生继承能力、框架补充能力、energye/lcl 限制分别列出。
 
 **P7 最终交付物**：Inspector、插件 SDK、批次 2/3 控件、7GUIs、全量 D7/CI、Windows 安装包、
-中英双语文档站、Accessibility/i18n 能力表。
+仓库内中英双语文档入口、Accessibility/i18n 能力表。独立中英文档站/Pages 是未配置的
+外部后续门，不计入当前已完成交付物。
 
 **P7 最终验收**：全新 Windows 环境从安装到运行示例不超过 5 分钟；全部公开 examples 与
 7GUIs 可交互运行；CI/race/vet/native smoke 全绿；Inspector 未发现非预期重建；发布 v0.1.0。

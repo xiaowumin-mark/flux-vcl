@@ -2,7 +2,8 @@
 
 本文档以当前根包 `github.com/xiaowumin-mark/flux-vcl` 和默认后端包
 `github.com/xiaowumin-mark/flux-vcl/native` 的 `go doc -all` 输出与源码导出项为
-基线，记录已冻结的候选公开 API，包括产品化与控件扩充批次 3。
+基线，记录已冻结的候选公开 API，包括产品化、控件扩充批次 3 与 P7.6
+Accessibility/i18n。
 
 > **候选状态：** 当前 `Version` 仍为 `0.1.0-dev`，尚未正式发布；本文列出的
 > v0.1.0 公开构造器、Opt、事件签名、默认值和受控语义已冻结为首发基线。
@@ -97,16 +98,20 @@ var DarkTheme Theme
 应用与插件错误哨兵：
 
 ```go
-var ErrAppCloseDuringRender = errors.New("flux: 不能在 render 或生命周期回调中调用 App.Close")
-var ErrPluginInvalid = errors.New("flux: 插件定义无效")
-var ErrPluginReserved = errors.New("flux: 插件名称已保留")
-var ErrPluginAlreadyRegistered = errors.New("flux: 插件已注册")
-var ErrPluginNotRegistered = errors.New("flux: 插件未注册")
-var ErrPluginInUse = errors.New("flux: 插件仍在使用")
-var ErrPluginPanic = errors.New("flux: 插件回调 panic")
-var ErrPluginCycle = errors.New("flux: 插件 builder 循环")
-var ErrAppClosed = errors.New("flux: App 已关闭")
+var ErrAppCloseDuringRender error
+var ErrPluginInvalid error
+var ErrPluginReserved error
+var ErrPluginAlreadyRegistered error
+var ErrPluginNotRegistered error
+var ErrPluginInUse error
+var ErrPluginPanic error
+var ErrPluginCycle error
+var ErrAppClosed error
+var ErrInvalidCatalog error
 ```
+
+这些对象的 identity 稳定，可用于 `errors.Is`；`Error()` 显示文本按当前诊断 Catalog
+解析，因此不能用字符串比较代替 identity 判断。
 
 插件可选能力令牌：
 
@@ -143,6 +148,27 @@ func Bind[T any](s *State[T]) *Binding[T]
 
 `State.Get`/`Set` 线程安全；`Set` 通知已订阅的 App。`Binding` 可用于单向文本
 显示；`string` 和 `int` 还支持 Input/Memo 文本回写，其他类型只作单向显示。
+
+```go
+type Locale string
+type MessageID string
+type Messages map[MessageID]string
+type Resources map[Locale]Messages
+type Catalog struct { /* unexported fields */ }
+type MessageBinding struct { /* unexported fields */ }
+
+func NewCatalog(fallback Locale, resources Resources) (*Catalog, error)
+func MustCatalog(fallback Locale, resources Resources) *Catalog
+func (c *Catalog) Fallback() Locale
+func (c *Catalog) Resources() Resources
+func (c *Catalog) Lookup(locale Locale, id MessageID) (string, bool)
+func (c *Catalog) Format(locale Locale, id MessageID, args ...any) string
+func (c *Catalog) Bind(locale *State[Locale], id MessageID, args ...any) *MessageBinding
+```
+
+Catalog 在构造时校验并深复制 Resources；精确 locale 缺项时回落 fallback，仍缺失
+则 `Format` 返回 Message ID。`MessageBinding` 是只读文本绑定，可传给 Text、Button、
+CheckBox、RadioButton 或 Memo；locale State 变化时原地 patch 文本。
 
 ```go
 type Ref struct { /* unexported fields */ }
@@ -202,10 +228,20 @@ func CrossAxis(a CrossAxisAlignment) Opt
 func DarkTitleBar(dark bool) Opt
 func Color(c ColorValue) Opt
 func FontColor(c ColorValue) Opt
+func AccessibleName(name string) Opt
+func AccessibleDescription(description string) Opt
+func AccessibleValue(value string) Opt
+func TabStop(enabled bool) Opt
+func DefaultButton(enabled bool) Opt
+func CancelButton(enabled bool) Opt
 ```
 
 尺寸与坐标均为 DIP。`Key` 是 reconciliation 的稳定身份，不是树路径；动态
 列表、可变子树、Component 和 `App.SetBounds` 目标应使用来自业务模型的稳定 Key。
+可访问属性由后端可选 capability 接收；默认后端会写入 LCL 对象，但锁定 runtime
+不会把这些值投射到 Windows UIA，因此该 API 不等于当前屏幕阅读器支持。Tab 顺序
+由声明树自动生成，`TabStop` 移除时恢复控件类型默认值。DefaultButton/CancelButton
+仅对 Button 生效，同一窗体应分别最多声明一个。
 
 选择、数值和列表：
 
@@ -270,10 +306,9 @@ func OnCellEdit(fn func(cell GridCell, value string)) Opt
 ```
 
 这些回调是受控值的回写入口；调用方应更新业务 State，并在下一次 render
-继续声明值。是否屏蔽程序化 patch 回调由具体控件契约决定，不在此做统一承诺。
-`Input`/`Memo` 的 LCL 后端在程序化 `Text` patch 时可能派发原生 `OnChange`；
-`Bind` 会把当前文本写回 State，后续 render 因声明值与原生值一致而收敛。
-自定义 `OnChange` 若包含网络请求等业务副作用，应先比较旧 State 并跳过重复值。
+继续声明值。`Input`/`Memo` 的程序化 `Text` patch 会抑制同步原生 `OnChange`，因此
+公开 `OnChange` 只表示用户编辑；`Bind` 也只会把用户编辑后的文本写回 State。其他
+控件的程序化 patch 回调语义由各自章节明确，不应把程序化 patch 当作用户交互处理。
 
 生命周期：
 
@@ -753,7 +788,30 @@ func PaintBox(commands []PaintCommand, opts ...Opt) Widget
 - OnMouseDown 等通用鼠标 Opt 可用于应用层命中测试，坐标仍为 DIP。
 - DPI 变化会请求重绘，命令几何在下一次 paint 时按新 DPI 换算。
 
-## 13. 默认原生后端入口
+## 13. Accessibility / i18n 与诊断
+
+公开框架诊断 ID 是 [diagnostics.go](../diagnostics.go) 中全部
+`Diagnostic... MessageID` 常量。常量名和 `flux.*` 字符串值是候选兼容面；应用应
+用 ID 替换显示资源，不应匹配内建中英文文本。
+
+```go
+func SetDiagnosticCatalog(catalog *Catalog, locale Locale) (restore func())
+func SetDiagnosticLocale(locale Locale) (restore func())
+func DiagnosticText(id MessageID, args ...any) string
+```
+
+- `SetDiagnosticLocale` 选择内建 `zh-CN` 或 `en`；未知 locale 回落内建 `zh-CN`。
+- `SetDiagnosticCatalog` 设置进程级目录；自定义目录缺失的 ID 回落内建目录。
+- 两个 setter 返回幂等 restore；若此后已有更新的全局设置，旧 restore 不覆盖它。
+- `DiagnosticText` 使用 printf 模板格式化；未知 ID 原样返回其字符串值。
+- Catalog 资源和绑定的精确行为见 [Accessibility / i18n 能力表](accessibility-i18n.md)。
+
+默认后端在每个原生父级内按声明树生成连续 TabOrder；透明布局和插件组合不会创建
+额外顺序范围，keyed 重排只 patch TabOrder。RadioButton 的 Left/Up/Right/Down 在
+同 parent + GroupIndex 内循环选择。高对比度时标准控件使用系统默认色、PaintBox
+使用系统窗口/高亮/文字色；`FLUXVCL_FORCE_HIGH_CONTRAST=1` 仅为自动化覆盖。
+
+## 14. 默认原生后端入口
 
 下游应用通过公开的 `github.com/xiaowumin-mark/flux-vcl/native` 包启动默认
 energye/lcl 后端，不应导入 `internal/native`：
@@ -764,6 +822,7 @@ type Renderer = backend.Renderer
 func Init(dllPath string) error
 func NewRenderer() *Renderer
 func Run()
+func (r *Renderer) HighContrast() bool
 ```
 
 - `Init` 在创建任何 Renderer 前加载与 `energye/lcl v1.0.3` 精确匹配的 DLL。
@@ -772,7 +831,7 @@ func Run()
 - `Renderer` 当前是默认后端实现的类型别名。应用层应优先通过根包 `App`、`State`
   与公开 capability 操作 UI，不依赖别名暴露的后端实现细节。
 
-## 14. 兼容范围
+## 15. 兼容范围
 
 本文档只描述根包与公开 `native` 启动包当前导出的声明。`internal/*` 包、具体
 LCL/VCL 对象、未导出的 Props key、Mock 辅助 API 和后端实现细节不属于公开兼容

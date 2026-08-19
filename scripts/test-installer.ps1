@@ -14,7 +14,8 @@ param(
     [Parameter(Mandatory = $true)][string]$InstallerPath,
     [string]$Target = "basic",
     [string]$Version = "0.1.0",
-    [string]$InstallDir = ""
+    [string]$InstallDir = "",
+    [switch]$AllowDevVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -133,8 +134,14 @@ try {
     }
 
     $LASTEXITCODE = 0
-    & (Join-Path $PSScriptRoot "verify-release.ps1") `
-        -ExePath $installedExe -DllPath $installedDll -Target $Target -Version $Version
+    $verifyReleaseArgs = @{
+        ExePath = $installedExe
+        DllPath = $installedDll
+        Target = $Target
+        Version = $Version
+        AllowDevVersion = $AllowDevVersion
+    }
+    & (Join-Path $PSScriptRoot "verify-release.ps1") @verifyReleaseArgs
     if ($LASTEXITCODE -ne 0) {
         throw "安装目录发布资源校验失败，退出码 $LASTEXITCODE"
     }

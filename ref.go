@@ -37,7 +37,8 @@ func BindRef(r *Ref) Opt {
 //	}))
 //
 // D6 隔离：泛型包装把用户闭包桥接为 func(any)，在绑定层断言回 T。
-// 逃逸口改动 Align 等布局属性时，须在布局前还原（D5，Phase 3 执行）。
+// 默认 LCL 后端会在回调返回后将 Align 恢复为 alNone；其他原生布局属性仍不属于
+// 框架支持路径，不能用来接管声明式布局（D5）。
 func Native[T any](fn func(c T)) Opt {
 	return optFn(func(n *Node) {
 		n.Props.Set("Native", func(obj any) { fn(obj.(T)) })

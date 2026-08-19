@@ -33,6 +33,23 @@ jobs:
       - name: Headless tests
         run: go test -count=1 ./...
 
+  module-graph:
+    name: Module graph (Go 1.25.1)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          # Keep tidy output stable. The compatibility matrix separately proves
+          # the declared Go-version range can compile and test the module.
+          go-version: '1.25.1'
+          cache-dependency-path: go.sum
+      - name: Verify modules
+        run: go mod verify
+      - name: Module graph is tidy
+        run: go mod tidy -diff
+
   quality:
     name: Vet, race & benchmark compile
     runs-on: windows-latest
@@ -40,13 +57,46 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 2
+          # Whitespace checks compare the merge-base, which is not guaranteed
+          # to exist in a shallow push or pull-request checkout.
+          fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.27.0-rc.3'
           cache-dependency-path: go.sum
       - name: Whitespace check
-        run: git diff --check HEAD^ HEAD
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          $base = $env:BASE_SHA
+          if ([string]::IsNullOrWhiteSpace($base)) {
+            $base = $env:BEFORE_SHA
+          }
+
+          $hasBase = $false
+          if (-not [string]::IsNullOrWhiteSpace($base)) {
+            & git cat-file -e ($base + "^{commit}") 2>$null
+            $hasBase = $LASTEXITCODE -eq 0
+          }
+
+          if ($hasBase) {
+            $mergeBase = (& git merge-base HEAD $base).Trim()
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($mergeBase)) {
+              throw "无法解析空白检查的 merge-base: HEAD 与 $base"
+            }
+            & git diff --check "$mergeBase...HEAD"
+          } else {
+            # First pushes have no before SHA. Check the complete root commit
+            # instead of silently comparing a missing HEAD^.
+            Write-Host "未找到可比较的 base commit；按 root commit 检查空白。"
+            & git diff-tree --check --root --no-commit-id -r HEAD
+          }
+
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
       - name: Go format
         shell: pwsh
         run: |
@@ -55,8 +105,6 @@ jobs:
             $unformatted | ForEach-Object { Write-Host "::error file=$_::gofmt required" }
             exit 1
           }
-      - name: Module graph is tidy
-        run: go mod tidy -diff
       - name: Go vet
         run: go vet ./...
       - name: Race tests
@@ -81,12 +129,12 @@ jobs:
         shell: pwsh
         run: |
           $env:FVCL_LIBENERGY_DLL = (Resolve-Path .\ref\designer-lib\libenergy-amd64.dll).Path
-          go test -count=1 -v ./internal/native -run '^(TestRadioButtonNative.*|TestBatch3NativeProbe)$'
+          go test -count=1 -v ./internal/native -run '^(TestRadioButtonNative.*|TestComboBoxNativeKeyboardSelection|TestNativeEscapeRestoresAlign|TestBatch3NativeProbe|TestAccessibilityNativeProbe)$'
 
   build-and-smoke:
     name: Smoke ${{ matrix.target }}
     runs-on: windows-latest
-    needs: [compatibility, quality, native-probe]
+    needs: [compatibility, module-graph, quality, native-probe]
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -101,6 +149,7 @@ jobs:
           - inspector
           - plugin-badge
           - page-control
+          - accessibility-i18n
           - 7guis-counter
           - 7guis-temperature-converter
           - 7guis-flight-booker
@@ -130,10 +179,10 @@ jobs:
           name: smoke-${{ matrix.target }}
           path: bin/${{ matrix.target }}-smoke.png
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
   package-installer:
-    name: Clean VM installer smoke
+    name: Clean VM installer validation
     runs-on: windows-latest
     needs: [build-and-smoke]
     timeout-minutes: 20
@@ -151,10 +200,10 @@ jobs:
         run: .\scripts\fetch-libenergy.ps1
       - name: Build NSIS installer
         shell: pwsh
-        run: .\scripts\package.ps1 -Target basic -Version 0.1.0
+        run: .\scripts\package.ps1 -Target basic -Version 0.1.0 -AllowDevVersion
       - name: Install, launch and uninstall
         shell: pwsh
-        run: .\scripts\test-installer.ps1 -InstallerPath .\bin\FluxVCL-0.1.0-basic-setup.exe
+        run: .\scripts\test-installer.ps1 -InstallerPath .\bin\FluxVCL-0.1.0-basic-setup.exe -AllowDevVersion
       - name: Upload installer validation evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -164,4 +213,5 @@ jobs:
             bin/basic-installer-smoke.png
             packaging/dependencies.lock.json
           if-no-files-found: error
-          retention-days: 14
+          # Keep clean-VM release evidence for the longest GitHub-hosted period.
+          retention-days: 90

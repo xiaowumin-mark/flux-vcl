@@ -12,7 +12,7 @@ import (
 
 // ErrAppCloseDuringRender 表示插件或用户生命周期回调在提交尚未结束时调用 App.Close。
 // Close 必须由生命周期回调的调用方在回调返回后执行，避免同步等待当前提交。
-var ErrAppCloseDuringRender = errors.New("flux: 不能在 render 或生命周期回调中调用 App.Close")
+var ErrAppCloseDuringRender = newDiagnosticError(DiagnosticErrAppCloseDuringRender)
 
 // Element 是 App 当前协调树中的已挂载元素。
 // 主要供 Inspector、诊断工具和测试只读查询；应用 UI 状态仍应保存在 State 中。
@@ -42,8 +42,10 @@ type App struct {
 	lastError             error
 	plugins               map[string]*pluginRuntime
 	pluginOrder           []string
-	lastDiags             []LayoutDiag // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
-	lastInspect           []NodeDiag   // 最近一次 render 的全节点布局诊断（Phase 3.7 inspector）
+	bindings              map[stateSubscription]struct{} // 上次成功树仍在使用的 State
+	stagedBindings        map[stateSubscription]struct{} // 当前 reconcile 候选树临时使用的 State
+	lastDiags             []LayoutDiag                   // 最近一次 render 的布局溢出诊断（Phase 3.7 inspector）
+	lastInspect           []NodeDiag                     // 最近一次 render 的全节点布局诊断（Phase 3.7 inspector）
 	inspectorRenderID     uint64
 	inspectorEventSeq     uint64
 	nextInspectorObserver uint64
@@ -56,7 +58,12 @@ type App struct {
 // 注册窗体 resize 回调 → invalidate（pending 合并 + renderMu 串行化，
 // resize 风暴安全）→ Window 布局用最新客户区尺寸。
 func NewApp(r render.Renderer) *App {
-	a := &App{r: r, rc: diff.New(r), plugins: make(map[string]*pluginRuntime)}
+	a := &App{
+		r:        r,
+		rc:       diff.New(r),
+		plugins:  make(map[string]*pluginRuntime),
+		bindings: make(map[stateSubscription]struct{}),
+	}
 	a.rc.SetEventSink(a.recordInspectorEvent)
 	r.OnResize(func(w, h int) { a.invalidate() })
 	return a
@@ -121,6 +128,7 @@ func (a *App) Close() error {
 	}
 	a.closed = true
 	a.pending = false
+	a.detachBindingsLocked()
 	a.mu.Unlock()
 
 	var closeErrs []error
@@ -164,7 +172,7 @@ func (a *App) Close() error {
 		a.pluginOrder = nil
 	})
 	if !ran {
-		closeErrs = append(closeErrs, fmt.Errorf("flux: Renderer 未执行 App.Close 的 UI 线程任务"))
+		closeErrs = append(closeErrs, fmt.Errorf("%s", DiagnosticText(DiagnosticCloseUIThread)))
 	}
 
 	err := errors.Join(closeErrs...)
@@ -291,8 +299,9 @@ func (a *App) render() error {
 }
 
 // renderWidget 对一棵具体 Widget 树做 diff：布局（constraints 下传，写 Bounds）→
-// 收集绑定依赖（订阅 State）→ reconcile。collectBindings 在 diff 前执行，保证
-// State.Set 在 render 后立即能看到订阅。
+// 收集绑定依赖（暂挂 State 订阅）→ reconcile → 成功后提交订阅集合。暂挂保证
+// State.Set 在生命周期回调期间立即可见；若 reconcile panic，defer 会撤销它，
+// 使上一次成功树的订阅保持不变。
 //
 // 重入防护（Phase 4.3 工程发现）：生命周期钩子（OnMount/OnUpdate/OnUnmount）
 // 在 reconcile 内触发，若钩子回调里 Set State → invalidate → RunOnUI（主线程
@@ -350,12 +359,22 @@ func (a *App) renderWidget(w Widget) (renderErr error) {
 		return err
 	}
 	d.finalize(root) // 布局完成后后序回填 Frame（record 时点早于父 setPos 平移）
+	assignTabOrder(root)
 	a.mu.Lock()
 	a.lastDiags = d.list
 	a.lastInspect = d.nodes
 	a.mu.Unlock()
-	a.collectBindings(root)
+	bindings := collectBindings(root)
+	a.stageBindings(bindings)
+	bindingsCommitted := false
+	defer func() {
+		if !bindingsCommitted {
+			a.discardStagedBindings()
+		}
+	}()
 	ops := a.rc.Render(root)
+	a.commitStagedBindings()
+	bindingsCommitted = true
 	// D4 延后销毁落地点：reconcile 移除的控件在此统一物理释放（在 UI 线程、
 	// 事件回调触发 render 时也晚于 reconcile 完成）。
 	if d, ok := a.r.(drainer); ok {
@@ -406,11 +425,25 @@ func (a *App) Inspect() []NodeDiag {
 // 本次 render 读到（render 时 Get 当前值）——不丢最后一次写入。
 // renderMu 串行化 reconcile：并发 Set 时即使两个 flush 都入队，也只有一个
 // render 在进行。经 renderer.RunOnUI marshal 到 UI 线程，任意 goroutine 安全。
-func (a *App) invalidate() {
+func (a *App) invalidate() { a.invalidateFor(nil) }
+
+// invalidateFor requests a render for a State update. A Set may race a tree
+// transition after it has snapshotted its subscribers; checking the committed
+// binding set prevents a State removed from the current tree from scheduling a
+// new render in the usual case.
+func (a *App) invalidateFor(binding stateSubscription) {
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
 		return
+	}
+	if binding != nil {
+		if _, subscribed := a.bindings[binding]; !subscribed {
+			if _, staged := a.stagedBindings[binding]; !staged {
+				a.mu.Unlock()
+				return
+			}
+		}
 	}
 	if a.pending {
 		a.mu.Unlock()
@@ -456,14 +489,82 @@ type drainer interface {
 	DrainDestroy()
 }
 
-// collectBindings 遍历节点树，把登记了 bindKey 的绑定订阅到 App（幂等）。
-func (a *App) collectBindings(n *Node) {
+// collectBindings 遍历节点树，以底层 State 身份归集候选依赖。
+// Bind 在每次构建时都会创建新值，因此不能按 Binding 指针跟踪。
+func collectBindings(n *Node) map[stateSubscription]struct{} {
+	next := make(map[stateSubscription]struct{})
+	collectBindingSubscriptions(n, next)
+	return next
+}
+
+func collectBindingSubscriptions(n *Node, subscriptions map[stateSubscription]struct{}) {
 	if v, ok := n.Props.Get(bindKey); ok {
 		if b, ok := v.(bindable); ok {
-			b.bindTo(a)
+			subscriptions[b.subscription()] = struct{}{}
 		}
 	}
 	for _, c := range n.Children {
-		a.collectBindings(c)
+		collectBindingSubscriptions(c, subscriptions)
 	}
+}
+
+// stageBindings 暂时增加候选树的依赖，但不移除上一次成功树的依赖。这样既让
+// 生命周期回调中的 State.Set 生效，也能在后续 panic 时保留旧订阅集合。
+func (a *App) stageBindings(next map[stateSubscription]struct{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for binding := range next {
+		if _, alreadySubscribed := a.bindings[binding]; !alreadySubscribed {
+			binding.subscribe(a)
+		}
+	}
+	a.stagedBindings = next
+}
+
+// commitStagedBindings 在 reconcile 返回后提交候选依赖集合。State.Set 会在调用
+// invalidateFor 前释放 State 锁，因此更新两侧时持有 a.mu 不会形成锁环，也能
+// 丢弃过期的 State 订阅快照。
+func (a *App) commitStagedBindings() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	next := a.stagedBindings
+	if next == nil {
+		return
+	}
+	for binding := range a.bindings {
+		if _, stillSubscribed := next[binding]; !stillSubscribed {
+			binding.unsubscribe(a)
+		}
+	}
+	a.bindings = next
+	a.stagedBindings = nil
+}
+
+// discardStagedBindings 在 reconcile panic 时撤销候选树新增的依赖；已提交的
+// 依赖从未移除，因此仍对应上一次成功树。
+func (a *App) discardStagedBindings() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for binding := range a.stagedBindings {
+		if _, committed := a.bindings[binding]; !committed {
+			binding.unsubscribe(a)
+		}
+	}
+	a.stagedBindings = nil
+}
+
+// detachBindingsLocked clears the App-owned half of State subscriptions. The
+// caller must hold a.mu; State.Set releases its State lock before acquiring
+// a.mu, so unsubscribing while holding a.mu keeps the transition atomic.
+func (a *App) detachBindingsLocked() {
+	for binding := range a.bindings {
+		binding.unsubscribe(a)
+	}
+	for binding := range a.stagedBindings {
+		if _, committed := a.bindings[binding]; !committed {
+			binding.unsubscribe(a)
+		}
+	}
+	a.bindings = nil
+	a.stagedBindings = nil
 }

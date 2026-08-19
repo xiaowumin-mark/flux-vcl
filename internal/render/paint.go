@@ -2,6 +2,49 @@ package render
 
 import "fmt"
 
+// PaintValidationKind identifies one stable category of PaintBox command error.
+// The root package maps these categories to localized framework diagnostics.
+type PaintValidationKind uint8
+
+const (
+	PaintValidationClearColor PaintValidationKind = iota + 1
+	PaintValidationCircleRadius
+	PaintValidationStrokeWidthNegative
+	PaintValidationCirclePaint
+	PaintValidationStrokeWidthRequired
+	PaintValidationStrokeColorRequired
+	PaintValidationUnknownKind
+)
+
+// PaintValidationError carries the invalid command position and structured
+// details so callers do not need to localize an internal Error string.
+type PaintValidationError struct {
+	Kind    PaintValidationKind
+	Index   int
+	Command PaintCommandKind
+}
+
+func (e *PaintValidationError) Error() string {
+	switch e.Kind {
+	case PaintValidationClearColor:
+		return fmt.Sprintf("command %d: clear color must be non-zero", e.Index)
+	case PaintValidationCircleRadius:
+		return fmt.Sprintf("command %d: circle radius must be > 0", e.Index)
+	case PaintValidationStrokeWidthNegative:
+		return fmt.Sprintf("command %d: circle stroke width must be >= 0", e.Index)
+	case PaintValidationCirclePaint:
+		return fmt.Sprintf("command %d: circle needs a fill or stroke color", e.Index)
+	case PaintValidationStrokeWidthRequired:
+		return fmt.Sprintf("command %d: circle stroke width must be > 0 when stroke is set", e.Index)
+	case PaintValidationStrokeColorRequired:
+		return fmt.Sprintf("command %d: circle stroke width requires a stroke color", e.Index)
+	case PaintValidationUnknownKind:
+		return fmt.Sprintf("command %d: unknown paint command kind %d", e.Index, e.Command)
+	default:
+		return "invalid paint command"
+	}
+}
+
 // PaintCommandKind 是 PaintBox 的不可变绘制命令种类。命令使用值语义，因此
 // Widget Props 可通过 DeepEqual 稳定比较。
 type PaintCommandKind uint8
@@ -43,26 +86,26 @@ func ValidatePaintCommands(commands []PaintCommand) error {
 		switch command.Kind {
 		case PaintClear:
 			if command.Color == 0 {
-				return fmt.Errorf("command %d: clear color must be non-zero", i)
+				return &PaintValidationError{Kind: PaintValidationClearColor, Index: i}
 			}
 		case PaintCircle:
 			if command.Radius <= 0 {
-				return fmt.Errorf("command %d: circle radius must be > 0", i)
+				return &PaintValidationError{Kind: PaintValidationCircleRadius, Index: i}
 			}
 			if command.StrokeWidth < 0 {
-				return fmt.Errorf("command %d: circle stroke width must be >= 0", i)
+				return &PaintValidationError{Kind: PaintValidationStrokeWidthNegative, Index: i}
 			}
 			if command.FillColor == 0 && command.StrokeColor == 0 {
-				return fmt.Errorf("command %d: circle needs a fill or stroke color", i)
+				return &PaintValidationError{Kind: PaintValidationCirclePaint, Index: i}
 			}
 			if command.StrokeColor != 0 && command.StrokeWidth <= 0 {
-				return fmt.Errorf("command %d: circle stroke width must be > 0 when stroke is set", i)
+				return &PaintValidationError{Kind: PaintValidationStrokeWidthRequired, Index: i}
 			}
 			if command.StrokeColor == 0 && command.StrokeWidth != 0 {
-				return fmt.Errorf("command %d: circle stroke width requires a stroke color", i)
+				return &PaintValidationError{Kind: PaintValidationStrokeColorRequired, Index: i}
 			}
 		default:
-			return fmt.Errorf("command %d: unknown paint command kind %d", i, command.Kind)
+			return &PaintValidationError{Kind: PaintValidationUnknownKind, Index: i, Command: command.Kind}
 		}
 	}
 	return nil

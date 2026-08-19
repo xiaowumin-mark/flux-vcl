@@ -490,6 +490,18 @@ func (rc *Reconciler) applyRemoved(e *Element, key string, next *widget.Props) b
 	case "Enabled":
 		rc.applyProp(e, key, true) // 挂载默认：启用
 		return true
+	case "AccessibleName", "AccessibleDescription", "AccessibleValue":
+		rc.applyProp(e, key, "")
+		return true
+	case "TabStop":
+		if accessibility, ok := rc.r.(render.AccessibilityController); ok {
+			accessibility.ResetTabStop(e.Handle)
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: "default"})
+		}
+		return true
+	case "DefaultButton", "CancelButton":
+		rc.applyProp(e, key, false)
+		return true
 	case "Color":
 		rc.applyProp(e, key, render.Color(0)) // 挂载默认：无背景
 		return true
@@ -655,6 +667,55 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 		if b, ok := v.(bool); ok {
 			rc.r.SetEnabled(e.Handle, b)
 			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Enabled", Value: b})
+		}
+	case "AccessibleName":
+		if value, ok := v.(string); ok {
+			if accessibility, ok := rc.r.(render.AccessibilityController); ok {
+				accessibility.SetAccessibleName(e.Handle, value)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: value})
+			}
+		}
+	case "AccessibleDescription":
+		if value, ok := v.(string); ok {
+			if accessibility, ok := rc.r.(render.AccessibilityController); ok {
+				accessibility.SetAccessibleDescription(e.Handle, value)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: value})
+			}
+		}
+	case "AccessibleValue":
+		if value, ok := v.(string); ok {
+			if accessibility, ok := rc.r.(render.AccessibilityController); ok {
+				accessibility.SetAccessibleValue(e.Handle, value)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: value})
+			}
+		}
+	case "TabStop":
+		if enabled, ok := v.(bool); ok {
+			if accessibility, ok := rc.r.(render.AccessibilityController); ok {
+				accessibility.SetTabStop(e.Handle, enabled)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: enabled})
+			}
+		}
+	case "DefaultButton":
+		if enabled, ok := v.(bool); ok {
+			if accessibility, ok := rc.r.(render.AccessibilityController); ok {
+				accessibility.SetDefaultButton(e.Handle, enabled)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: enabled})
+			}
+		}
+	case "CancelButton":
+		if enabled, ok := v.(bool); ok {
+			if accessibility, ok := rc.r.(render.AccessibilityController); ok {
+				accessibility.SetCancelButton(e.Handle, enabled)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: key, Value: enabled})
+			}
+		}
+	case "_tabOrder":
+		if order, ok := v.(int); ok {
+			if tabOrder, ok := rc.r.(render.TabOrderController); ok {
+				tabOrder.SetTabOrder(e.Handle, order)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "TabOrder", Value: order})
+			}
 		}
 	case "Checked":
 		if b, ok := v.(bool); ok {

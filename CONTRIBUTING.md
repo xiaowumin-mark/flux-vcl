@@ -31,7 +31,7 @@
 
 | 项 | 要求 |
 |---|---|
-| Go | 1.22+（`go.mod` 锁 `go 1.22`，覆盖 1.22–1.27 工具链） |
+| Go | 模块基线为 1.22；当前受支持的验证集合是 CI 矩阵中的 1.22.x–1.26.x 与 1.27.0-rc.3。`1.22+` 不表示所有未来工具链已验证。 |
 | 依赖 | `github.com/energye/lcl v1.0.3`（须与 `libenergy-amd64.dll` 版本严格一致） |
 | 运行时 DLL | `libenergy-amd64.dll`（获取方式见 `docs/phase0-e2-libenergy-mapping.md`；可用环境变量 `FVCL_LIBENERGY_DLL` 指定路径） |
 | 工具 | `go-winres`（生成 `.syso`）、`goimports`（可选） |
@@ -39,8 +39,11 @@
 常用命令：
 
 ```powershell
-# 全量无头测试（不依赖 DLL，任意平台可跑）
+# Windows 上运行完整仓库测试（含默认 LCL/Win32 后端）
 go test ./...
+
+# 其他平台仅验证不依赖原生后端的核心包
+go test . ./internal/widget ./internal/diff ./internal/render
 
 # 构建并冒烟某个示例（公开目标见下表）
 .\scripts\build.ps1 -Target <name>
@@ -60,6 +63,7 @@ go test ./...
 | `inspector` | 三层快照、mutation/event、重建风险 |
 | `plugin-badge` | 公开插件 SDK、布局与生命周期 |
 | `page-control` | PageControl、TabPage、稳定页面 Key |
+| `accessibility-i18n` | 键盘焦点、UIA 能力边界、高对比度与 locale 状态保持 |
 | `7guis-counter` | Counter |
 | `7guis-temperature-converter` | Temperature Converter |
 | `7guis-flight-booker` | Flight Booker |
@@ -81,7 +85,8 @@ issue（报告/提议） → 分支 → 开发（提交规范见 §4） → 本�
 ```
 
 1. **issue**：新特性或 bug 先在 issue 里对齐目标（尤其可能触及架构不变量 D1–D7 时）。
-2. **分支**：从 main 切出 `feat/...`、`fix/...` 等（见 §5）。main 上仅允许 trivial 变更（文档、格式）。
+2. **分支**：从 main 切出 `feat/...`、`fix/...` 等（见 §5）。包括文档和格式在内的所有
+   变更均经 PR 合并，不直接推送 main。
 3. **开发**：遵守 [开发规范](docs/development-guide.md) 与 [命名规范](docs/naming-conventions.md)。
 4. **本地验证**：`gofmt` → `go vet ./...` → `go test ./...`（并发相关加 `-race`）→ 必要时 `build.ps1` + `smoke.ps1`。
 5. **PR**：标题 = 提交信息，正文说明动机 / 影响面 / 测试（见 §6）。
@@ -165,8 +170,9 @@ chore/ci-windows-smoke
 - 关联 issue：`Closes #123`。
 - 触发 CI：`go test ./...` + `go vet ./...` + §2.1 表中全部公开示例的独立构建、冒烟
   与截图检查。
-- CI 还会在 Go 1.22–1.26 与当前 1.27rc3 上跑无头测试，在 1.27rc3 跑 `-race`，并在已校验 DLL
-  到位后执行 native probe；全部 16 个公开示例必须产出
+- CI 还会在当前矩阵列出的 Go 1.22.x–1.26.x 与 1.27.0-rc.3 的 Windows 环境跑完整测试，
+  并在 1.27.0-rc.3 跑 `vet`/`-race`，且在已校验 DLL
+  到位后执行 native probe；全部 17 个公开示例必须产出
   经像素校验的非空截图 artifact。
 - 触及 API 或行为：必须同步更新 `design.md` / `README.md`。
 
@@ -195,7 +201,7 @@ chore/ci-windows-smoke
 | [docs/development-plan.md](docs/development-plan.md) | Phase 0–7 计划、架构基线决策 D1–D7 与验收标准 |
 | [docs/7guis.md](docs/7guis.md) | 七个 7GUIs 任务与公开 API 映射 |
 | [docs/api-v0.1.0.md](docs/api-v0.1.0.md) | v0.1.0 候选 API 冻结清单 |
-| [docs/capability-comparison.md](docs/capability-comparison.md) | 八项可验证能力、仓库证据与边界 |
+| [docs/capability-comparison.md](docs/capability-comparison.md) | 十项可验证能力（含 Accessibility/i18n）、仓库证据与边界 |
 | [docs/migration.md](docs/migration.md) | 预 1.0 迁移规则与批次 3 注意事项 |
 | [docs/maintenance.md](docs/maintenance.md) | 维护范围、兼容和安全响应政策 |
 | [docs/performance-baseline.md](docs/performance-baseline.md) | 发布性能样本、复跑命令与趋势比较规则 |

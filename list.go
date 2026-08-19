@@ -52,8 +52,8 @@ func ScrollOffset(s *State[int]) Opt {
 // State 指针为真）→ D2 跨 render 不产生 mutation、不重复绑定 OnScroll（D7c）。
 type scrollTarget struct{ s *State[int] }
 
-func (st scrollTarget) Current() int           { return st.s.Get() }
-func (st scrollTarget) Apply(pos int)          { st.s.Set(pos) }
-func (st scrollTarget) renderText() string     { return fmt.Sprint(st.s.Get()) }
-func (st scrollTarget) onChange() func(string) { return nil }
-func (st scrollTarget) bindTo(a *App)          { st.s.subscribe(a) }
+func (st scrollTarget) Current() int                    { return st.s.Get() }
+func (st scrollTarget) Apply(pos int)                   { st.s.Set(pos) }
+func (st scrollTarget) renderText() string              { return fmt.Sprint(st.s.Get()) }
+func (st scrollTarget) onChange() func(string)          { return nil }
+func (st scrollTarget) subscription() stateSubscription { return st.s }

@@ -15,7 +15,11 @@ v0.1.0 的公开构造器、Opt、事件签名和 `State` 语义以
 3. Grid 数据必须通过 `Cells` 传入新的二维值；调用方不得在 render 后修改原 slice。
 4. 自绘从旧的原生逃逸迁移到 `PaintBox` 的稳定 `PaintCommand` 列表，命令变化
    会触发 invalidate，不应在 paint 回调里修改 State。
-5. 任何 breaking change 都要同时更新本页、API 清单、CHANGELOG 和 release
+5. `AccessibleName/Description/Value` 会写入当前 LCL 后端，但不构成自定义 UIA
+   Provider 承诺；迁移辅助技术集成前先核对
+   [Accessibility / i18n 能力表](accessibility-i18n.md) 中已验证的 Win32 代理 Pattern
+   和 StringGrid/PaintBox/Text 限制。
+6. 任何 breaking change 都要同时更新本页、API 清单、CHANGELOG 和 release
    checklist，并给出旧 API 到新 API 的代码片段。
 
 ## English
@@ -26,4 +30,6 @@ Use explicit controlled values for Slider and Grid selection,
 pass defensive-copying matrices to StringGrid, and represent PaintBox drawing as
 stable commands. Reopening the candidate surface requires the P7.5 gate and must
 update this page, the API list, `CHANGELOG.md`, and the release checklist. After
-v0.1.0, it requires a new minor release until 1.0.
+v0.1.0, it requires a new minor release until 1.0. Accessible metadata stored by
+the LCL backend is not a custom UIA provider guarantee; verify integrations
+against the [Accessibility / i18n capability table](accessibility-i18n.md).

@@ -5,6 +5,9 @@
 .EXAMPLE
   .\scripts\package.ps1
   .\scripts\package.ps1 -Target page-control -Version 0.1.0
+
+  # 仅供 0.1.0-dev 候选包的内部验证；正式发布不得传此参数。
+  .\scripts\package.ps1 -AllowDevVersion
 #>
 [CmdletBinding()]
 param(
@@ -12,7 +15,8 @@ param(
     [string]$Arch = "amd64",
     [string]$Version = "0.1.0",
     [string]$Output = "bin",
-    [string]$MakensisPath = ""
+    [string]$MakensisPath = "",
+    [switch]$AllowDevVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,8 +107,14 @@ try {
     Copy-Item -LiteralPath $upstreamLicense (Join-Path $stageDir "energye-Apache-2.0.txt") -Force
 
     $LASTEXITCODE = 0
-    & (Join-Path $PSScriptRoot "verify-release.ps1") `
-        -ExePath $stagedExe -DllPath $stagedDll -Target $Target -Version $Version
+    $verifyReleaseArgs = @{
+        ExePath = $stagedExe
+        DllPath = $stagedDll
+        Target = $Target
+        Version = $Version
+        AllowDevVersion = $AllowDevVersion
+    }
+    & (Join-Path $PSScriptRoot "verify-release.ps1") @verifyReleaseArgs
     if ($LASTEXITCODE -ne 0) {
         throw "发布资源校验失败，退出码 $LASTEXITCODE"
     }

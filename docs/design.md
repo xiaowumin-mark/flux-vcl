@@ -1,12 +1,23 @@
 # FluxVCL
 
-## 基于 Go + 原生控件（LCL/VCL 双后端，默认 LCL）的现代声明式 UI 框架设计文档
+## 基于 Go + 原生控件（当前 LCL 后端，VCL 为 B 计划）的现代声明式 UI 框架设计文档
 
 > 版本：0.2（修订稿）
 > 日期：2026-08-08
 > 关联文档：[底座选型调研](./govcl-vs-lcl.md)（默认后端决议）、[调研报告](./research.md)、[开发计划](./development-plan.md)
 >
 > 修订说明：0.1 版定位"基于 VCL"。专项调研（govcl-vs-lcl.md）后确认 Go 生态已无活跃的 Delphi VCL 绑定，改为 **LCL/VCL 双后端、默认 LCL**（energye/lcl）。本版据此统一修正表述，并将设计文档纳入 docs/ 统一管理。
+
+> **实现基线（2026-08-19）：** 本文前半部分保留早期架构草图和远期方案，不能直接
+> 视为当前 v0.1.0 API。当前仓库只有默认 `energye/lcl` 后端；VCL 后端、通用且后端无关的
+> `Renderer`/`Painter` 抽象、`Margin`/`Touch` API、GPU/custom renderer 均未实现或未冻结。
+> 当前自绘入口是 `PaintBox([]PaintCommand, ...)`，事件回调在 UI 线程同步执行，长回调不由
+> 框架自动离屏；耗时工作必须使用 `Async`。D2 当前保证属性级 mutation 和
+> `DoubleBuffered` 等已有后端能力，不承诺所有控件统一包裹 `BeginUpdate/EndUpdate` 或
+> `WM_SETREDRAW`。D5 在创建框架控件时设 `Align=alNone`，并在每次 `Native()` 回调
+> 返回后恢复 `Align=alNone`；这只保护框架几何，不使其他原生布局属性成为支持 API。
+> 冻结 API 和实际边界以 [api-v0.1.0.md](./api-v0.1.0.md)、
+> [capability-comparison.md](./capability-comparison.md) 与源码为准。
 
 ---
 
@@ -29,12 +40,12 @@ FluxVCL 是一个基于 Go 语言的现代声明式 UI 框架。
 * 可扩展渲染
 * 高级用户可访问底层
 
-## 1.2 后端策略（LCL/VCL 双后端）
+## 1.2 后端策略（当前 LCL，VCL B 计划）
 
 | 后端 | 绑定库 | 语义 | 状态 |
 |---|---|---|---|
-| **LCL（默认）** | `energye/lcl`（LibEnergy 运行时） | Lazarus LCL，跨 Windows/macOS/Linux，零 CGO | 活跃维护（2026）；选用决议见 [govcl-vs-lcl.md §6](./govcl-vs-lcl.md) |
-| **VCL（备选 / B 计划）** | `ying32/govcl v1.2.10`（LibVCL 运行时） | Delphi VCL，仅 Windows | 冻结（2020）；仅当产品硬性需要真实 VCL 语义时启用 |
+| **LCL（当前默认）** | `energye/lcl`（LibEnergy 运行时） | 当前仓库完整实现和验证目标为 Windows；绑定库本身的跨平台潜力不等于本项目已提供跨平台完整构建 | 活跃维护（2026）；选用决议见 [govcl-vs-lcl.md §6](./govcl-vs-lcl.md) |
+| **VCL（备选 / B 计划）** | `ying32/govcl v1.2.10`（LibVCL 运行时） | 设计预留，尚未实现或纳入 CI/发布门 | 仅当未来立项并完成真实适配后启用 |
 
 * **绑定隔离**：所有控件访问收敛到窄接口（`Create/SetBounds/SetVisible/TextWidth/HandleAllocated`…），真实绑定库藏在适配层后，切换后端不改动上层声明式代码。
 * **事件映射**：显式注册回调，禁用反射方法名绑定（govcl 反射绑定有 garble 失效与误匹配问题）。
@@ -127,8 +138,7 @@ Window(
 
         |                         |
 
-  Native Renderer          Custom Renderer
-  (LCL / VCL)
+       Native Renderer (LCL)
 
                     |
 
@@ -136,7 +146,8 @@ Window(
 
 ```
 
-> Native Renderer 把 Widget 映射到绑定层的原生控件（默认 LCL 后端）；Custom Renderer 用于 Canvas / 自定义绘制。
+> 当前 Native Renderer 把 Widget 映射到默认 LCL 控件；上图早期的 Custom Renderer 分支是远期
+> 扩展点，不是当前公开后端。自绘由 `PaintBox` 的稳定命令值接口承载。
 
 ---
 
@@ -219,7 +230,10 @@ Window
 
 # 5. 渲染系统
 
-## 5.1 Renderer 抽象
+## 5.1 Renderer 抽象（历史草图，非当前公开 API）
+
+> 下面的 `Mount/Update/Remove` 伪接口是早期设计草图。当前实现使用
+> `internal/render.Renderer` 的窄接口和 `App`/diff 提交路径；根包没有导出此接口。
 
 ```go
 type Renderer interface {
@@ -244,18 +258,21 @@ Widget
 ```text
 Button
   ↓
-TButton（LCL / VCL 同用该控件名）
+TButton（当前由 LCL 提供；未来 VCL 适配可映射到对应控件）
 ```
 
-## 5.3 Custom Renderer
+默认后端的具体 `native.Renderer` 类型可以从 `native` 包导出，但它是 LCL 实现而非
+跨后端通用的 Renderer 抽象；应用代码通常只依赖 `flux.NewApp` 所需的窄接口。
+
+## 5.3 Custom Renderer（远期设计，当前未实现）
 
 用于：
 
 * Canvas
 * 自定义控件
-* GPU 绘制
+* GPU 绘制（远期，不属于 v0.1.0）
 
-接口：
+以下接口仅为远期伪代码，不是可编译的公开 API：
 
 ```go
 type Painter interface {
@@ -299,8 +316,8 @@ Column(
 
 ## 6.2 Layout 算法
 
-`Text` 与 `Memo` 的 intrinsic 测量会先规范化 CRLF/CR，再按显式换行逐行调用
-`Renderer.TextExtent`：宽度取最长行，高度累加各行行高。该规则只处理显式换行，
+`Text` 与 `Memo` 的 intrinsic 测量会先规范化 CRLF/CR，再按显式换行逐行调用内部
+`render.Renderer.TextExtent`：宽度取最长行，高度累加各行行高。该规则只处理显式换行，
 不推断原生控件的软换行；显式 `Width`/`Height` 仍优先。
 
 支持：
@@ -324,7 +341,10 @@ Assign position
 
 ---
 
-# 7. Modifier 系统
+# 7. Modifier 系统（历史术语映射）
+
+> 当前实现使用根包的 `Opt` 函数（例如 `Width`/`Height`/`Color`），没有公开
+> `Modifier`/`Margin` 类型；`Margin(10)` 示例仅保留作早期设计记录。
 
 用于属性扩展。
 
@@ -413,6 +433,11 @@ builder 里的 `sel.Get()`）或只在事件回调里 **Set** 而未渲染的 St
 只是展示读数）。Phase 5 主题 chip 与 Phase 6 选中标记（点击行标记后须 resize 才见
 反应）都踩过此坑。
 
+每次成功 render 完成后，App 会用当前候选树的绑定集合替换上一棵成功树的集合；
+因此条件分支移除 `Bind` 或 `ScrollOffset` 后，对应 State 会解除订阅，不再触发该 App
+的 re-render。若本次构建、测量或 reconcile 失败，候选新增订阅会撤销并保留上一棵成功树；
+`App.Close()` 则解除剩余的全部 State 订阅。
+
 ---
 
 # 10. Event 系统
@@ -431,7 +456,7 @@ type Event struct {
 
 * Mouse
 * Keyboard
-* Touch
+* Touch（远期输入扩展，当前未提供 `OnTouch` API）
 
 ---
 
@@ -450,7 +475,10 @@ Button(
 )
 ```
 
-> 默认绑定为 `energye/lcl`（`lcl` 包）；若启用 VCL 后端，适配层提供等价的 `*vcl.TButton` 逃逸。
+> 默认绑定为 `energye/lcl`（`lcl` 包）；未来若实现 VCL 后端，适配层再提供等价的
+> `*vcl.TButton` 逃逸。
+> 回调返回后默认 LCL 后端会恢复该控件的 `Align=alNone`，以保持 D5 的框架布局所有权；
+> 不应通过 `Native` 用原生布局接管 `Bounds`。
 
 ## 11.2 Ref
 
@@ -466,14 +494,10 @@ Button(BindRef(&ref))
 ref.Current.SetEnabled(false)
 ```
 
-## 11.3 Custom Widget
+## 11.3 Custom Widget（远期草图；当前请使用 PaintBox）
 
 ```go
-Canvas(
-    func(p Painter) {
-        p.DrawCircle()
-    },
-)
+// 当前 API：PaintBox([]PaintCommand{...})
 ```
 
 ---
@@ -500,43 +524,46 @@ OnMount(func() {
 
 # 13. 动画系统
 
-目标：类似 Flutter Animation。
+动画由纯逻辑控制器和 App 的主线程定时器组成。下面的 `Opacity`/`Duration` 组合是早期
+设计草图，不是当前公开 API；当前实现没有通用 opacity 或 transition 属性动画。
 
-API：
+实际 API：
 
 ```go
-Animate(
-    Opacity(0, 1),
-    Duration(300),
-)
+controller := NewAnimationController(300*time.Millisecond, EaseOut)
+controller.Start(func(v float64) {
+    // 也可在这里调用 App.SetBounds 做高频几何更新。
+    _ = Tween(0, 160, v)
+})
+
+stop := app.Animate(300*time.Millisecond, EaseOut, func(v float64) {
+    app.SetBounds("box", Rect{X: Tween(0, 160, v), Y: 20, W: 80, H: 40})
+})
+defer stop()
 ```
 
-支持：
-
-* Tween
-* Curve
-* Transition
+`AnimationController` 不持有定时器，支持 `Start`/`Step`/`Stop`；`App.Animate` 以约 16ms
+间隔在 UI 线程推进控制器。高频几何更新通过稳定 Key 的 `App.SetBounds` 绕过整树 re-diff；
+其他属性仍需由调用方用 State 和普通声明式 render 管理。
 
 ---
 
 # 14. Theme 系统
 
-统一管理：
+Theme 是可复制的调色板数据，不是运行时对象。当前公开字段为：
 
 ```go
 Theme{
-    Font
-    Color
-    Radius
-    Animation
+    Primary, Background, Surface, Text, Accent ColorValue
+    DarkTitleBar bool
+    FontSize, Radius int
 }
 ```
 
-支持：
-
-* Light
-* Dark
-* Windows Fluent
+仓库提供 `LightTheme` 与 `DarkTheme`；没有已实现的 `Windows Fluent` 主题预设。构建函数
+应把主题值显式传给 `Color`、`FontColor` 和 `DarkTitleBar`，切换主题即替换 Theme 值并
+通过 State 触发普通 diff。`FontSize`/`Radius` 目前是文档字段，尚未接入统一的原生字体
+缩放或圆角绘制。
 
 实现取舍（Phase 5.2）：主题是**数据**不是运行时对象 —— 构建函数按当前 `Theme` 显式传颜色
 （`Color`/`FontColor` Opt）与标题栏暗色（`DarkTitleBar` Opt），切换 = 换一个 Theme 值 → State
@@ -565,14 +592,19 @@ Theme 绘制背景/文字。代价：失去系统 hover/按下原生观感，需
 
 解决：网络、文件、AI。
 
-API：
+实际 API（包级泛型函数；Go 方法不能声明类型参数）：
 
 ```go
-Async(
-    func() { return Load() },
-    OnSuccess(func(data) {}),
+Async(app,
+    func() (Data, error) { return Load() },
+    func(data Data) { result.Set(data) },
+    func(err error) { status.Set(err.Error()) }, // 可选
 )
 ```
+
+`load` 在后台 goroutine 执行，成功或失败回调经 `RunOnUI` 回到 UI 线程；框架不提供
+自动取消、进度汇报或后台回调中的原生控件访问。应用应在回调中更新 State，长任务不要
+直接触碰 LCL 对象。
 
 ---
 
@@ -1029,8 +1061,9 @@ Grid 专属操作走 `render.GridController`；默认 intrinsic 为 `360×220 DI
 native paint 回调由适配层持有，用户没有拿到 LCL Canvas 的逃逸口。移除命令
 回落为空列表并 invalidate；invalidate 只请求重绘，不重建 PaintBox。默认尺寸为
 `360×260 DIP`，可由 Width/Height 和 constraints 覆盖。TPaintBox 是无独立 HWND
-的 graphic control；UIA/屏幕阅读器不能自动读取图元，v0.1.0 由邻接原生文字
-表达选择状态，完整可访问补偿留在 P7.6。`WM_DPICHANGED` 会明确 invalidate，
+的 graphic control；UIA/屏幕阅读器不能自动读取图元。P7.6 增加可访问元数据，
+但默认 LCL 后端仍不能为它创建虚拟 UIA 子树；应用必须提供邻接状态和可聚焦的
+等价 Button 操作。`WM_DPICHANGED` 会明确 invalidate，
 下一次 paint 使用新 DPI 重算命令几何。
 
 ## 21.4 7GUIs 的边界
@@ -1039,6 +1072,32 @@ Timer 只把时间推进放在主线程 timer/动画 pump；CRUD 与 Cells 的�
 公式解析和依赖图属于示例层；Circle Drawer 的圆列表、命中、半径编辑和
 undo/redo 都是不可变业务 State，PaintBox 仅消费命令。这样三个控件验证了真实
 机制，同时没有把示例业务固化为框架 API。
+
+## 21.5 Accessibility / i18n 边界
+
+可访问属性不进入基础 `render.Renderer`，而是通过可选
+`render.AccessibilityController` 下发；第三方 Renderer 不实现时，diff 仍可正常
+提交并保留其自身原生语义。TabOrder 使用独立 `render.TabOrderController`，在布局
+完成、diff 前从声明树生成：透明 Row/Column/Component/ListViewRow 沿用外层计数，
+真实原生父级重新从 0 计数。该隐藏属性参与正常 props diff，所以 keyed 重排只
+调用 SetTabOrder，不改变 Element/native identity。
+
+RadioButton 为隔离 LCL 的同父级全互斥而使用逐项内部 Panel，原生方向键组行为会
+因此丢失。默认 Renderer 在 OnKeyDown 中按逻辑 parent + GroupIndex + TabOrder 查找
+可见、启用的 peer，循环选择并移动焦点，同时与公开 OnKeyDown/OnCheckedChange
+组合，不能因应用解绑键盘回调而移除框架行为。
+
+高对比度是 native 边界策略：Renderer 保存声明的 Color/FontColor/TitleBarDark，
+高对比度开启时标准控件回落 ClDefault、标题栏回落系统样式，PaintBox 命令映射到
+ClWindow/ClHighlight/ClWindowText；退出时恢复保存值。窗体处理
+WM_SETTINGCHANGE、WM_SYSCOLORCHANGE、WM_THEMECHANGED，测试可用
+`FLUXVCL_FORCE_HIGH_CONTRAST` 强制路径。UIA 的详细继承和限制见
+[Accessibility / i18n 能力表](accessibility-i18n.md)。
+
+i18n Catalog 是构造后不可变的两层资源快照，locale lookup 后回落 fallback；
+`Catalog.Bind(State[Locale], MessageID)` 复用现有绑定订阅和 diff，只更新文本属性。
+框架公开校验诊断也以稳定 Message ID 读取进程级可替换 Catalog；错误哨兵仍保留
+稳定 identity 供 `errors.Is`，本地化显示文本不作为程序判定协议。
 
 ---
 
@@ -1055,7 +1114,7 @@ fluxvcl/
 ├── event
 ├── render
 │   ├── renderer
-│   └── native          # 原生控件后端适配（LCL/VCL）
+│   └── native          # 当前 LCL 原生控件后端适配（VCL 为未来 B 计划）
 ├── animation
 ├── theme
 ├── native
@@ -1079,7 +1138,7 @@ fluxvcl/
 
 目标：可以写普通桌面程序。
 
-## Phase 2
+## Phase 2（历史路线图；当前能力以 P7 状态表为准）
 
 增强：
 
@@ -1087,7 +1146,7 @@ fluxvcl/
 * Theme
 * Animation
 * Native API
-* Custom Draw
+* Custom Draw（当前已收敛为 `PaintBox` 命令值 API；通用 Canvas/Painter 仍不做）
 
 ## Phase 3
 
@@ -1103,12 +1162,12 @@ fluxvcl/
 
 # 24. 最终定位
 
-FluxVCL 不追求替代 VCL/LCL。
+FluxVCL 当前不追求替代 LCL；VCL 后端是尚未立项的 B 计划。
 
 而是：
 
 ```text
-原生控件（LCL/VCL）
+原生控件（当前 LCL；未来可选 VCL）
   ↓
 现代 UI 框架层
   ↓
@@ -1122,7 +1181,7 @@ React     → DOM
 Flutter   → Skia
 SwiftUI   → UIKit
 
-FluxVCL   → 原生控件（LCL/VCL）
+FluxVCL   → 原生控件（当前 LCL；VCL 为 B 计划）
 ```
 
 ---
@@ -1133,15 +1192,15 @@ FluxVCL 的核心不是"封装 VCL"。
 
 而是建立：
 
-> 一个现代声明式 UI 编程模型，并利用 LCL/VCL 作为成熟的原生控件后端。
+> 一个现代声明式 UI 编程模型，并利用当前 LCL 作为原生控件后端；VCL 适配保留为未来 B 计划。
 
 设计重点：
 
 1. Widget Tree
 2. State Driven UI
 3. Modern Layout
-4. Renderer 抽象
+4. 窄接口 Renderer（通用后端抽象仍未冻结）
 5. Native Escape Hatch
-6. Custom Drawing
+6. `PaintBox` 命令值自绘
 7. Component 化
 8. 工程化工具链

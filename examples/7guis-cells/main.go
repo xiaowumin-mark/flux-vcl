@@ -417,6 +417,8 @@ func main() {
 				),
 				flux.Expanded(flux.StringGrid(snapshot.Rows, snapshot.Columns,
 					flux.Key("sheet-grid"),
+					flux.AccessibleName("Spreadsheet cells"),
+					flux.AccessibleDescription("Use the arrow keys to select and edit a cell."),
 					flux.Headers(headers),
 					flux.ColumnWidths(widths),
 					flux.Cells(snapshot.Display),

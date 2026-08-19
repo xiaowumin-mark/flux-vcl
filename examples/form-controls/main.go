@@ -1,7 +1,6 @@
 // FluxVCL 常用表单控件演示：examples/form-controls。
 //
-// 本窗口刻意只有一个 Button：它的纯数字 Caption 是 scripts/smoke.ps1 的可观察
-// 成功信号。其余交互全部由表单控件自身或可点击 Text 完成，便于同时人工验证：
+// 计数与进度操作均使用 Button，便于同时用鼠标、Tab、Space 和 Enter 验证：
 //   - Memo：多行编辑、中文 IME 与文本 State 回显；
 //   - CheckBox：显式 Checked 状态；
 //   - ComboBox：Items、SelectedIndex 与选择回写；
@@ -61,7 +60,7 @@ func main() {
 			flux.Column(
 				flux.Text("常用表单控件（批次 1）"),
 
-				// 唯一 Button：0→1 的纯数字 Caption 供 smoke.ps1 验证点击生效。
+				// 0→1 的纯数字 Caption 供 smoke.ps1 验证点击生效。
 				flux.Button(flux.Bind(counter), flux.OnClick(func(_ flux.Event) {
 					counter.Set(counter.Get() + 1)
 				})),
@@ -87,7 +86,8 @@ func main() {
 					}),
 				),
 
-				flux.Text(fmt.Sprintf("ProgressBar：%d / 100（点击文字每次 +10）", value),
+				flux.Button(fmt.Sprintf("ProgressBar：%d / 100（每次 +10）", value),
+					flux.AccessibleName("增加进度值"),
 					flux.OnClick(func(_ flux.Event) {
 						next := value + 10
 						if next > 100 {

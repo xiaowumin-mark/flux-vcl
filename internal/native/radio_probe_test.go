@@ -56,6 +56,47 @@ func TestRadioButtonNativeGroupsAreIndependent(t *testing.T) {
 	assertNativeChecked(t, r, right, true)
 }
 
+func TestRadioButtonNativeArrowNavigation(t *testing.T) {
+	dll := radioProbeDLL(t)
+	if err := Init(dll); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRenderer()
+	parent := r.Create("Window")
+	first := r.Create("RadioButton")
+	second := r.Create("RadioButton")
+	third := r.Create("RadioButton")
+	for order, handle := range []render.Handle{first, second, third} {
+		r.SetTabOrder(handle, order)
+		r.SetTabStop(handle, true)
+		r.SetParent(handle, parent)
+	}
+
+	selected := render.Handle(0)
+	r.OnCheckedChange(first, func(bool) { selected = first })
+	r.OnCheckedChange(second, func(bool) { selected = second })
+	r.OnCheckedChange(third, func(bool) { selected = third })
+	r.SetChecked(first, true)
+
+	if !r.moveRadioSelection(first, 1) {
+		t.Fatal("Right/Down navigation was not handled")
+	}
+	assertNativeChecked(t, r, first, false)
+	assertNativeChecked(t, r, second, true)
+	if selected != second {
+		t.Fatalf("Right/Down callback selected %d, want %d", selected, second)
+	}
+
+	if !r.moveRadioSelection(second, -1) || !r.moveRadioSelection(first, -1) {
+		t.Fatal("Left/Up navigation was not handled")
+	}
+	assertNativeChecked(t, r, third, true)
+	if selected != third {
+		t.Fatalf("wrapped Left/Up callback selected %d, want %d", selected, third)
+	}
+}
+
 func radioProbeDLL(t *testing.T) string {
 	t.Helper()
 	if configured := os.Getenv("FVCL_LIBENERGY_DLL"); configured != "" {
