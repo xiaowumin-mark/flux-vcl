@@ -99,6 +99,14 @@ type FontSpec struct {
 	Strikeout bool
 }
 
+// Validate checks the public CD0 FontSpec contract without changing the
+// receiver. Zero weight is the documented normal-weight sentinel; negative
+// sizes, invalid UTF-8/oversized family names, and unknown weights are errors.
+func (font FontSpec) Validate() error {
+	_, err := canonicalizeFont(font)
+	return err
+}
+
 // TextAlignment controls horizontal or vertical alignment.
 type TextAlignment uint8
 
@@ -630,14 +638,12 @@ func canonicalizeFont(font FontSpec) (FontSpec, error) {
 	if font.Size < 0 {
 		return FontSpec{}, drawError(drawIDFontSize, -1, "size")
 	}
+	font = NormalizeFontSpec(font)
 	if len([]byte(font.Family)) > drawMaxFamilyByte {
 		return FontSpec{}, drawError(drawIDFontSize, -1, "family")
 	}
 	if !utf8.ValidString(font.Family) {
 		return FontSpec{}, drawError(drawIDEnumUnknown, -1, "family")
-	}
-	if font.Weight == 0 {
-		font.Weight = FontWeightNormal
 	}
 	switch font.Weight {
 	case FontWeightNormal, FontWeightMedium, FontWeightSemibold, FontWeightBold:

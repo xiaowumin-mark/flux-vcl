@@ -14,27 +14,28 @@ import (
 // 线程安全：方法加锁，允许 State 从任意 goroutine 触发 render 的 -race 测试。
 // RunOnUI 直接同步执行（mock 无独立 UI 线程）。
 type Mock struct {
-	mu         sync.Mutex
-	ops        []Op
-	next       Handle
-	clientW    int // 模拟窗体客户区尺寸（缺省 400x300）
-	clientH    int
-	resizeFn   func(w, h int)             // 已注册的 resize 回调
-	handlers   map[Handle]map[string]any  // 已注册事件回调（Phase 4 触发测试用）
-	timerFn    func()                     // NewTimer 注册的回调（nil=未注册/已停止；FireTimer 驱动）
-	scrolls    map[Handle]*mockScroll     // Phase 6 ListView 滚动状态（Scrollable 测试面）
-	checked    map[Handle]*mockCheckable  // 可选控件的状态与回调（Checkable 测试面）
-	widgetType map[Handle]string          // 已创建控件类型（RadioButton 逻辑组测试面）
-	parents    map[Handle]Handle          // resolved native parent（RadioButton 逻辑组测试面）
-	selectable map[Handle]*mockSelectable // 下拉选择控件的状态与回调（Selectable 测试面）
-	progress   map[Handle]*mockProgress   // 进度控件的范围和值（Progressable 测试面）
-	sliders    map[Handle]*mockSlider     // Slider 的步长与值变化回调
-	radioGroup map[Handle]int             // 单选控件原生组编号（RadioGroupable 测试面）
-	pages      map[Handle]*mockPages      // 分页容器的页面顺序、受控索引与回调
-	paints     map[Handle]*mockPaint      // PaintBox 命令与 invalidate 次数（PaintController 测试面）
-	draws      map[Handle]*mockDraw       // DrawSurface 列表与 invalidate 次数（CD1）
-	grids      map[Handle]*mockGrid       // StringGrid 的有界数据、选择与编辑回调
-	a11y       map[Handle]*mockA11y       // 可访问名称、焦点顺序与默认/取消操作
+	mu          sync.Mutex
+	ops         []Op
+	next        Handle
+	clientW     int // 模拟窗体客户区尺寸（缺省 400x300）
+	clientH     int
+	resizeFn    func(w, h int)             // 已注册的 resize 回调
+	handlers    map[Handle]map[string]any  // 已注册事件回调（Phase 4 触发测试用）
+	timerFn     func()                     // NewTimer 注册的回调（nil=未注册/已停止；FireTimer 驱动）
+	scrolls     map[Handle]*mockScroll     // Phase 6 ListView 滚动状态（Scrollable 测试面）
+	checked     map[Handle]*mockCheckable  // 可选控件的状态与回调（Checkable 测试面）
+	widgetType  map[Handle]string          // 已创建控件类型（RadioButton 逻辑组测试面）
+	parents     map[Handle]Handle          // resolved native parent（RadioButton 逻辑组测试面）
+	selectable  map[Handle]*mockSelectable // 下拉选择控件的状态与回调（Selectable 测试面）
+	progress    map[Handle]*mockProgress   // 进度控件的范围和值（Progressable 测试面）
+	sliders     map[Handle]*mockSlider     // Slider 的步长与值变化回调
+	radioGroup  map[Handle]int             // 单选控件原生组编号（RadioGroupable 测试面）
+	pages       map[Handle]*mockPages      // 分页容器的页面顺序、受控索引与回调
+	paints      map[Handle]*mockPaint      // PaintBox 命令与 invalidate 次数（PaintController 测试面）
+	draws       map[Handle]*mockDraw       // DrawSurface 列表与 invalidate 次数（CD1）
+	grids       map[Handle]*mockGrid       // StringGrid 的有界数据、选择与编辑回调
+	a11y        map[Handle]*mockA11y       // 可访问名称、焦点顺序与默认/取消操作
+	measureReqs []TextMeasureRequest       // styled intrinsic requests (headless assertions)
 }
 
 // mockScroll 记录 ListView 滚动配置/位置（Phase 6）。与真实滚动条不同，mock 不
@@ -182,6 +183,15 @@ func (m *Mock) SetColor(h Handle, color Color) {
 func (m *Mock) SetFontColor(h Handle, color Color) {
 	m.mu.Lock()
 	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "FontColor", Value: color})
+	m.mu.Unlock()
+}
+
+// SetFont records the effective CD2 font as a property mutation. The mock
+// does not rasterize text, but retaining the value lets tests assert that the
+// font used for intrinsic measurement is also sent to paint/native state.
+func (m *Mock) SetFont(h Handle, font FontSpec) {
+	m.mu.Lock()
+	m.ops = append(m.ops, Op{Type: OpSetProperty, Handle: h, Key: "Font", Value: NormalizeFontSpec(font)})
 	m.mu.Unlock()
 }
 
@@ -641,6 +651,34 @@ func (m *Mock) PaintInvalidations(h Handle) int {
 // 布局引擎的真实测量在 LCL 适配层实现（design.md §6.2）。
 // 查询不产生 mutation op（布局 pass 每次 render 都调用，计入会污染 diff 断言）。
 func (m *Mock) TextExtent(text string) (int, int) { return len(text) * 8, 20 }
+
+// MeasureText implements StyledTextMeasurer without introducing a display
+// dependency.  Requests are retained for tests that need to prove the exact
+// FontSpec/constraint contract passed to layout and paint.
+func (m *Mock) MeasureText(request TextMeasureRequest) Size {
+	request = NormalizeTextMeasureRequest(request)
+	m.mu.Lock()
+	m.measureReqs = append(m.measureReqs, request)
+	m.mu.Unlock()
+	return MeasureTextWithoutCapability(m, request)
+}
+
+// MeasureRequests returns a defensive snapshot of styled measurement calls.
+func (m *Mock) MeasureRequests() []TextMeasureRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]TextMeasureRequest(nil), m.measureReqs...)
+}
+
+// LastMeasureRequest returns the latest styled request, if any.
+func (m *Mock) LastMeasureRequest() (TextMeasureRequest, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.measureReqs) == 0 {
+		return TextMeasureRequest{}, false
+	}
+	return m.measureReqs[len(m.measureReqs)-1], true
+}
 
 func (m *Mock) SetEvent(h Handle, event string, fn any) {
 	m.mu.Lock()

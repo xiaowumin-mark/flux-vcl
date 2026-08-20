@@ -42,6 +42,17 @@ type TextOverflow = render.TextOverflow
 // TextPaint combines font, color, alignment, wrapping, and mnemonic policy.
 type TextPaint = render.TextPaint
 
+// TextMeasureRequest and TextMeasureConstraints expose the same immutable
+// request vocabulary used by optional renderer capabilities. They are aliases
+// so a FontSpec passed to DrawText and to measurement has one concrete type.
+type TextMeasureRequest = render.TextMeasureRequest
+type TextMeasureConstraints = render.TextMeasureConstraints
+type TextMeasureConstraint = render.TextMeasureConstraint
+type TextMeasureCacheKey = render.TextMeasureCacheKey
+type TextMeasureSize = render.Size
+type StyledTextMeasurer = render.StyledTextMeasurer
+type FontController = render.FontController
+
 const (
 	StrokeSolid = render.StrokeSolid
 

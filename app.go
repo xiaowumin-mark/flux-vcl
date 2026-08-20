@@ -348,6 +348,7 @@ func (a *App) renderWidget(w Widget) (renderErr error) {
 		a.setLastError(err)
 		return err
 	}
+	materializeCD2Fonts(root)
 	cw, ch := a.r.ClientSize()
 	d := &layoutDiags{}
 	layoutTree(root, a.r, Tight(cw, ch), Point{}, d)

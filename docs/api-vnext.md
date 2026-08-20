@@ -1,6 +1,6 @@
 # FluxVCL vNext API 冻结草图
 
-> 状态：CD1 Draw Core 已实现；CD2+ 符号仍按阶段门推进
+> 状态：CD1 Draw Core、CD2 字体/布局原语已实现；CD3+ 符号仍按阶段门推进
 > 日期：2026-08-19
 > 决策依据：[`cd0-decisions.md`](./cd0-decisions.md)
 > 当前已发布候选面：[`api-v0.1.0.md`](./api-v0.1.0.md)
@@ -144,8 +144,15 @@ type ControlStylePatch struct {
 }
 ```
 
-`ControlStyle` 是完全解析值；`ControlStylePatch` 才携带 presence。具体 mask 常量和安全
-`StyleOption` 构造器在 CD2 实现审查中冻结，CD0 不提前承诺位布局。
+`ControlStyle` 是完全解析值；`ControlStylePatch` 才携带 presence。CD2 已冻结并实现
+`StyleFieldBackground`、`StyleFieldForeground`、`StyleFieldFont`、`StyleFieldBorder`、
+`StyleFieldRadius`、`StyleFieldPadding` 和 `StyleFieldMinSize`，以及 `Set*/With*` 安全构造器。
+实现记录见 [`cd2-font-layout.md`](./cd2-font-layout.md)。
+
+布局测量使用 `internal/render.TextMeasureRequest` 的可选
+`StyledTextMeasurer` 能力；旧 Renderer 自动回落到 `TextExtent`。根包布局原语包括
+`Gap(int)`、`Padding(insets[, child])` 和 `PaddingBox(insets, child)`，全部使用 DIP，
+且 padding 在约束传递阶段计算，不改变子控件的语义 Bounds。
 
 ## 3. CD3 Theme SDK
 

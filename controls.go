@@ -16,6 +16,12 @@ func Window(args ...any) Widget {
 	n := widget.NewNode("Window")
 	for _, a := range args {
 		switch v := a.(type) {
+		case PaddingValue:
+			if v.child == nil {
+				v.apply(n)
+			} else {
+				n.Add(v.Create())
+			}
 		case Widget:
 			n.Add(v.Create())
 		case Opt:
@@ -38,6 +44,81 @@ func Column(args ...any) Widget { return containerArgs("Column", args) }
 // 接受混合参数：子节点（Widget，可含 Expanded/Flexible）与容器选项（Opt，
 // 如 MainAxis/CrossAxis 对齐）。例如 Row(Expanded(Text("a")), Text("b")).
 func Row(args ...any) Widget { return containerArgs("Row", args) }
+
+// PaddingBox is an explicit layout primitive that applies content insets to a
+// single child. It remains transparent to reconciliation and native identity.
+func PaddingBox(insets Insets, child Widget) Widget {
+	if child == nil {
+		panic("flux: padding child must not be nil")
+	}
+	if err := insets.Validate(); err != nil {
+		panic(err)
+	}
+	n := widget.NewNode("Padding")
+	n.Props.Set("Padding", insets)
+	n.Add(child.Create())
+	return widgetNode{n}
+}
+
+// PaddingValue serves both as an Opt (when only insets are supplied) and as a
+// Widget (when a child is supplied). This keeps the API ergonomic for both
+// `Text("x", Padding(...))` and `Padding(..., Text("x"))` without introducing
+// two competing names or hidden margin semantics.
+type PaddingValue struct {
+	insets Insets
+	child  Widget
+}
+
+// Padding creates an inset value. Pass an optional Widget to create a
+// transparent padding wrapper; without a child it can be used as a control
+// option (for example, Text("x", Padding(InsetsAll(4)))).
+func Padding(args ...any) PaddingValue {
+	var insets Insets
+	var child Widget
+	var numeric []int
+	for _, arg := range args {
+		switch value := arg.(type) {
+		case Insets:
+			insets = value
+		case int:
+			numeric = append(numeric, value)
+		case Widget:
+			if child != nil {
+				panic("flux: padding accepts one child")
+			}
+			child = value
+		default:
+			panic("flux: padding expects Insets, numeric sides, and an optional Widget")
+		}
+	}
+	if len(numeric) > 0 {
+		switch len(numeric) {
+		case 1:
+			insets = InsetsAll(numeric[0])
+		case 2:
+			insets = InsetsSymmetric(numeric[0], numeric[1])
+		case 4:
+			insets = NewInsets(numeric[0], numeric[1], numeric[2], numeric[3])
+		default:
+			panic("flux: padding expects one, two, or four numeric sides")
+		}
+	}
+	if err := insets.Validate(); err != nil {
+		panic(err)
+	}
+	return PaddingValue{insets: insets, child: child}
+}
+
+func (p PaddingValue) apply(n *Node) { n.Props.Set("Padding", p.insets) }
+
+func (p PaddingValue) Create() *Node {
+	n := widget.NewNode("Padding")
+	n.Props.Set("Padding", p.insets)
+	if p.child != nil {
+		n.Add(p.child.Create())
+	}
+	return n
+}
 
 // Component 包装构建函数为 Widget（design.md §4.1 组件化，Phase 5.4）。
 //
@@ -163,6 +244,12 @@ func containerArgs(t string, args []any) Widget {
 	n := widget.NewNode(t)
 	for _, a := range args {
 		switch v := a.(type) {
+		case PaddingValue:
+			if v.child == nil {
+				v.apply(n)
+			} else {
+				n.Add(v.Create())
+			}
 		case Widget:
 			n.Add(v.Create())
 		case Opt:

@@ -72,33 +72,36 @@ type Renderer struct {
 	next                  render.Handle
 	form                  lcl.IControl
 	formRef               *engForm
-	measureBmp            lcl.IBitmap                    // 共享测量画布（布局在 diff 前，控件未创建）
-	measureCache          map[string][2]int32            // 文本测量缓存（字体随 DPI 变化时失效）
-	dpi                   int32                          // 当前显示器 DPI（0=未查询，invalidateDPI 清零强制重查）
-	canvasDpi             int32                          // 测量 bitmap DC 的 DPI（进程内固定，缓存一次；0=未查询）
-	resizeFn              func(w, h int)                 // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
-	closeFn               func()                         // OnClose 回调（demo 停止后台轮询）
-	closed                atomic.Bool                    // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
-	pendingDestroy        []lcl.IControl                 // D4 延后销毁队列：render 完成时 DrainDestroy 统一 Free
-	scrolls               map[render.Handle]*listScroll  // Phase 6 ListView 滚动状态（Scrollable 实现）
-	radios                map[render.Handle]*radioState  // RadioButton 的逻辑分组元数据（不依赖缺失的 LCL setter）
-	radioHosts            map[radioHostKey]*radioHost    // (原生父句柄, RadioButton 句柄) → 隔离用 TPanel
-	pendingHosts          []*radioHost                   // 已脱离逻辑父级、待普通控件释放后销毁的内部 Panel
-	pages                 map[render.Handle]*pageState   // PageControl 的受控选择、页面顺序与事件状态
-	combos                map[render.Handle]*comboState  // ComboBox 受控选择、事件去重与键盘回退
-	texts                 map[render.Handle]*textState   // Input/Memo 的程序化 SetText 应用门
-	sliders               map[render.Handle]*sliderState // Slider 的程序化应用门与值变化回调
-	paints                map[render.Handle]*paintState  // PaintBox 的稳定命令快照与原生绘制 surface
-	grids                 map[render.Handle]*gridState   // StringGrid 的受控矩阵、选择与编辑事件状态
-	tabStopDefaults       map[render.Handle]bool         // TabStop Opt 移除时恢复各 LCL 类型的创建默认值
-	tabOrders             map[render.Handle]int          // applyProps 早于 SetParent，缓存后在挂父级时重施
-	requestedColors       map[render.Handle]render.Color // 退出高对比度后恢复应用声明的背景色
-	requestedFontColors   map[render.Handle]render.Color // 退出高对比度后恢复应用声明的文字色
-	requestedTitleBarDark bool                           // 应用最后声明的标题栏模式
-	titleBarConfigured    bool                           // 是否声明过 TitleBarDark
-	highContrast          atomic.Bool                    // 系统或显式覆盖的高对比度状态
-	gridPollTimer         lcl.ITimer                     // Grid 选择轮询器；窗体拥有，空闲时禁用并复用
-	gridPollStop          func()                         // 当前启用周期的幂等停止函数；nil 表示空闲
+	measureBmp            lcl.IBitmap // 共享测量画布（布局在 diff 前，控件未创建）
+	measureCache          map[render.TextMeasureCacheKey]render.Size
+	fontCache             map[nativeFontCacheKey]lcl.IFont  // resolved FontSpec → native font
+	fontRevision          uint64                            // system/theme/DPI typography revision
+	dpi                   int32                             // 当前显示器 DPI（0=未查询，invalidateDPI 清零强制重查）
+	canvasDpi             int32                             // 测量 bitmap DC 的 DPI（进程内固定，缓存一次；0=未查询）
+	resizeFn              func(w, h int)                    // OnResize 统一回调（窗体 resize 与 WM_DPICHANGED 共用）
+	closeFn               func()                            // OnClose 回调（demo 停止后台轮询）
+	closed                atomic.Bool                       // 窗体已进入关闭流程：拒绝后续 UI marshalling（关机竞态防护）
+	pendingDestroy        []lcl.IControl                    // D4 延后销毁队列：render 完成时 DrainDestroy 统一 Free
+	scrolls               map[render.Handle]*listScroll     // Phase 6 ListView 滚动状态（Scrollable 实现）
+	radios                map[render.Handle]*radioState     // RadioButton 的逻辑分组元数据（不依赖缺失的 LCL setter）
+	radioHosts            map[radioHostKey]*radioHost       // (原生父句柄, RadioButton 句柄) → 隔离用 TPanel
+	pendingHosts          []*radioHost                      // 已脱离逻辑父级、待普通控件释放后销毁的内部 Panel
+	pages                 map[render.Handle]*pageState      // PageControl 的受控选择、页面顺序与事件状态
+	combos                map[render.Handle]*comboState     // ComboBox 受控选择、事件去重与键盘回退
+	texts                 map[render.Handle]*textState      // Input/Memo 的程序化 SetText 应用门
+	sliders               map[render.Handle]*sliderState    // Slider 的程序化应用门与值变化回调
+	paints                map[render.Handle]*paintState     // PaintBox 的稳定命令快照与原生绘制 surface
+	grids                 map[render.Handle]*gridState      // StringGrid 的受控矩阵、选择与编辑事件状态
+	tabStopDefaults       map[render.Handle]bool            // TabStop Opt 移除时恢复各 LCL 类型的创建默认值
+	tabOrders             map[render.Handle]int             // applyProps 早于 SetParent，缓存后在挂父级时重施
+	requestedColors       map[render.Handle]render.Color    // 退出高对比度后恢复应用声明的背景色
+	requestedFontColors   map[render.Handle]render.Color    // 退出高对比度后恢复应用声明的文字色
+	requestedFonts        map[render.Handle]render.FontSpec // DPI/系统字体变化后重施声明字体
+	requestedTitleBarDark bool                              // 应用最后声明的标题栏模式
+	titleBarConfigured    bool                              // 是否声明过 TitleBarDark
+	highContrast          atomic.Bool                       // 系统或显式覆盖的高对比度状态
+	gridPollTimer         lcl.ITimer                        // Grid 选择轮询器；窗体拥有，空闲时禁用并复用
+	gridPollStop          func()                            // 当前启用周期的幂等停止函数；nil 表示空闲
 }
 
 type textState struct {
@@ -154,9 +157,11 @@ type pageState struct {
 }
 
 var (
-	_ render.SliderController = (*Renderer)(nil)
-	_ render.PaintController  = (*Renderer)(nil)
-	_ render.GridController   = (*Renderer)(nil)
+	_ render.SliderController   = (*Renderer)(nil)
+	_ render.PaintController    = (*Renderer)(nil)
+	_ render.GridController     = (*Renderer)(nil)
+	_ render.StyledTextMeasurer = (*Renderer)(nil)
+	_ render.FontController     = (*Renderer)(nil)
 )
 
 // radioState 保存 RadioButton 的 Flux 逻辑父级、坐标和受控属性。TRadioButton 在
@@ -208,7 +213,8 @@ func NewRenderer() *Renderer {
 	lcl.Application.NewForms(f)
 	r := &Renderer{
 		controls:     make(map[render.Handle]lcl.IControl),
-		measureCache: make(map[string][2]int32),
+		measureCache: make(map[render.TextMeasureCacheKey]render.Size),
+		fontCache:    make(map[nativeFontCacheKey]lcl.IFont),
 		formRef:      f,
 		form:         f,
 	}
@@ -472,6 +478,7 @@ func (r *Renderer) Destroy(h render.Handle) {
 	delete(r.tabOrders, h)
 	delete(r.requestedColors, h)
 	delete(r.requestedFontColors, h)
+	delete(r.requestedFonts, h)
 	if wasGrid {
 		grid.onSelect = nil
 		grid.onEdit = nil
@@ -970,38 +977,12 @@ func colorToTColor(c render.Color) types.TColor {
 	return types.TColor(uint32(b)<<16 | uint32(g)<<8 | uint32(r))
 }
 
-// TextExtent 用共享 bitmap canvas 做 GDI 文本测量（design.md §6.2）。
-//
-// 布局在 diff 之前执行、控件未创建，因此测量不依赖控件句柄：分配一个
-// 1x1 bitmap（得到有效 HDC）＋窗体默认字体（LCL 子控件默认继承窗体字体，
-// 保证与真实渲染尺寸一致），调 TextExtentWithStr。结果按 text 缓存。
-//
-// Phase 3.5：bitmap DC 的 DPI（canvasDpi，GetDeviceCaps）进程内固定、显示器无关，
-// 把测量到的物理像素经 PXToDIP 归一化为 DIP —— 因此测量结果是显示器无关的，
-// measureCache 无需随显示器 DPI 变化而失效；只有字体点号随 DPI 变化时才失效
-// （WM_DPICHANGED 钩子统一清缓存）。
+// TextExtent preserves the legacy Renderer entry point while delegating to
+// the styled measurement cache. The request carries the current monitor DPI;
+// MeasureText normalizes the physical Canvas extent back to DIP.
 func (r *Renderer) TextExtent(text string) (int, int) {
-	if s, ok := r.measureCache[text]; ok {
-		return int(s[0]), int(s[1])
-	}
-	if r.measureBmp == nil {
-		bmp := lcl.NewBitmap()
-		bmp.SetSize(1, 1) // 分配 DIB 段 → canvas HDC 有效
-		bmp.Canvas().SetFontToFont(r.form.Font())
-		r.measureBmp = bmp
-	}
-	sz := r.measureBmp.Canvas().TextExtentWithStr(text)
-	w, h := int(sz.Cx), int(sz.Cy)
-	if w <= 0 {
-		w = len(text) * 8 // 兜底（空文本/极端字体）
-	}
-	if h <= 0 {
-		h = 20
-	}
-	cdpi := int(r.canvasDPI())
-	w, h = render.PXToDIP(w, cdpi), render.PXToDIP(h, cdpi)
-	r.measureCache[text] = [2]int32{int32(w), int32(h)}
-	return w, h
+	size := r.MeasureText(render.TextMeasureRequest{Text: text, DPI: int(r.currentDPI())})
+	return size.W, size.H
 }
 
 // ClientSize 返回窗体客户区尺寸（DIP）。子控件坐标以此为布局坐标系。
@@ -1029,7 +1010,7 @@ func (r *Renderer) OnResize(fn func(w, h int)) {
 // emitResize 统一触发 resize 回调：读当前 ClientSize（DIP）→ 回调。
 // 窗体进入关闭流程后丢弃（teardown 期间 ClientSize 可能已失效）。
 func (r *Renderer) emitResize() {
-	if r.closed.Load() || r.resizeFn == nil {
+	if r.closed.Load() || r.resizeFn == nil || r.form == nil {
 		return
 	}
 	w, h := r.ClientSize()
@@ -2178,6 +2159,7 @@ func (r *Renderer) OnClose(fn func()) {
 	r.formRef.SetOnClose(func(_ lcl.IObject, _ *types.TCloseAction) {
 		r.closed.Store(true)
 		r.releaseGridSelectionPoller()
+		r.releaseTextMeasureResources()
 		if fn != nil {
 			render.Guard("OnClose", fn)
 		}
@@ -2304,6 +2286,8 @@ func (r *Renderer) currentDPI() int32 {
 // invalidateDPI 清零 DPI 缓存，强制下次 currentDPI 重查（WM_DPICHANGED 触发）。
 func (r *Renderer) invalidateDPI() {
 	r.dpi = 0
+	r.releaseTextMeasureCaches()
+	r.reapplyRequestedFonts()
 }
 
 func (r *Renderer) refreshDPISensitiveControls() {
@@ -2352,10 +2336,9 @@ func (r *Renderer) setupDPIHook() {
 		switch msg.Msg {
 		case messages.WM_DPICHANGED:
 			r.invalidateDPI()
-			r.measureCache = make(map[string][2]int32)
 			r.refreshDPISensitiveControls()
 			r.emitResize()
-		case messages.WM_SETTINGCHANGE, messages.WM_SYSCOLORCHANGE, messages.WM_THEMECHANGED:
+		case messages.WM_SETTINGCHANGE, messages.WM_SYSCOLORCHANGE, messages.WM_THEMECHANGED, messages.WM_FONTCHANGE:
 			r.refreshHighContrast()
 		}
 	})

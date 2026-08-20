@@ -136,6 +136,10 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 
 **CD1 Draw Core ✅ 完成（无头）**：新增不可变 `DrawList`、封闭 `DrawOp`、基础 2D 图元、字体/文本值、结构化校验、legacy PaintCommand adapter，以及 DrawController Mock/diff 的 mount、patch、remove、D7c 契约。当前阶段只证明纯值与生命周期，不声称基础图元已由 LCL 真实绘制；native executor、DPI 与像素探针属于 CD4。实施边界见 [CD1 记录](docs/cd1-draw-core.md)。
 
+**CD2 字体与布局原语 ✅ 完成（无头 + native cache）**：纯值样式与 presence mask、styled text
+measurement/fallback、FontSpec/DPI 缓存失效、Button/Text/Input intrinsic、Row/Column Gap 与
+Padding 原语已落地。真实 DrawText 像素一致性仍属于 CD4；实施边界见 [CD2 记录](docs/cd2-font-layout.md)。
+
 | 子任务 | 状态 |
 |---|---|
 | 6.1 ListView + 稳定 key（`ListView(count, itemH, builder)` + slot key=`row-i` 控件池复用；行内容不带数据 key） | ✅ `flux.ListView` + diff/layout `ListViewRow` 透明分支 |
@@ -350,6 +354,7 @@ flux-vcl/
 - [开发计划](docs/development-plan.md) —— Phase 0–7 任务与验收标准
 - [自绘与样式系统设计](docs/custom-draw-style-system.md) —— Draw API、主题包边界与 CD0–CD8 实施计划
 - [CD1 Draw Core 实施记录](docs/cd1-draw-core.md) —— 纯值 API、校验、Mock/diff 与阶段边界
+- [CD2 字体与布局原语实施记录](docs/cd2-font-layout.md) —— 样式值、测量 fallback、缓存与布局原语
 - [English README](README.en.md) —— 英文产品入口
 - [7GUIs 任务映射](docs/7guis.md) —— 七项任务、公开 API 与业务边界
 - [v0.1.0 候选 API 冻结清单](docs/api-v0.1.0.md) —— 首发公开标识符与兼容边界

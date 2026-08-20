@@ -160,24 +160,20 @@ func layoutTree(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 			sz = leafSize(0, 0, n, c)
 		}
 		setBounds(n, pos, sz)
+	case "Padding":
+		sz = layoutPadding(n, r, c, pos, d)
 	case "Text":
-		w, h := multilineTextExtent(n.Props.String("Text"), r)
-		sz = leafSize(w, h, n, c)
+		sz = styledIntrinsic(r, n, c, 0, 0, render.TextNoWrap)
 		setBounds(n, pos, sz)
 	case "Button":
-		w, _ := r.TextExtent(n.Props.String("Text"))
-		bw := w + 32 // 左右 padding
-		if bw < 88 {
-			bw = 88
-		}
-		sz = leafSize(bw, 32, n, c)
+		sz = styledIntrinsic(r, n, c, 0, 0, render.TextNoWrap)
 		setBounds(n, pos, sz)
 	case "CheckBox", "RadioButton":
 		w, h := checkableIntrinsicSize(n.Props.String("Text"), r)
 		sz = leafSize(w, h, n, c)
 		setBounds(n, pos, sz)
 	case "Input":
-		sz = leafSize(180, 28, n, c)
+		sz = styledIntrinsic(r, n, c, 0, 0, render.TextNoWrap)
 		setBounds(n, pos, sz)
 	case "Memo":
 		w, h := memoIntrinsicSize(n.Props.String("Text"), r)
@@ -389,6 +385,40 @@ func leafSize(w, h int, n *Node, c BoxConstraints) Size {
 	return c.Constrain(w, h)
 }
 
+// layoutPadding measures the child in the deflated constraints and adds the
+// explicit inset back to the wrapper's size. The child keeps its own frame;
+// padding is therefore layout geometry rather than a hidden Bounds mutation.
+func layoutPadding(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags) Size {
+	insets := Insets{}
+	if value, ok := n.Props.Get("Padding"); ok {
+		insets, _ = value.(Insets)
+	}
+	inner := BoxConstraints{
+		MinW: max(0, c.MinW-insets.Horizontal()),
+		MaxW: subtractBound(c.MaxW, insets.Horizontal()),
+		MinH: max(0, c.MinH-insets.Vertical()),
+		MaxH: subtractBound(c.MaxH, insets.Vertical()),
+	}
+	childSize := Size{}
+	if len(n.Children) > 0 {
+		childPos := Point{X: pos.X + insets.Left, Y: pos.Y + insets.Top}
+		childSize = layoutTree(n.Children[0], r, inner, childPos, d)
+	}
+	sz := c.Constrain(childSize.W+insets.Horizontal(), childSize.H+insets.Vertical())
+	setBounds(n, pos, sz)
+	return sz
+}
+
+func subtractBound(value, amount int) int {
+	if value < 0 {
+		return value
+	}
+	if value <= amount {
+		return 0
+	}
+	return value - amount
+}
+
 // setBounds 把节点 frame 写为绝对位置 pos + 尺寸 sz。
 func setBounds(n *Node, pos Point, sz Size) {
 	n.Props.Set("Bounds", render.Rect{X: pos.X, Y: pos.Y, W: sz.W, H: sz.H})
@@ -406,7 +436,7 @@ func setPos(n *Node, pos Point) {
 	}
 	br := b.(render.Rect)
 	switch n.Type {
-	case "Column", "Row", "Expanded", "Flexible", "Component", "ListViewRow":
+	case "Column", "Row", "Expanded", "Flexible", "Component", "ListViewRow", "Padding":
 		offsetSubtree(n, pos.X-br.X, pos.Y-br.Y)
 	default:
 		if _, plugin := pluginRuntimeForNode(n); plugin {
@@ -454,6 +484,7 @@ func offsetSubtree(n *Node, dx, dy int) {
 func layoutRoot(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags) Size {
 	mainAxis := MainAxisAlignment(n.Props.Int("MainAxisAlignment"))
 	crossAxis := CrossAxisAlignment(n.Props.Int("CrossAxisAlignment"))
+	gap := nodeGap(n)
 	mainMax, crossMax := axisMax(c, false)
 
 	// 每个子都收到有界的主轴约束（交叉轴 0..crossMax），量出内容尺寸。
@@ -464,9 +495,9 @@ func layoutRoot(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 		kids = append(kids, flexKid{node: ch, size: sz})
 	}
 
-	mainUsed := totalUsed(kids, false)
+	mainUsed := totalUsed(kids, false, gap)
 	leftover := max(0, mainMax-mainUsed)
-	lead, between := mainDistribution(mainAxis, leftover, len(kids))
+	lead, between := mainDistribution(mainAxis, leftover, len(kids), gap)
 
 	crossExtent := 0
 	if crossAxis == CrossAxisStretch {
@@ -642,6 +673,7 @@ func layoutListView(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *
 func layoutFlex(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layoutDiags, isRow bool) Size {
 	mainAxis := MainAxisAlignment(n.Props.Int("MainAxisAlignment"))
 	crossAxis := CrossAxisAlignment(n.Props.Int("CrossAxisAlignment"))
+	gap := nodeGap(n)
 	mainMax, crossMax := axisMax(c, isRow)
 
 	kids, totalFlex := collectKids(n, r, c, pos, d, isRow, crossAxis, crossMax)
@@ -650,7 +682,7 @@ func layoutFlex(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 	if totalFlex > 0 {
 		freeSpace := 0
 		if mainMax >= 0 {
-			freeSpace = max(0, mainMax-totalUsed(kids, isRow))
+			freeSpace = max(0, mainMax-totalUsed(kids, isRow, gap))
 		}
 		perFlex := freeSpace / totalFlex
 		for i := range kids {
@@ -664,12 +696,12 @@ func layoutFlex(n *Node, r render.Renderer, c BoxConstraints, pos Point, d *layo
 	}
 
 	// 主轴对齐（leftover 为 flex 未吸收的剩余空间）
-	mainUsed := totalUsed(kids, isRow)
+	mainUsed := totalUsed(kids, isRow, gap)
 	leftover := 0
 	if mainMax >= 0 {
 		leftover = max(0, mainMax-mainUsed)
 	}
-	lead, between := mainDistribution(mainAxis, leftover, len(kids))
+	lead, between := mainDistribution(mainAxis, leftover, len(kids), gap)
 
 	// 交叉轴范围：stretch 时为约束值，否则为子最大值
 	crossExtent := 0
@@ -776,13 +808,17 @@ func axis(s Size, isRow, main bool) int {
 }
 
 // totalUsed 计算 kids 主轴尺寸和（含基础间距）。
-func totalUsed(kids []flexKid, isRow bool) int {
+func totalUsed(kids []flexKid, isRow bool, gaps ...int) int {
+	gap := layoutGap
+	if len(gaps) > 0 {
+		gap = gaps[0]
+	}
 	main := 0
 	for _, k := range kids {
 		main += axis(k.size, isRow, true)
 	}
 	if len(kids) > 1 {
-		main += (len(kids) - 1) * layoutGap
+		main += (len(kids) - 1) * max(0, gap)
 	}
 	return main
 }
@@ -830,7 +866,12 @@ func flexConstraints(alloc int, isRow bool, crossAxis CrossAxisAlignment, crossM
 }
 
 // mainDistribution 按主轴对齐方式返回起始偏移 lead 与子间距 between。
-func mainDistribution(a MainAxisAlignment, leftover, n int) (lead, between int) {
+func mainDistribution(a MainAxisAlignment, leftover, n int, gaps ...int) (lead, between int) {
+	gap := layoutGap
+	if len(gaps) > 0 {
+		gap = gaps[0]
+	}
+	gap = max(0, gap)
 	if n <= 1 {
 		switch a {
 		case MainAxisCenter:
@@ -843,23 +884,23 @@ func mainDistribution(a MainAxisAlignment, leftover, n int) (lead, between int) 
 	}
 	switch a {
 	case MainAxisCenter:
-		return leftover / 2, layoutGap
+		return leftover / 2, gap
 	case MainAxisEnd:
-		return leftover, layoutGap
+		return leftover, gap
 	case MainAxisSpaceBetween:
 		per := 0
 		if n > 1 {
 			per = leftover / (n - 1)
 		}
-		return 0, layoutGap + per
+		return 0, gap + per
 	case MainAxisSpaceAround:
 		per := leftover / (2 * n)
-		return per, layoutGap + 2*per
+		return per, gap + 2*per
 	case MainAxisSpaceEvenly:
 		per := leftover / (n + 1)
-		return per, layoutGap + per
+		return per, gap + per
 	default: // MainAxisStart
-		return 0, layoutGap
+		return 0, gap
 	}
 }
 

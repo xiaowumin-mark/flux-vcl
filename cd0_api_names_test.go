@@ -30,12 +30,7 @@ type cd0Identifier struct {
 // implemented, move it to cd0ReusedIdentifiers so the audit keeps checking its
 // declaration kind without treating the intended implementation as a clash.
 var cd0ReservedIdentifiers = []cd0Identifier{
-	{"Insets", cd0Type},
-	{"BorderSpec", cd0Type},
-	{"ControlStyle", cd0Type},
-	{"FocusStyle", cd0Type},
-	{"StyleFieldMask", cd0Type},
-	{"ControlStylePatch", cd0Type},
+	// CD2.1 is implemented; these names are checked below as intentional reuse.
 	{"DesignTheme", cd0Type},
 	{"ColorScheme", cd0Type},
 	{"Typography", cd0Type},
@@ -64,6 +59,12 @@ var cd0ReservedConstants = []string{}
 // the decision: in particular Color must remain the Opt function, while the
 // ARGB value type remains ColorValue.
 var cd0ReusedIdentifiers = []cd0Identifier{
+	{"Insets", cd0Type},
+	{"BorderSpec", cd0Type},
+	{"ControlStyle", cd0Type},
+	{"FocusStyle", cd0Type},
+	{"StyleFieldMask", cd0Type},
+	{"ControlStylePatch", cd0Type},
 	{"DrawList", cd0Type},
 	{"DrawOp", cd0Type},
 	{"FillStyle", cd0Type},

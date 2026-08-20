@@ -49,6 +49,12 @@ CD1 Draw Core is complete at the headless value/diff layer: immutable
 DrawController Mock coverage are available. Native primitive execution and
 pixel guarantees remain a CD4 deliverable.
 
+CD2 font and layout primitives are complete at the headless/native-cache layer:
+value-only styles with presence masks, styled text measurement fallback and
+cache invalidation, intrinsic control sizing, flex gaps, and explicit padding.
+Native DrawText pixel parity remains a CD4 deliverable; see
+`docs/cd2-font-layout.md` for the implementation record.
+
 The P7.3b release matrix is configured and locally exercised, but is not a
 completed CI gate until the corresponding hosted workflow succeeds.
 

@@ -376,7 +376,7 @@ func reservedPluginName(name string) bool {
 }
 
 var builtInWidgetTypes = map[string]struct{}{
-	"Window": {}, "Column": {}, "Row": {}, "Expanded": {}, "Flexible": {},
+	"Window": {}, "Column": {}, "Row": {}, "Expanded": {}, "Flexible": {}, "Padding": {},
 	"Component": {}, "ScrollBox": {}, "ListView": {}, "ListViewRow": {},
 	"Text": {}, "Button": {}, "Input": {}, "Memo": {}, "CheckBox": {},
 	"ComboBox": {}, "RadioButton": {}, "ProgressBar": {}, "Slider": {}, "StringGrid": {}, "PaintBox": {},

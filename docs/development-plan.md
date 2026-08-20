@@ -257,7 +257,7 @@
 | # | 子任务 | 要点 / 参考 | 状态 |
 |---|---|---|---|
 | 3.1 | 协议 | `BoxConstraints`/`Size`；`Measure`/`Layout` 两遍（design.md §6.2）。 | ✅ 完成（单遍） |
-| 3.2 | **intrinsic-size 函数** | `Size Measure(font, text, dpi, constraints)`；GDI 文本测量（`TCanvas.TextWidth/TextHeight/TextExtent`）；主题 API（`BCM_GETIDEALSIZE`/`GetThemePartSize`）一次实现测量+缓存；缓存失效（文本/字体/DPI 变化）。 | ✅ 完成（GDI 测量+缓存；主题 API 待 3.5） |
+| 3.2 | **intrinsic-size 函数** | `Size Measure(font, text, dpi, constraints)`；GDI 文本测量（`TCanvas.TextWidth/TextHeight/TextExtent`）；主题 API（`BCM_GETIDEALSIZE`/`GetThemePartSize`）一次实现测量+缓存；缓存失效（文本/字体/DPI 变化）。 | ✅ 完成（CD2 styled request + GDI 测量/字体缓存；主题 API 待 CD3） |
 | 3.3 | Flex 算法 | RenderFlex 精确实现：非 flex 主轴 unbounded、freeSpace/flex 分配、Expanded=tight/Flexible=loose、主轴对齐分布、只增不缩+溢出诊断。 | ✅ 完成 |
 | 3.4 | 定位应用 | `SetBounds` 写 frame；框架控件 `Align=alNone`（D5）；Native 回调返回后恢复 Align。 | ✅ 完成（Bounds 写 Props，diff 应用；真实 LCL probe 覆盖 Align 恢复） |
 | 3.5 | **DPI** | PerMonitorV2 manifest（已就位）；DIP→像素换算（`render.DIPToPX/PXToDIP`）；`WM_DPICHANGED` 钩子（先 `InheritedWndProc` 放行再清缓存 + 全量 re-layout）；字体策略：不调 `ScaleForPPI`、不改 `Application.Scaled`（测量归一化自洽）。 | ✅ 完成 |
@@ -789,8 +789,9 @@ P7 之后的 vNext 工作优先完善底层自绘协议、布局感知样式、�
 详见 [自绘与样式系统设计](./custom-draw-style-system.md)。专项按 `CD0-CD8` 独立推进，先冻结
 `DrawList`/字体测量/样式解析边界，再以 Button 完成一条端到端纵切，随后扩展控件家族与主题生态。
 CD0 决策与 Spike 已完成，证据见 [CD0 原生 Spike 记录](./cd0-native-probes.md)；CD1 无头
-Draw Core 也已完成，见 [CD1 实施记录](./cd1-draw-core.md)。CD2-CD8 仍是 vNext 实施计划，
-不计入 P7 或 v0.1.0 的已完成范围。
+Draw Core 与 CD2 字体/布局原语也已完成，分别见 [CD1 实施记录](./cd1-draw-core.md) 和
+[CD2 实施记录](./cd2-font-layout.md)。CD3-CD8 仍是 vNext 实施计划，不计入 P7 或 v0.1.0
+的已完成范围。
 
 ---
 

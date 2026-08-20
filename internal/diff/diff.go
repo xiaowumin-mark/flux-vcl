@@ -32,7 +32,7 @@ import (
 // 插件透明性由框架写入的 PluginLifecycle marker 证明，不能只信任 Type 字符串。
 func transparentType(t string) bool {
 	switch t {
-	case "Column", "Row", "Expanded", "Flexible", "Component", "ListViewRow":
+	case "Column", "Row", "Expanded", "Flexible", "Component", "ListViewRow", "Padding":
 		return true
 	}
 	return false
@@ -508,6 +508,14 @@ func (rc *Reconciler) applyRemoved(e *Element, key string, next *widget.Props) b
 	case "FontColor":
 		rc.applyProp(e, key, render.Color(0)) // 挂载默认：无文字色
 		return true
+	case "Font":
+		rc.applyProp(e, key, render.FontSpec{}) // 挂载默认：系统 UI 字体
+		return true
+	case "Style", "StylePatch", "_FontOverride", "Background", "Foreground", "Border", "Radius", "Padding", "MinSize", "Gap":
+		// Layout/style metadata has no direct native setter. It still represents
+		// a real widget configuration change, so lifecycle hooks observe both
+		// declaration and removal while layout applies the resulting geometry.
+		return true
 	case "TitleBarDark":
 		rc.applyProp(e, key, false)
 		return true
@@ -889,6 +897,14 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 		if c, ok := v.(render.Color); ok {
 			rc.r.SetFontColor(e.Handle, c)
 			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "FontColor", Value: c})
+		}
+	case "Font": // CD2 effective font
+		if font, ok := v.(render.FontSpec); ok {
+			if controller, ok := rc.r.(render.FontController); ok {
+				font = render.NormalizeFontSpec(font)
+				controller.SetFont(e.Handle, font)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "Font", Value: font})
+			}
 		}
 	case "TitleBarDark": // Phase 5.2 Theme 标题栏沉浸式暗色（win32 DWM；仅 Window 生效）
 		if b, ok := v.(bool); ok {

@@ -67,6 +67,10 @@ func (r *Renderer) applyRequestedTitleBar() {
 
 func (r *Renderer) refreshHighContrast() {
 	r.highContrast.Store(detectHighContrast())
+	// High-contrast policies can replace the system UI font; invalidate both
+	// measurement and resolved native-font caches in the same frame.
+	r.releaseTextMeasureCaches()
+	r.reapplyRequestedFonts()
 	for h := range r.requestedColors {
 		r.applyRequestedColor(h)
 	}
@@ -79,6 +83,10 @@ func (r *Renderer) refreshHighContrast() {
 			paint.control.Invalidate()
 		}
 	}
+	// App.OnResize is the existing full-layout invalidation channel. System
+	// font/theme messages need the same-frame remeasure even when geometry did
+	// not otherwise change.
+	r.emitResize()
 }
 
 type contrastPaintPart uint8

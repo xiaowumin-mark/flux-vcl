@@ -65,6 +65,51 @@ func CrossAxis(a CrossAxisAlignment) Opt {
 	return optFn(func(n *Node) { n.Props.Set("CrossAxisAlignment", int(a)) })
 }
 
+// Gap sets the spacing between Row/Column children in DIP. Zero is valid;
+// negative values are rejected at construction time because they would make
+// the flex distribution ambiguous.
+func Gap(value int) Opt {
+	if value < 0 {
+		panic("flux: gap must be non-negative")
+	}
+	return optFn(func(n *Node) { n.Props.Set("Gap", value) })
+}
+
+// Font sets the effective FontSpec used by intrinsic measurement and native
+// rendering. A zero FontSpec inherits the backend system UI font.
+func Font(font FontSpec) Opt {
+	if err := font.Validate(); err != nil {
+		panic(err)
+	}
+	return optFn(func(n *Node) { setFullFontOverride(n, font) })
+}
+
+// MinSize sets the lower bound applied after intrinsic measurement.
+func MinSize(size Size) Opt {
+	if size.W < 0 || size.H < 0 {
+		panic("flux: min size must be non-negative")
+	}
+	return optFn(func(n *Node) { n.Props.Set("MinSize", size) })
+}
+
+// BorderOpt, Background, and Foreground expose the corresponding style
+// values as ordinary widget options. The `Style` constructor remains the
+// presence-aware path when a zero override must be distinguished from unset.
+func BorderOpt(border BorderSpec) Opt {
+	if err := border.Validate(); err != nil {
+		panic(err)
+	}
+	return optFn(func(n *Node) { n.Props.Set("Border", border) })
+}
+
+func Background(value ColorValue) Opt {
+	return optFn(func(n *Node) { n.Props.Set("Color", value) })
+}
+
+func Foreground(value ColorValue) Opt {
+	return optFn(func(n *Node) { n.Props.Set("FontColor", value) })
+}
+
 // Enabled 设置初始可用状态（缺省 true）。
 func Enabled(v bool) Opt {
 	return optFn(func(n *Node) { n.Props.Set("Enabled", v) })

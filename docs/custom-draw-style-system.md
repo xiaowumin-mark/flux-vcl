@@ -734,17 +734,18 @@ Inspector 至少增加：
 
 ### 14.4 CD2：字体、文本测量与布局原语
 
-| ID | 任务 | 交付/验收 |
-|---|---|---|
-| CD2.1 | 实现 Insets、BorderSpec、ControlStyle/ControlStylePatch | 纯值 + presence mask，无 map/pointer |
-| CD2.2 | 新增 StyledTextMeasurer 和 fallback | 第三方 Renderer 不实现仍可运行 |
-| CD2.3 | 升级 native 字体/测量缓存 key 与失效规则 | text+font+DPI 命中正确 |
-| CD2.4 | Button/Text/Input intrinsic 使用 effective font/padding/min-size；CD3 再接 theme resolver | 不裁字、不出现绘制/布局尺寸分叉 |
-| CD2.5 | Row/Column 增加 Gap；新增显式 Padding 包装或等价布局原语 | 不把 margin/padding 偷塞进 Bounds |
-| CD2.6 | DPI/系统字体变化测试 | layout 与 paint 同帧更新 |
+| ID | 任务 | 交付/验收 | 状态 |
+|---|---|---|---|
+| CD2.1 | 实现 Insets、BorderSpec、ControlStyle/ControlStylePatch | 纯值 + presence mask，无 map/pointer | 完成 |
+| CD2.2 | 新增 StyledTextMeasurer 和 fallback | 第三方 Renderer 不实现仍可运行 | 完成 |
+| CD2.3 | 升级 native 字体/测量缓存 key 与失效规则 | text+font+DPI 命中正确 | 完成 |
+| CD2.4 | Button/Text/Input intrinsic 使用 effective font/padding/min-size；CD3 再接 theme resolver | 不裁字、不出现绘制/布局尺寸分叉 | 完成 |
+| CD2.5 | Row/Column 增加 Gap；新增显式 Padding 包装或等价布局原语 | 不把 margin/padding 偷塞进 Bounds | 完成 |
+| CD2.6 | DPI/系统字体变化测试 | layout 与 paint 同帧更新 | 完成 |
 
-**完成定义**：Measure 与 DrawText request 已使用同一 FontSpec 和 fallback 契约，Mock 可证明请求一致；
-Button 不再依赖固定 `+32/32`。真实 native DrawText 的一致性在 CD4 像素门验收。
+**完成定义（已满足）**：Measure 与 DrawText request 已使用同一 FontSpec 和 fallback 契约，Mock 可证明请求一致；
+Button 不再依赖固定 `+32/32`。真实 native DrawText 的一致性在 CD4 像素门验收。实施细节与验证命令见
+[`cd2-font-layout.md`](./cd2-font-layout.md)。
 
 ### 14.5 CD3：Style Resolver 与主题包 SDK
 
