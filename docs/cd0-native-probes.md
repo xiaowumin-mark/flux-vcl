@@ -100,3 +100,17 @@ CD0.6 只改变 PaintBox 和未来 Draw 路径：legacy `Theme`/普通 native �
 
 CD0.7 的 reference adapter 特意保留在测试中，避免把未实现的 `DesignTheme`/`FromLegacyTheme`
 提早伪装成已发布 API。CD3.6 实现后应以同一表格测试替换 reference adapter。
+
+## 验证边界
+
+本次 CD0 复核命令如下，四个独立 native probe 和 Paint 校验均通过：
+
+```powershell
+go test -count=1 -v ./internal/native -run '^TestCD0(CanvasRuntimeProbe|OwnerDrawAndSubclassRuntimeProbe|ControlDrawRuntimeProbe|Win32DrawABILayout)$'
+go test -count=1 ./internal/render -run 'TestValidatePaintCommands|TestPaintBox'
+git diff HEAD^ --check
+```
+
+本次复核的 `go test -count=1 ./...` 也通过。CD0 脚本仍将每个 LCL 探针隔离到独立进程，
+以避免 native 初始化和 Go 回调退出生命周期互相污染；这属于探针可复现性约束，不改变生产
+后端的生命周期结论。
