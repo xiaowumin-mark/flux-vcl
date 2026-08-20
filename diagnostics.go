@@ -48,6 +48,7 @@ const (
 	DiagnosticPaintCirclePaint         MessageID = "flux.paint.circle_paint"
 	DiagnosticPaintStrokeWidthRequired MessageID = "flux.paint.stroke_width_required"
 	DiagnosticPaintStrokeColorRequired MessageID = "flux.paint.stroke_color_required"
+	DiagnosticPaintPartialAlpha        MessageID = "flux.paint.partial_alpha"
 	DiagnosticPaintUnknownKind         MessageID = "flux.paint.unknown_kind"
 	DiagnosticListBounded              MessageID = "flux.list.bounded"
 	DiagnosticCloseUIThread            MessageID = "flux.app.close_ui_thread"
@@ -136,6 +137,7 @@ var builtinDiagnosticCatalog = &Catalog{
 			DiagnosticPaintCirclePaint:         "flux.PaintBox: 第 %d 条圆形命令必须包含填充或描边颜色",
 			DiagnosticPaintStrokeWidthRequired: "flux.PaintBox: 第 %d 条圆形命令设置描边色时描边宽度必须 > 0",
 			DiagnosticPaintStrokeColorRequired: "flux.PaintBox: 第 %d 条圆形命令设置描边宽度时必须设置描边色",
+			DiagnosticPaintPartialAlpha:        "flux.PaintBox: 第 %d 条命令不支持半透明颜色（首版仅允许零值或不透明色）",
 			DiagnosticPaintUnknownKind:         "flux.PaintBox: 第 %d 条命令类型 %d 未知",
 			DiagnosticListBounded:              "flux.ListView: 需要有界的宽高约束（虚拟列表必须有 viewport，请放在 Expanded/固定尺寸容器内）",
 			DiagnosticCloseUIThread:            "flux: Renderer 未执行 App.Close 的 UI 线程任务",
@@ -220,6 +222,7 @@ var builtinDiagnosticCatalog = &Catalog{
 			DiagnosticPaintCirclePaint:         "flux.PaintBox: command %d circle needs a fill or stroke color",
 			DiagnosticPaintStrokeWidthRequired: "flux.PaintBox: command %d circle stroke width must be > 0 when stroke is set",
 			DiagnosticPaintStrokeColorRequired: "flux.PaintBox: command %d circle stroke width requires a stroke color",
+			DiagnosticPaintPartialAlpha:        "flux.PaintBox: command %d does not support partial alpha (use zero or an opaque color)",
 			DiagnosticPaintUnknownKind:         "flux.PaintBox: command %d has unknown kind %d",
 			DiagnosticListBounded:              "flux.ListView: bounded width and height are required (use Expanded or a fixed-size container)",
 			DiagnosticCloseUIThread:            "flux: Renderer did not execute the App.Close UI-thread task",

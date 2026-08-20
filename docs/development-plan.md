@@ -783,6 +783,14 @@ LCL 适配、无头测试、Windows 多页 smoke 和专门 example 全部完成�
 **P7 最终验收**：全新 Windows 环境从安装到运行示例不超过 5 分钟；全部公开 examples 与
 7GUIs 可交互运行；CI/race/vet/native smoke 全绿；Inspector 未发现非预期重建；发布 v0.1.0。
 
+### 后续专项：自绘与样式系统
+
+P7 之后的 vNext 工作优先完善底层自绘协议、布局感知样式、主题包 SDK 和标准控件 owner-draw，
+详见 [自绘与样式系统设计](./custom-draw-style-system.md)。专项按 `CD0-CD8` 独立推进，先冻结
+`DrawList`/字体测量/样式解析边界，再以 Button 完成一条端到端纵切，随后扩展控件家族与主题生态。
+CD0 决策与 Spike 已完成，证据见 [CD0 原生 Spike 记录](./cd0-native-probes.md)；后续 CD1-CD8
+仍是 vNext 实施计划，不计入 P7 或 v0.1.0 的已完成范围。
+
 ---
 
 ## 依赖关系与里程碑

@@ -40,6 +40,7 @@ Window(
 - [迁移指南](docs/migration.md) 与 [维护政策](docs/maintenance.md)
 - [可验证能力对比](docs/capability-comparison.md)
 - [Accessibility / i18n 能力表](docs/accessibility-i18n.md)
+- [自绘与样式系统设计](docs/custom-draw-style-system.md)
 - [CHANGELOG](CHANGELOG.md) 与 [发布检查表](RELEASE_CHECKLIST.md)
 
 ## 项目状态
@@ -345,6 +346,7 @@ flux-vcl/
 - [命名规范](docs/naming-conventions.md) —— example/包/标识符/资源命名
 - [设计文档](docs/design.md) —— 架构、三棵树模型、布局/State/事件设计
 - [开发计划](docs/development-plan.md) —— Phase 0–7 任务与验收标准
+- [自绘与样式系统设计](docs/custom-draw-style-system.md) —— Draw API、主题包边界与 CD0–CD8 实施计划
 - [English README](README.en.md) —— 英文产品入口
 - [7GUIs 任务映射](docs/7guis.md) —— 七项任务、公开 API 与业务边界
 - [v0.1.0 候选 API 冻结清单](docs/api-v0.1.0.md) —— 首发公开标识符与兼容边界

@@ -88,6 +88,9 @@ func TestPaintBoxRejectsInvalidCommand(t *testing.T) {
 		{name: "stroke without width", command: flux.PaintCommand{Kind: flux.PaintCircle, Radius: 10, StrokeColor: flux.RGB(1, 2, 3)}},
 		{name: "width without stroke", command: flux.PaintCommand{Kind: flux.PaintCircle, Radius: 10, FillColor: flux.RGB(1, 2, 3), StrokeWidth: 1}},
 		{name: "negative width", command: flux.PaintCommand{Kind: flux.PaintCircle, Radius: 10, FillColor: flux.RGB(1, 2, 3), StrokeWidth: -1}},
+		{name: "partial alpha clear", command: flux.PaintCommand{Kind: flux.PaintClear, Color: flux.ColorValue(0x80112233)}},
+		{name: "partial alpha fill", command: flux.PaintCommand{Kind: flux.PaintCircle, Radius: 10, FillColor: flux.ColorValue(0x80112233)}},
+		{name: "partial alpha stroke", command: flux.PaintCommand{Kind: flux.PaintCircle, Radius: 10, StrokeColor: flux.ColorValue(0x80112233), StrokeWidth: 1}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -99,6 +102,22 @@ func TestPaintBoxRejectsInvalidCommand(t *testing.T) {
 			_ = flux.PaintBox([]flux.PaintCommand{test.command})
 		})
 	}
+}
+
+func TestPaintBoxPartialAlphaHasStableLocalizedDiagnostic(t *testing.T) {
+	restore := flux.SetDiagnosticLocale("en")
+	defer restore()
+
+	defer func() {
+		got, ok := recover().(string)
+		if !ok || got != "flux.PaintBox: command 0 does not support partial alpha (use zero or an opaque color)" {
+			t.Fatalf("partial-alpha diagnostic = %#v", got)
+		}
+	}()
+	_ = flux.PaintBox([]flux.PaintCommand{{
+		Kind:  flux.PaintClear,
+		Color: flux.ColorValue(0x80112233),
+	}})
 }
 
 type rendererWithoutPaint struct{ render.Renderer }

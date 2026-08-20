@@ -783,6 +783,8 @@ func PaintBox(commands []PaintCommand, opts ...Opt) Widget
 - PaintCircle 要求 Radius 大于 0、StrokeWidth 不小于 0，并至少指定非零
   FillColor 或 StrokeColor。指定 StrokeColor 时 StrokeWidth 必须大于 0；未指定
   StrokeColor 时 StrokeWidth 必须为 0。
+- 颜色零值表示未指定；其他颜色必须为 `A=0xFF` 的不透明 ARGB。`A=0` 但 RGB
+  非零以及 `0 < A < 0xFF` 的值会在构造时拒绝，不能在 LCL `TColor` 边界静默丢 alpha。
 - 非法或未知命令会在构造时 panic。命令值变化只 patch 命令并请求重绘，不重建
   原生 PaintBox；值未变化时不重复 invalidate。
 - OnMouseDown 等通用鼠标 Opt 可用于应用层命中测试，坐标仍为 DIP。

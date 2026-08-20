@@ -18,6 +18,10 @@
 > 返回后恢复 `Align=alNone`；这只保护框架几何，不使其他原生布局属性成为支持 API。
 > 冻结 API 和实际边界以 [api-v0.1.0.md](./api-v0.1.0.md)、
 > [capability-comparison.md](./capability-comparison.md) 与源码为准。
+>
+> 下一阶段的通用 Draw API、样式解析、主题包 SDK、owner-draw 后端与 CD0-CD8 任务门，见
+> [自绘与样式系统设计](./custom-draw-style-system.md)。其中 CD0 决策已经冻结；后续 API 仍未实现，
+> 不代表当前公开能力。
 
 ---
 
@@ -1057,6 +1061,9 @@ Grid 专属操作走 `render.GridController`；默认 intrinsic 为 `360×220 DI
 `render.PaintController.SetPaintCommands` 更新缓存，并调用 `InvalidatePaint`，
 下一次 `OnPaint` 才把 DIP 命令按当前 DPI 转换到 Canvas。事件回调不在 paint
 栈内修改原生控件，用户通过普通 DIP `OnMouseDown` 做命中测试并更新 State。
+
+颜色零值表示不绘制；其他 PaintBox 颜色必须为 `A=0xFF` 的不透明 ARGB。非零的
+partial-alpha 值在构造时以结构化类别拒绝，不能进入只保留 RGB 的 `TColor` 边界。
 
 native paint 回调由适配层持有，用户没有拿到 LCL Canvas 的逃逸口。移除命令
 回落为空列表并 invalidate；invalidate 只请求重绘，不重建 PaintBox。默认尺寸为

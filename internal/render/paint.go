@@ -13,6 +13,7 @@ const (
 	PaintValidationCirclePaint
 	PaintValidationStrokeWidthRequired
 	PaintValidationStrokeColorRequired
+	PaintValidationPartialAlpha
 	PaintValidationUnknownKind
 )
 
@@ -38,6 +39,8 @@ func (e *PaintValidationError) Error() string {
 		return fmt.Sprintf("command %d: circle stroke width must be > 0 when stroke is set", e.Index)
 	case PaintValidationStrokeColorRequired:
 		return fmt.Sprintf("command %d: circle stroke width requires a stroke color", e.Index)
+	case PaintValidationPartialAlpha:
+		return fmt.Sprintf("command %d: partial alpha is not supported", e.Index)
 	case PaintValidationUnknownKind:
 		return fmt.Sprintf("command %d: unknown paint command kind %d", e.Index, e.Command)
 	default:
@@ -58,7 +61,7 @@ const (
 
 // PaintCommand 是与后端无关的绘制命令。坐标、半径和线宽均为 DIP；清屏使用
 // Color，圆形使用 X/Y/Radius、FillColor、StrokeColor 和 StrokeWidth。颜色为零
-// 表示不绘制对应的填充或描边。
+// 表示不绘制对应的填充或描边；非零颜色必须为 A=0xFF 的不透明 ARGB。
 type PaintCommand struct {
 	Kind        PaintCommandKind
 	X           int
@@ -80,13 +83,17 @@ func ClonePaintCommands(commands []PaintCommand) []PaintCommand {
 }
 
 // ValidatePaintCommands 拒绝无法确定绘制语义的命令。坐标允许为负数，以便裁剪
-// 超出 surface 的图形。
+// 超出 surface 的图形。首版拒绝全部非零 partial-alpha 颜色，避免 TColor 边界
+// 静默丢弃 alpha；Color(0) 保留为“不绘制”哨兵。
 func ValidatePaintCommands(commands []PaintCommand) error {
 	for i, command := range commands {
 		switch command.Kind {
 		case PaintClear:
 			if command.Color == 0 {
 				return &PaintValidationError{Kind: PaintValidationClearColor, Index: i}
+			}
+			if hasUnsupportedAlpha(command.Color) {
+				return &PaintValidationError{Kind: PaintValidationPartialAlpha, Index: i}
 			}
 		case PaintCircle:
 			if command.Radius <= 0 {
@@ -104,11 +111,18 @@ func ValidatePaintCommands(commands []PaintCommand) error {
 			if command.StrokeColor == 0 && command.StrokeWidth != 0 {
 				return &PaintValidationError{Kind: PaintValidationStrokeColorRequired, Index: i}
 			}
+			if hasUnsupportedAlpha(command.FillColor) || hasUnsupportedAlpha(command.StrokeColor) {
+				return &PaintValidationError{Kind: PaintValidationPartialAlpha, Index: i}
+			}
 		default:
 			return &PaintValidationError{Kind: PaintValidationUnknownKind, Index: i, Command: command.Kind}
 		}
 	}
 	return nil
+}
+
+func hasUnsupportedAlpha(color Color) bool {
+	return color != 0 && uint8(uint32(color)>>24) != 0xff
 }
 
 // PaintController 是 PaintBox 的可选窄渲染能力。diff 层显式拥有 invalidate，

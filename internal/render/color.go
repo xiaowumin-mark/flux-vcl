@@ -4,7 +4,8 @@ package render
 //
 // 采用 ARGB 而非 LCL 的 TColor（$00BBGGRR，BGR 布局）：对用户更直觉（写
 // 0xRRGGBB 即红），换算收在 native 边界（colorToTColor，见 internal/native），
-// D6 保持接口与后端无关。alpha 在原生控件（无透明合成）中忽略。
+// D6 保持接口与后端无关。旧原生控件兼容路径没有透明合成，因而忽略 alpha；
+// PaintBox 和后续 Draw API 在进入该边界前会显式拒绝非零非不透明色。
 type Color uint32
 
 // RGB 构造不透明颜色（alpha=0xFF）。

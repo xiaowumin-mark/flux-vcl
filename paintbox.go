@@ -20,8 +20,9 @@ const (
 // 左上角为原点、使用 DIP 表示。
 //
 // PaintClear 使用 Color 填满 surface；PaintCircle 以 X/Y 为圆心、Radius 为半径。
-// FillColor 或 StrokeColor 为零表示禁用对应部分；非零 StrokeColor 要求
-// StrokeWidth > 0。PaintBox 按 slice 顺序执行命令。
+// FillColor 或 StrokeColor 为零表示禁用对应部分；非零颜色必须为 A=0xFF 的
+// 不透明 ARGB（首版不支持 partial alpha），非零 StrokeColor 要求 StrokeWidth > 0。
+// PaintBox 按 slice 顺序执行命令。
 type PaintCommand = render.PaintCommand
 
 // PaintBox 创建由稳定值命令驱动的原生 TPaintBox。命令会被校验并防御性复制，
@@ -52,6 +53,8 @@ func paintCommandsDiagnostic(err error) string {
 			return DiagnosticText(DiagnosticPaintStrokeWidthRequired, validation.Index)
 		case render.PaintValidationStrokeColorRequired:
 			return DiagnosticText(DiagnosticPaintStrokeColorRequired, validation.Index)
+		case render.PaintValidationPartialAlpha:
+			return DiagnosticText(DiagnosticPaintPartialAlpha, validation.Index)
 		case render.PaintValidationUnknownKind:
 			return DiagnosticText(DiagnosticPaintUnknownKind, validation.Index, validation.Command)
 		}
