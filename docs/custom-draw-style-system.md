@@ -1,11 +1,11 @@
 # FluxVCL 自绘与样式系统设计
 
-> 状态：CD0 决策与名称已冻结；vNext API 尚未实现或发布
+> 状态：CD1 Draw Core 已实现（无头）；native executor/主题 API 仍按后续阶段推进
 > 日期：2026-08-20
 > 适用范围：`flux` 根包、`internal/widget`、`internal/diff`、`internal/render`、
 > `internal/native` 以及第三方主题包
-> 前置事实：当前公开自绘入口仍是 `PaintBox([]PaintCommand, ...)`；本文中的
-> `DrawList`、`DesignTheme`、`ThemeScope`、`DrawSurface` 等名称均为已冻结、待后续阶段实现的 API。
+> 前置事实：当前公开兼容入口仍是 `PaintBox([]PaintCommand, ...)`；CD1 已新增纯值
+> `DrawList` API，公开 `DrawSurface` 与真实 native 像素绘制仍按 CD4 阶段门实现。
 
 本文定义 FluxVCL 下一阶段的底层自绘协议、样式解析模型和主题包边界，并把实施工作拆成
 可独立验收的 `CD0-CD8` 阶段。目标不是先堆若干皮肤属性，而是先建立一个稳定、可测试、
@@ -719,17 +719,18 @@ Inspector 至少增加：
 
 ### 14.3 CD1：Draw Core（无头）
 
-| ID | 任务 | 交付/验收 |
-|---|---|---|
-| CD1.1 | 新增 draw 几何、Fill/Stroke、FontSpec/TextPaint 枚举和值类型 | 导出注释、validation tests |
-| CD1.2 | 实现 immutable DrawList、sealed DrawOp、clone/canonicalize/equality | 调用方修改输入不影响快照 |
-| CD1.3 | 实现 Clear/Rect/RoundRect/Line/Ellipse/Text/Clip ops | 每种合法/非法矩阵 |
-| CD1.4 | 新增 internal DrawController 与 Mock | set/reset/invalidate 可分别断言 |
-| CD1.5 | diff 增加 DrawList mount/patch/remove/D7c | 相同列表零 mutation/invalidate |
-| CD1.6 | 当前 PaintCommand -> DrawList adapter | 现有 PaintBox 测试不回归 |
-| CD1.7 | 增加 DrawList 基准 | op 数、分配、DeepEqual/hash 样本 |
+| ID | 任务 | 交付/验收 | 状态 |
+|---|---|---|---|
+| CD1.1 | 新增 draw 几何、Fill/Stroke、FontSpec/TextPaint 枚举和值类型 | 导出注释、validation tests | 完成 |
+| CD1.2 | 实现 immutable DrawList、sealed DrawOp、clone/canonicalize/equality | 调用方修改输入不影响快照 | 完成 |
+| CD1.3 | 实现 Clear/Rect/RoundRect/Line/Ellipse/Text/Clip ops | 每种合法/非法矩阵 | 完成 |
+| CD1.4 | 新增 internal DrawController 与 Mock | set/reset/invalidate 可分别断言 | 完成 |
+| CD1.5 | diff 增加 DrawList mount/patch/remove/D7c | 相同列表零 mutation/invalidate | 完成 |
+| CD1.6 | 当前 PaintCommand -> DrawList adapter | 现有 PaintBox 测试不回归 | 完成 |
+| CD1.7 | 增加 DrawList 基准 | op 数、分配、DeepEqual/hash 样本 | 完成 |
 
-**完成定义**：不依赖 DLL 即可证明 DrawList 的值语义、diff 对称性和 D7c；尚不要求新图元真实显示。
+**完成定义（已满足）**：不依赖 DLL 即可证明 DrawList 的值语义、diff 对称性和 D7c；新图元
+真实显示仍属于 CD4，不在本阶段承诺。
 
 ### 14.4 CD2：字体、文本测量与布局原语
 

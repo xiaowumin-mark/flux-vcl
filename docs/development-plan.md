@@ -788,8 +788,9 @@ LCL 适配、无头测试、Windows 多页 smoke 和专门 example 全部完成�
 P7 之后的 vNext 工作优先完善底层自绘协议、布局感知样式、主题包 SDK 和标准控件 owner-draw，
 详见 [自绘与样式系统设计](./custom-draw-style-system.md)。专项按 `CD0-CD8` 独立推进，先冻结
 `DrawList`/字体测量/样式解析边界，再以 Button 完成一条端到端纵切，随后扩展控件家族与主题生态。
-CD0 决策与 Spike 已完成，证据见 [CD0 原生 Spike 记录](./cd0-native-probes.md)；后续 CD1-CD8
-仍是 vNext 实施计划，不计入 P7 或 v0.1.0 的已完成范围。
+CD0 决策与 Spike 已完成，证据见 [CD0 原生 Spike 记录](./cd0-native-probes.md)；CD1 无头
+Draw Core 也已完成，见 [CD1 实施记录](./cd1-draw-core.md)。CD2-CD8 仍是 vNext 实施计划，
+不计入 P7 或 v0.1.0 的已完成范围。
 
 ---
 

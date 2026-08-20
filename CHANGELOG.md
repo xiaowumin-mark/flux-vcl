@@ -18,6 +18,9 @@
   buttons and documented the locked LCL runtime's UIA boundary: stable desktop-root
   and `FromHandle` queries retain standard Win32 control patterns, Accessible
   overrides are not projected, and PaintBox/TLabel have no child HWND.
+- Added the headless CD1 Draw Core: immutable DrawList values, sealed primitive
+  operations, structured validation, DrawController Mock/diff behavior, and a
+  legacy PaintCommand adapter. Native primitive execution remains deferred to CD4.
 - Kept the existing D1-D7, native DLL lock, and Windows smoke requirements.
 
 There are no breaking changes recorded for this candidate. Reopening the

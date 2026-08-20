@@ -50,6 +50,18 @@ const (
 	DiagnosticPaintStrokeColorRequired MessageID = "flux.paint.stroke_color_required"
 	DiagnosticPaintPartialAlpha        MessageID = "flux.paint.partial_alpha"
 	DiagnosticPaintUnknownKind         MessageID = "flux.paint.unknown_kind"
+	DiagnosticDrawTooManyOps           MessageID = "flux.draw.too_many_ops"
+	DiagnosticDrawTextTooLong          MessageID = "flux.draw.text_too_long"
+	DiagnosticDrawClipUnderflow        MessageID = "flux.draw.clip_underflow"
+	DiagnosticDrawClipUnbalanced       MessageID = "flux.draw.clip_unbalanced"
+	DiagnosticDrawCoordinateRange      MessageID = "flux.draw.coordinate_range"
+	DiagnosticDrawNegativeSize         MessageID = "flux.draw.negative_size"
+	DiagnosticDrawRadiusNegative       MessageID = "flux.draw.radius_negative"
+	DiagnosticDrawStrokeWidth          MessageID = "flux.draw.stroke_width"
+	DiagnosticDrawColorRequired        MessageID = "flux.draw.color_required"
+	DiagnosticDrawAlphaUnsupported     MessageID = "flux.draw.alpha_unsupported"
+	DiagnosticDrawFontSize             MessageID = "flux.draw.font_size"
+	DiagnosticDrawEnumUnknown          MessageID = "flux.draw.enum_unknown"
 	DiagnosticListBounded              MessageID = "flux.list.bounded"
 	DiagnosticCloseUIThread            MessageID = "flux.app.close_ui_thread"
 	DiagnosticPluginError              MessageID = "flux.plugin.error"
@@ -139,6 +151,18 @@ var builtinDiagnosticCatalog = &Catalog{
 			DiagnosticPaintStrokeColorRequired: "flux.PaintBox: 第 %d 条圆形命令设置描边宽度时必须设置描边色",
 			DiagnosticPaintPartialAlpha:        "flux.PaintBox: 第 %d 条命令不支持半透明颜色（首版仅允许零值或不透明色）",
 			DiagnosticPaintUnknownKind:         "flux.PaintBox: 第 %d 条命令类型 %d 未知",
+			DiagnosticDrawTooManyOps:           "flux.DrawList: 操作数超过上限",
+			DiagnosticDrawTextTooLong:          "flux.DrawList: 第 %d 条命令字段 %s 文本超过长度上限",
+			DiagnosticDrawClipUnderflow:        "flux.DrawList: 第 %d 条命令字段 %s clip 栈下溢",
+			DiagnosticDrawClipUnbalanced:       "flux.DrawList: clip 栈不平衡",
+			DiagnosticDrawCoordinateRange:      "flux.DrawList: 第 %d 条命令字段 %s 坐标或尺寸超出范围",
+			DiagnosticDrawNegativeSize:         "flux.DrawList: 第 %d 条命令字段 %s 尺寸不能为负数",
+			DiagnosticDrawRadiusNegative:       "flux.DrawList: 第 %d 条命令字段 %s 圆角半径不能为负数",
+			DiagnosticDrawStrokeWidth:          "flux.DrawList: 第 %d 条命令字段 %s 描边宽度必须 > 0",
+			DiagnosticDrawColorRequired:        "flux.DrawList: 第 %d 条命令字段 %s 颜色不能为空",
+			DiagnosticDrawAlphaUnsupported:     "flux.DrawList: 第 %d 条命令字段 %s 暂不支持半透明颜色",
+			DiagnosticDrawFontSize:             "flux.DrawList: 第 %d 条命令字段 %s 字体大小或名称无效",
+			DiagnosticDrawEnumUnknown:          "flux.DrawList: 第 %d 条命令字段 %s 枚举值未知",
 			DiagnosticListBounded:              "flux.ListView: 需要有界的宽高约束（虚拟列表必须有 viewport，请放在 Expanded/固定尺寸容器内）",
 			DiagnosticCloseUIThread:            "flux: Renderer 未执行 App.Close 的 UI 线程任务",
 			DiagnosticPluginError:              "flux: 插件 %q 在 %s 阶段失败: %v",
@@ -224,6 +248,18 @@ var builtinDiagnosticCatalog = &Catalog{
 			DiagnosticPaintStrokeColorRequired: "flux.PaintBox: command %d circle stroke width requires a stroke color",
 			DiagnosticPaintPartialAlpha:        "flux.PaintBox: command %d does not support partial alpha (use zero or an opaque color)",
 			DiagnosticPaintUnknownKind:         "flux.PaintBox: command %d has unknown kind %d",
+			DiagnosticDrawTooManyOps:           "flux.DrawList: operation count exceeds the limit",
+			DiagnosticDrawTextTooLong:          "flux.DrawList: op %d field %s text exceeds the length limit",
+			DiagnosticDrawClipUnderflow:        "flux.DrawList: op %d field %s clip stack underflow",
+			DiagnosticDrawClipUnbalanced:       "flux.DrawList: clip stack is unbalanced",
+			DiagnosticDrawCoordinateRange:      "flux.DrawList: op %d field %s coordinate or size is out of range",
+			DiagnosticDrawNegativeSize:         "flux.DrawList: op %d field %s size must not be negative",
+			DiagnosticDrawRadiusNegative:       "flux.DrawList: op %d field %s radius must not be negative",
+			DiagnosticDrawStrokeWidth:          "flux.DrawList: op %d field %s stroke width must be > 0",
+			DiagnosticDrawColorRequired:        "flux.DrawList: op %d field %s color is required",
+			DiagnosticDrawAlphaUnsupported:     "flux.DrawList: op %d field %s partial alpha is not supported",
+			DiagnosticDrawFontSize:             "flux.DrawList: op %d field %s font size or family is invalid",
+			DiagnosticDrawEnumUnknown:          "flux.DrawList: op %d field %s unknown enum value",
 			DiagnosticListBounded:              "flux.ListView: bounded width and height are required (use Expanded or a fixed-size container)",
 			DiagnosticCloseUIThread:            "flux: Renderer did not execute the App.Close UI-thread task",
 			DiagnosticPluginError:              "flux: plugin %q failed during %s: %v",

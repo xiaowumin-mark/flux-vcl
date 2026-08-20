@@ -32,6 +32,7 @@ type Mock struct {
 	radioGroup map[Handle]int             // 单选控件原生组编号（RadioGroupable 测试面）
 	pages      map[Handle]*mockPages      // 分页容器的页面顺序、受控索引与回调
 	paints     map[Handle]*mockPaint      // PaintBox 命令与 invalidate 次数（PaintController 测试面）
+	draws      map[Handle]*mockDraw       // DrawSurface 列表与 invalidate 次数（CD1）
 	grids      map[Handle]*mockGrid       // StringGrid 的有界数据、选择与编辑回调
 	a11y       map[Handle]*mockA11y       // 可访问名称、焦点顺序与默认/取消操作
 }
@@ -106,6 +107,7 @@ func (m *Mock) Destroy(h Handle) {
 	delete(m.sliders, h)
 	delete(m.pages, h)
 	delete(m.paints, h)
+	delete(m.draws, h)
 	delete(m.grids, h)
 	delete(m.a11y, h)
 	delete(m.radioGroup, h)
@@ -850,6 +852,8 @@ func cloneOpValue(value any) any {
 		return CloneGridCells(typed)
 	case []PaintCommand:
 		return ClonePaintCommands(typed)
+	case DrawList:
+		return typed.Clone()
 	case []Handle:
 		return append([]Handle(nil), typed...)
 	default:

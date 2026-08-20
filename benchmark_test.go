@@ -272,3 +272,26 @@ func BenchmarkPaintInvalidate(b *testing.B) {
 	}
 	b.ReportMetric(float64(r.mutations-startMutations)/float64(b.N), "mutations/op")
 }
+
+func benchmarkDrawList(opCount int) flux.DrawList {
+	color := flux.RGB(20, 80, 160)
+	ops := make([]flux.DrawOp, 0, opCount)
+	for i := 0; i < opCount; i++ {
+		ops = append(ops, flux.FillRect(flux.Rect{X: i, Y: i, W: 20, H: 20}, flux.FillStyle{Color: color}))
+	}
+	return flux.MustDrawList(ops...)
+}
+
+// BenchmarkDrawListBuildAndEqual records the CD1 value construction and
+// equality cost independently of a native executor.
+func BenchmarkDrawListBuildAndEqual(b *testing.B) {
+	b.ReportAllocs()
+	base := benchmarkDrawList(64)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		copy := base.Clone()
+		if !base.Equal(copy) {
+			b.Fatal("cloned DrawList is not equal")
+		}
+	}
+}

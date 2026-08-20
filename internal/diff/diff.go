@@ -542,6 +542,17 @@ func (rc *Reconciler) applyRemoved(e *Element, key string, next *widget.Props) b
 	case "PaintCommands":
 		rc.applyProp(e, key, []render.PaintCommand{}) // PaintBox 默认：空命令并重绘
 		return true
+	case "DrawList":
+		if e.Type != "DrawSurface" {
+			return false
+		}
+		if controller, ok := rc.r.(render.DrawController); ok {
+			controller.ResetDrawList(e.Handle)
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "DrawList", Value: render.DrawList{}})
+			controller.InvalidateDraw(e.Handle)
+			rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "InvalidateDraw"})
+		}
+		return true
 	case "GridSize":
 		rc.applyProp(e, key, render.GridSize{Columns: 1})
 		return true
@@ -841,6 +852,22 @@ func (rc *Reconciler) applyProp(e *Element, key string, v any) {
 				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "PaintCommands", Value: commands})
 				surface.InvalidatePaint(e.Handle)
 				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "InvalidatePaint"})
+			}
+		}
+	case "DrawList":
+		if e.Type != "DrawSurface" {
+			break
+		}
+		if list, ok := v.(render.DrawList); ok {
+			if err := render.ValidateDrawList(list); err != nil {
+				panic(fmt.Sprintf("diff: invalid DrawList for %s: %v", eventSource(e), err))
+			}
+			if controller, ok := rc.r.(render.DrawController); ok {
+				list = list.Clone()
+				controller.SetDrawList(e.Handle, list)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "DrawList", Value: list})
+				controller.InvalidateDraw(e.Handle)
+				rc.record(e, render.Op{Type: render.OpSetProperty, Handle: e.Handle, Key: "InvalidateDraw"})
 			}
 		}
 	case "Bounds":

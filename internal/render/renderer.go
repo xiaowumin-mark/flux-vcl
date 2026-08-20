@@ -10,6 +10,9 @@ package render
 // 在 Mock 下是模拟句柄。不透明类型，外部只作相等比较。
 type Handle uintptr
 
+// Point is the internal DIP coordinate representation used by Draw Core.
+type Point struct{ X, Y int }
+
 // Rect 控件几何（DIP，与 design.md D5 一致：全坐标用 DIP）。
 type Rect struct {
 	X, Y, W, H int

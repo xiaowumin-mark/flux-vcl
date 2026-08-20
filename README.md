@@ -134,6 +134,8 @@ BoxConstraints 协议 + 单遍 RenderFlex（Expanded/Flexible、对齐、溢出�
 
 **P7.6 Accessibility / i18n 🟨 本地候选完成，Hosted CI 待证**：公开 `AccessibleName/Description/Value`、`TabStop`、`DefaultButton`、`CancelButton` 与自动声明树 Tab 顺序；RadioButton 补齐逻辑分组方向键导航。默认后端在高对比度下回落系统色并响应设置/主题/系统颜色消息。`Catalog` + `Resources` + `Catalog.Bind` 支持 fallback、响应式 locale 切换，框架公开校验诊断使用稳定 Message ID 和可替换中英文资源。`examples/accessibility-i18n` 已在本地覆盖真实键盘、焦点、UIA、高对比度以及中英切换不重建验收；完整 Windows Hosted CI 成功前，不把它表述为发布门完成。等待 provider 稳定后，桌面根查询与 `AutomationElement.FromHandle` 都可通过 Win32 代理获得 Button/Edit/Combo/Slider 的标准 Pattern；锁定的 LCL runtime 仍未投射 Accessible 覆盖值，StringGrid 也无 Grid Pattern，完整边界见 [能力表](docs/accessibility-i18n.md)。
 
+**CD1 Draw Core ✅ 完成（无头）**：新增不可变 `DrawList`、封闭 `DrawOp`、基础 2D 图元、字体/文本值、结构化校验、legacy PaintCommand adapter，以及 DrawController Mock/diff 的 mount、patch、remove、D7c 契约。当前阶段只证明纯值与生命周期，不声称基础图元已由 LCL 真实绘制；native executor、DPI 与像素探针属于 CD4。实施边界见 [CD1 记录](docs/cd1-draw-core.md)。
+
 | 子任务 | 状态 |
 |---|---|
 | 6.1 ListView + 稳定 key（`ListView(count, itemH, builder)` + slot key=`row-i` 控件池复用；行内容不带数据 key） | ✅ `flux.ListView` + diff/layout `ListViewRow` 透明分支 |
@@ -347,6 +349,7 @@ flux-vcl/
 - [设计文档](docs/design.md) —— 架构、三棵树模型、布局/State/事件设计
 - [开发计划](docs/development-plan.md) —— Phase 0–7 任务与验收标准
 - [自绘与样式系统设计](docs/custom-draw-style-system.md) —— Draw API、主题包边界与 CD0–CD8 实施计划
+- [CD1 Draw Core 实施记录](docs/cd1-draw-core.md) —— 纯值 API、校验、Mock/diff 与阶段边界
 - [English README](README.en.md) —— 英文产品入口
 - [7GUIs 任务映射](docs/7guis.md) —— 七项任务、公开 API 与业务边界
 - [v0.1.0 候选 API 冻结清单](docs/api-v0.1.0.md) —— 首发公开标识符与兼容边界

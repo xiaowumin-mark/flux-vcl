@@ -44,6 +44,11 @@ tab order, high-contrast handling, and reactive locale catalogs. The seven
 7GUIs tasks are in `examples/7guis-*`; the keyboard/UIA/i18n verification app is
 `examples/accessibility-i18n`.
 
+CD1 Draw Core is complete at the headless value/diff layer: immutable
+`DrawList`, sealed operations, validation, legacy PaintCommand adaptation, and
+DrawController Mock coverage are available. Native primitive execution and
+pixel guarantees remain a CD4 deliverable.
+
 The P7.3b release matrix is configured and locally exercised, but is not a
 completed CI gate until the corresponding hosted workflow succeeds.
 

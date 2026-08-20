@@ -7,9 +7,9 @@
 > 可执行审计：`cd0_api_names_test.go`、`cd0_legacy_theme_test.go`
 > 原生 Spike：[`cd0-native-probes.md`](./cd0-native-probes.md)
 
-本文只冻结后续实现必须遵守的契约，不把尚未实现的 API 描述成当前能力。当前公开入口仍是
-`PaintBox([]PaintCommand, ...)` 和 legacy `Theme`；`DrawList`、`DesignTheme`、
-`ThemeScope`、`FromLegacyTheme` 等符号按 CD1/CD3 的阶段门实现。
+本文冻结后续实现必须遵守的契约。当前兼容入口仍是 `PaintBox([]PaintCommand, ...)` 和
+legacy `Theme`；CD1 已落地 `DrawList`/Draw Core，`DesignTheme`、`ThemeScope`、
+`FromLegacyTheme` 等符号仍按 CD3 阶段门实现。
 
 ## 1. 决策依据
 
@@ -173,7 +173,7 @@ CD0 的可编译迁移样例位于 `cd0_legacy_theme_test.go`。在 CD3.6 实现
 
 ## 8. 后续实现门
 
-- CD1 必须按本记录实现 Draw 值语义、限制、error 和 alpha 单元测试；调整任何上限需新 ADR。
+- CD1 已按本记录实现 Draw 值语义、限制、error 和 alpha 单元测试；调整任何上限需新 ADR。
 - CD2 必须证明 Measure/DrawText 共用解析后的 FontSpec 和 cache key。
 - CD3 必须让公开 `FromLegacyTheme` 通过 CD0 reference mapping、快照和旧示例回归测试。
 - CD4/CD5 的 native probe 结果只能收窄 capability 或标注 deferred，不能让后端限制泄漏到公开
